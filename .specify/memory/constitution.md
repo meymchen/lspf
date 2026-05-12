@@ -289,38 +289,3 @@ maintainer.
 
 Ratified: v1.0 — 2026-05-10
 Last amended: (none)
-
-<!--
-Self-check (per the meta rules in the /speckit-constitution invocation):
-
-- [x] 每条条款是否都用祈使句？ — Every article uses MUST / MUST NOT / SHOULD /
-      MAY (or 必须 / 禁止 / 应当 in the Chinese-origin phrasing kept verbatim
-      where stylistically appropriate, e.g. §6.6 milestone status labels).
-- [x] 每条条款是否都可验证？ — Each is verifiable by at least one of:
-      CI job (§2.5, §3.3, §6.4), grep / static check (§2.4 doc comment phrase,
-      §4.4 forbid attribute, §3.1 #[non_exhaustive], §3.6 error trait bounds),
-      named integration test (§2.3, §2.7), PR review checklist (§1.2, §1.3,
-      §1.4, §3.4, §4.3, §5.1, §5.3, §5.4, §6.1, §6.3), AI cross-check during
-      /speckit-plan (§6.2 explicitly mandates the cross-check itself), or
-      release-procedure document (§6.5, §6.6).
-- [x] 是否有任何条款实质重复？ — No duplicates. §3.2 (SemVer) and §6.5
-      (release procedure) are adjacent in topic but address distinct concerns
-      (versioning rules vs. mechanical release steps). §1.3 (closure-style
-      API) and §1.4 (six concepts cap) constrain different dimensions.
-- [x] §5 范围条款是否与 §1 定位条款一致？ — §5.1 / §5.2 (in-scope /
-      out-of-scope items) are consistent with §1.1 (framework not server),
-      §1.3 (closure-style API → no proc-macro DSL needed), and §1.4 (six
-      core types match the v0.1 surface).
-- [x] §6 流程条款引用的命令名是否准确？ — Speckit slash commands use the
-      `/speckit-<verb>` form (with hyphens, per the harness convention used
-      in this project's .claude/skills/), and superpowers commands are cited
-      as `/superpowers-brainstorming` and `/superpowers-executing-plans`,
-      matching the skill names listed in the session's available skills.
-- [x] 是否所有"禁止"条款都明确了例外路径？ — Every prohibition either
-      embeds its exception inline (§3.1 "unless semantically closed", §4.4
-      "isolated companion crate", §6.4 "docs/ci/test-only PRs", §1.1 v0.x
-      scope, §4.1 runtime-agnostic flag) or routes through §7 amendment
-      (§1.3, §1.4, §3.4, §4.3, §5.1, §5.3 implicitly).
-- [x] 章节末尾的修订记录小节是否都已就位？ — §1 through §7 each carry a
-      "修订记录" subsection seeded with "v1.0 — initial ratification".
--->
