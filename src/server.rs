@@ -5,8 +5,8 @@
 #![allow(async_fn_in_trait)]
 
 use lsp_types::{
-    InitializeParams, InitializeResult, InitializedParams, ServerCapabilities,
-    TextDocumentSyncCapability, TextDocumentSyncKind,
+    DidOpenTextDocumentParams, InitializeParams, InitializeResult, InitializedParams,
+    ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -54,4 +54,6 @@ pub trait LanguageServer: Send + Sync + 'static {
     }
 
     async fn exit(&self, _ctx: &Context) {}
+
+    async fn text_document_did_open(&self, _ctx: &Context, _params: DidOpenTextDocumentParams) {}
 }
