@@ -1,0 +1,27 @@
+{
+  "name": "lspf-test-client",
+  "displayName": "lspf test client",
+  "description": "Spawns the lspf hello example as a language server for manual smoke testing.",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onLanguage:plaintext"
+  ],
+  "contributes": {},
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/vscode": "^1.80.0",
+    "typescript": "^5"
+  }
+}

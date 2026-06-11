@@ -4,5 +4,29 @@ version = "0.1.0"
 edition = "2024"
 authors = ["Yuming Chen"]
 license = "MIT OR Apache-2.0"
+description = "A Rust framework for building extensible LSP language servers"
+repository = "https://github.com/meymchen/lspf"
 
 [dependencies]
+bytes = "1"
+futures-util = { version = "0.3", default-features = false }
+lsp-types = "0.97"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "io-std", "io-util", "sync"] }
+tokio-util = { version = "0.7", features = ["codec", "rt"] }
+# `rt` pulls in the `CancellationToken` primitive used by ADR 0007.
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "time"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[[example]]
+name = "hello"
+path = "examples/hello/main.rs"
+
+[[test]]
+name = "smoke"
+path = "tests/smoke.rs"
