@@ -1,5 +1,6 @@
-//! End-to-end smoke test for commit 1 — drives `examples/hello` over stdio
-//! through the LSP lifecycle and asserts the protocol responses.
+//! End-to-end smoke tests — drive `examples/hello` over stdio and assert
+//! both the lifecycle responses (commit 1) and the outgoing
+//! `publishDiagnostics` notification (commit 2).
 
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -121,6 +122,84 @@ async fn lifecycle_round_trip() {
         Some(0),
         "server should exit with code 0 after shutdown then exit"
     );
+}
+
+#[tokio::test]
+async fn did_open_publishes_diagnostic() {
+    let exe = hello_binary();
+    let mut child = Command::new(&exe)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn hello");
+
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+
+    // 1. initialize
+    let params: Value = serde_json::from_str(include_str!("fixtures/initialize-params.json"))
+        .expect("fixture parses");
+    let init = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": params,
+    });
+    write_framed(&mut stdin, init.to_string().as_bytes()).await;
+    let _ = read_framed(&mut stdout).await;
+
+    // 2. initialized
+    let initialized = json!({
+        "jsonrpc": "2.0",
+        "method": "initialized",
+        "params": {},
+    });
+    write_framed(&mut stdin, initialized.to_string().as_bytes()).await;
+
+    // 3. didOpen
+    let did_open = json!({
+        "jsonrpc": "2.0",
+        "method": "textDocument/didOpen",
+        "params": {
+            "textDocument": {
+                "uri": "file:///tmp/smoke.txt",
+                "languageId": "plaintext",
+                "version": 1,
+                "text": "hello world\n",
+            }
+        },
+    });
+    write_framed(&mut stdin, did_open.to_string().as_bytes()).await;
+
+    // 4. expect publishDiagnostics on the wire
+    let notif = read_framed(&mut stdout).await;
+    assert_eq!(notif["jsonrpc"], "2.0");
+    assert_eq!(notif["method"], "textDocument/publishDiagnostics");
+    let p = &notif["params"];
+    assert_eq!(p["uri"], "file:///tmp/smoke.txt");
+    assert_eq!(p["version"], 1);
+    let diags = p["diagnostics"].as_array().expect("diagnostics array");
+    assert_eq!(diags.len(), 1);
+    assert_eq!(diags[0]["source"], "lspf-hello");
+    assert_eq!(diags[0]["severity"], 3); // Information
+    assert_eq!(diags[0]["message"], "lspf saw this document open");
+
+    // 5. shutdown + exit
+    let shutdown = json!({ "jsonrpc": "2.0", "id": 2, "method": "shutdown" });
+    write_framed(&mut stdin, shutdown.to_string().as_bytes()).await;
+    let _ = read_framed(&mut stdout).await;
+
+    let exit = json!({ "jsonrpc": "2.0", "method": "exit" });
+    write_framed(&mut stdin, exit.to_string().as_bytes()).await;
+    drop(stdin);
+
+    let exit_status = tokio::time::timeout(Duration::from_secs(5), child.wait())
+        .await
+        .expect("server exited within 5s")
+        .expect("wait succeeds");
+    assert_eq!(exit_status.code(), Some(0));
 }
 
 #[tokio::test]

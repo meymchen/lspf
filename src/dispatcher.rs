@@ -1,4 +1,5 @@
 use bytes::Bytes;
+use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, debug, info_span, warn};
 
@@ -9,13 +10,21 @@ use crate::server::LanguageServer;
 use crate::transport::{Transport, TransportError};
 use crate::{LspError, Result};
 
-/// Sequential lifecycle dispatcher (commit 1 — see ADR 0010 for the
-/// Layer/Service generalization landing in commit 2+).
+/// Sequential lifecycle + did_open dispatcher (commit 2 — see ADR 0010
+/// for the Layer/Service generalization, and ADR 0003 for the concurrent
+/// spawn-based dispatch landing in commit 3+).
+///
+/// The dispatcher creates an unbounded outgoing channel at startup and
+/// hands clones of the sender to every `Context` it builds. After each
+/// handler invocation the channel is drained (`try_recv` loop) onto the
+/// transport — outgoing notifications published by a handler always land
+/// before the next inbound message is read.
 pub(crate) async fn run<S, T>(server: S, mut transport: T) -> Result<()>
 where
     S: LanguageServer,
     T: Transport,
 {
+    let (out_tx, mut out_rx) = mpsc::unbounded_channel::<RawMessage>();
     let mut state = State::Uninitialized;
 
     loop {
@@ -28,12 +37,12 @@ where
             Err(e) => return Err(Error::Transport(e)),
         };
 
-        match dispatch(&server, &mut transport, &mut state, msg).await? {
-            Flow::Continue => {}
-            Flow::Exit(code) => {
-                let _ = transport.shutdown().await;
-                std::process::exit(code);
-            }
+        let flow = dispatch(&server, &mut transport, &out_tx, &mut state, msg).await?;
+        drain_outgoing(&mut out_rx, &mut transport).await?;
+
+        if let Flow::Exit(code) = flow {
+            let _ = transport.shutdown().await;
+            std::process::exit(code);
         }
     }
 }
@@ -50,9 +59,20 @@ enum Flow {
     Exit(i32),
 }
 
+async fn drain_outgoing<T: Transport>(
+    out_rx: &mut UnboundedReceiver<RawMessage>,
+    transport: &mut T,
+) -> Result<()> {
+    while let Ok(msg) = out_rx.try_recv() {
+        transport.send(msg).await?;
+    }
+    Ok(())
+}
+
 async fn dispatch<S, T>(
     server: &S,
     transport: &mut T,
+    out_tx: &UnboundedSender<RawMessage>,
     state: &mut State,
     msg: RawMessage,
 ) -> Result<Flow>
@@ -63,7 +83,7 @@ where
     match msg {
         RawMessage::Request { id, method, params } => {
             let span = info_span!("request", method = %method, id = ?id);
-            let ctx = Context::for_request(id.clone(), span.clone());
+            let ctx = Context::for_request(id.clone(), span.clone(), out_tx.clone());
 
             match method.as_ref() {
                 "initialize" => {
@@ -108,12 +128,19 @@ where
         }
         RawMessage::Notification { method, params } => {
             let span = info_span!("notification", method = %method);
-            let ctx = Context::for_notification(span.clone());
+            let ctx = Context::for_notification(span.clone(), out_tx.clone());
 
             match method.as_ref() {
                 "initialized" => {
                     let params = parse_params(&params)?;
                     server.initialized(&ctx, params).instrument(span).await;
+                }
+                "textDocument/didOpen" => {
+                    let params = parse_params(&params)?;
+                    server
+                        .text_document_did_open(&ctx, params)
+                        .instrument(span)
+                        .await;
                 }
                 "exit" => {
                     server.exit(&ctx).instrument(span).await;
