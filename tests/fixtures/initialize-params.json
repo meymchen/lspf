@@ -1,0 +1,22 @@
+{
+  "processId": null,
+  "clientInfo": { "name": "smoke-test", "version": "0.1.0" },
+  "locale": "en",
+  "rootPath": null,
+  "rootUri": null,
+  "capabilities": {
+    "workspace": {
+      "applyEdit": true,
+      "workspaceEdit": { "documentChanges": true }
+    },
+    "textDocument": {
+      "synchronization": {
+        "didSave": true,
+        "willSave": false,
+        "willSaveWaitUntil": false,
+        "dynamicRegistration": false
+      }
+    }
+  },
+  "workspaceFolders": null
+}
