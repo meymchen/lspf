@@ -3,12 +3,19 @@ use tokio::io::{AsyncWriteExt, Stdin, Stdout};
 use tokio_util::codec::FramedRead;
 
 use super::framing::ContentLengthCodec;
-use super::{TransportError, envelope};
+use super::{Transport, TransportError, TransportReader, TransportWriter, envelope};
 use crate::raw::RawMessage;
-use crate::transport::Transport;
 
 pub struct StdioTransport {
+    reader: StdioReader,
+    writer: StdioWriter,
+}
+
+pub struct StdioReader {
     framed_in: FramedRead<Stdin, ContentLengthCodec>,
+}
+
+pub struct StdioWriter {
     stdout: Stdout,
 }
 
@@ -21,13 +28,26 @@ impl Default for StdioTransport {
 impl StdioTransport {
     pub fn new() -> Self {
         Self {
-            framed_in: FramedRead::new(tokio::io::stdin(), ContentLengthCodec::default()),
-            stdout: tokio::io::stdout(),
+            reader: StdioReader {
+                framed_in: FramedRead::new(tokio::io::stdin(), ContentLengthCodec::default()),
+            },
+            writer: StdioWriter {
+                stdout: tokio::io::stdout(),
+            },
         }
     }
 }
 
 impl Transport for StdioTransport {
+    type Reader = StdioReader;
+    type Writer = StdioWriter;
+
+    fn split(self) -> (Self::Reader, Self::Writer) {
+        (self.reader, self.writer)
+    }
+}
+
+impl TransportReader for StdioReader {
     async fn recv(&mut self) -> Result<RawMessage, TransportError> {
         let body = self
             .framed_in
@@ -36,7 +56,9 @@ impl Transport for StdioTransport {
             .ok_or(TransportError::Closed)??;
         envelope::parse(body)
     }
+}
 
+impl TransportWriter for StdioWriter {
     async fn send(&mut self, msg: RawMessage) -> Result<(), TransportError> {
         let body = envelope::serialize(&msg)?;
         let header = format!("Content-Length: {}\r\n\r\n", body.len());

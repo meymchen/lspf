@@ -1,8 +1,4 @@
-// Commit 1's dispatcher is sequential (ADR 0010's Layer/Service generalization
-// lands in commit 2+), so trait methods don't need `+ Send` on their returned
-// futures yet. We keep `async fn` syntax for user ergonomics and revisit Send
-// bounds when spawning is introduced.
-#![allow(async_fn_in_trait)]
+use std::future::Future;
 
 use lsp_types::{
     DidOpenTextDocumentParams, InitializeParams, InitializeResult, InitializedParams,
@@ -22,6 +18,11 @@ use crate::error::LspError;
 /// to the client (see ADR 0006); panics are caught by the framework's
 /// default panic layer (commit 2+).
 ///
+/// Method futures are explicitly `Send` so the dispatcher can spawn each
+/// non-lifecycle handler on its own `tokio::task` (ADR 0003 addendum).
+/// User impls keep writing `async fn` overrides — the compiler verifies
+/// the body is `Send`.
+///
 /// Capabilities are auto-derived from the trait's associated consts
 /// (ADR 0004). Commit 1 wires only `TEXT_DOCUMENT_SYNC`; subsequent
 /// commits add one const per LSP feature.
@@ -35,25 +36,45 @@ pub trait LanguageServer: Send + Sync + 'static {
         }
     }
 
-    async fn initialize(
+    fn initialize(
         &self,
         _ctx: &Context,
         _params: InitializeParams,
         _ct: CancellationToken,
-    ) -> Result<InitializeResult, LspError> {
-        Ok(InitializeResult {
-            capabilities: self.server_capabilities(),
-            server_info: None,
-        })
+    ) -> impl Future<Output = Result<InitializeResult, LspError>> + Send {
+        async {
+            Ok(InitializeResult {
+                capabilities: self.server_capabilities(),
+                server_info: None,
+            })
+        }
     }
 
-    async fn initialized(&self, _ctx: &Context, _params: InitializedParams) {}
-
-    async fn shutdown(&self, _ctx: &Context, _ct: CancellationToken) -> Result<(), LspError> {
-        Ok(())
+    fn initialized(
+        &self,
+        _ctx: &Context,
+        _params: InitializedParams,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
 
-    async fn exit(&self, _ctx: &Context) {}
+    fn shutdown(
+        &self,
+        _ctx: &Context,
+        _ct: CancellationToken,
+    ) -> impl Future<Output = Result<(), LspError>> + Send {
+        async { Ok(()) }
+    }
 
-    async fn text_document_did_open(&self, _ctx: &Context, _params: DidOpenTextDocumentParams) {}
+    fn exit(&self, _ctx: &Context) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+
+    fn text_document_did_open(
+        &self,
+        _ctx: &Context,
+        _params: DidOpenTextDocumentParams,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
 }

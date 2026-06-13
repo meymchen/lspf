@@ -30,3 +30,7 @@ path = "examples/hello/main.rs"
 [[test]]
 name = "smoke"
 path = "tests/smoke.rs"
+
+[[test]]
+name = "concurrency"
+path = "tests/concurrency.rs"
