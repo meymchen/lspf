@@ -34,3 +34,7 @@ path = "tests/smoke.rs"
 [[test]]
 name = "concurrency"
 path = "tests/concurrency.rs"
+
+[[test]]
+name = "cancellation"
+path = "tests/cancellation.rs"
