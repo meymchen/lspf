@@ -10,7 +10,7 @@ use thiserror::Error;
 use crate::raw::RawMessage;
 use crate::server::LanguageServer;
 
-pub use stdio::StdioTransport;
+pub use stdio::{StdioReader, StdioTransport, StdioWriter};
 
 #[derive(Debug, Error)]
 pub enum TransportError {
@@ -32,15 +32,29 @@ pub enum TransportError {
 
 /// A message-framed channel for LSP JSON-RPC envelopes (see ADR 0011).
 ///
-/// One call to `recv` yields one envelope; one call to `send` writes one
-/// envelope. Framing (`Content-Length` for stdio/TCP, none for the
-/// message-framed transports) is the adapter's concern, never the
-/// dispatcher's.
+/// Concrete implementations split into a [`TransportReader`] and a
+/// [`TransportWriter`] so the dispatcher's read-loop and send-loop can
+/// own the two halves independently (ADR 0015). Framing
+/// (`Content-Length` for stdio/TCP, none for the message-framed
+/// transports) is the adapter's concern, never the dispatcher's.
 pub trait Transport: Send + 'static {
+    type Reader: TransportReader;
+    type Writer: TransportWriter;
+
+    fn split(self) -> (Self::Reader, Self::Writer);
+}
+
+/// Read half of a [`Transport`] (ADR 0011, ADR 0015).
+pub trait TransportReader: Send + 'static {
     fn recv(
         &mut self,
     ) -> impl Future<Output = std::result::Result<RawMessage, TransportError>> + Send;
+}
 
+/// Write half of a [`Transport`] (ADR 0011, ADR 0015). `shutdown`
+/// consumes the writer so the send-loop task can flush remaining bytes
+/// after the outgoing channel is drained.
+pub trait TransportWriter: Send + 'static {
     fn send(
         &mut self,
         msg: RawMessage,
