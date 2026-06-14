@@ -94,6 +94,13 @@ impl<S: LanguageServer> StdioBuilder<S> {
 
     pub async fn serve(self) -> crate::Result<()> {
         let transport = StdioTransport::new();
-        crate::dispatcher::run(self.server, transport, self.concurrency_limit).await
+        match crate::dispatcher::run(self.server, transport, self.concurrency_limit).await? {
+            // Peer hung up before `exit`: return normally and let the
+            // caller's `main` decide the process disposition.
+            crate::dispatcher::Outcome::TransportClosed => Ok(()),
+            // `exit` notification: terminate the process with the LSP
+            // exit code, per the spec's lifecycle contract.
+            crate::dispatcher::Outcome::Exit(code) => std::process::exit(code),
+        }
     }
 }
