@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
+use tokio::sync::Semaphore;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -27,7 +28,7 @@ use crate::{LspError, Result};
 /// — the wire then carries a `-32800 RequestCancelled` response (ADR
 /// 0007). Responses and outgoing notifications all flow through the
 /// same channel — the send-loop is the sole writer to the transport.
-pub(crate) async fn run<S, T>(server: S, transport: T) -> Result<()>
+pub(crate) async fn run<S, T>(server: S, transport: T, concurrency_limit: usize) -> Result<()>
 where
     S: LanguageServer,
     T: Transport,
@@ -39,6 +40,7 @@ where
 
     let state: SharedState = Arc::new(Mutex::new(State::Uninitialized));
     let registry: Registry = Arc::new(Mutex::new(HashMap::new()));
+    let permits = Arc::new(Semaphore::new(concurrency_limit));
 
     loop {
         let msg = match reader.recv().await {
@@ -52,7 +54,7 @@ where
             Err(e) => return Err(Error::Transport(e)),
         };
 
-        let flow = dispatch(&server, &out_tx, &state, &registry, msg).await?;
+        let flow = dispatch(&server, &out_tx, &state, &registry, &permits, msg).await?;
         if let Flow::Exit(code) = flow {
             // Drop our master sender so the send-loop can drain on its own
             // once any in-flight handler tasks release their clones; then
@@ -113,6 +115,7 @@ async fn dispatch<S>(
     out_tx: &UnboundedSender<RawMessage>,
     state: &SharedState,
     registry: &Registry,
+    permits: &Arc<Semaphore>,
     msg: RawMessage,
 ) -> Result<Flow>
 where
@@ -139,24 +142,40 @@ where
                     let params = parse_params(&params)?;
                     let server = Arc::clone(server);
                     let state = Arc::clone(state);
-                    spawn_request(registry, out_tx, span, id, move |ctx, ct| async move {
-                        let result = server.initialize(&ctx, params, ct).await;
-                        if result.is_ok() {
-                            *state.lock().unwrap() = State::Running;
-                        }
-                        result.and_then(to_value)
-                    });
+                    let permit = acquire_permit(permits).await;
+                    spawn_request(
+                        registry,
+                        out_tx,
+                        span,
+                        id,
+                        permit,
+                        move |ctx, ct| async move {
+                            let result = server.initialize(&ctx, params, ct).await;
+                            if result.is_ok() {
+                                *state.lock().unwrap() = State::Running;
+                            }
+                            result.and_then(to_value)
+                        },
+                    );
                 }
                 "shutdown" => {
                     let server = Arc::clone(server);
                     let state = Arc::clone(state);
-                    spawn_request(registry, out_tx, span, id, move |ctx, ct| async move {
-                        let result = server.shutdown(&ctx, ct).await;
-                        if result.is_ok() {
-                            *state.lock().unwrap() = State::ShuttingDown;
-                        }
-                        result.map(|()| serde_json::Value::Null)
-                    });
+                    let permit = acquire_permit(permits).await;
+                    spawn_request(
+                        registry,
+                        out_tx,
+                        span,
+                        id,
+                        permit,
+                        move |ctx, ct| async move {
+                            let result = server.shutdown(&ctx, ct).await;
+                            if result.is_ok() {
+                                *state.lock().unwrap() = State::ShuttingDown;
+                            }
+                            result.map(|()| serde_json::Value::Null)
+                        },
+                    );
                 }
                 other => {
                     let snapshot = *state.lock().unwrap();
@@ -187,15 +206,29 @@ where
                 }
                 "initialized" => {
                     let params = parse_params(&params)?;
-                    spawn_notification(server, out_tx, span, move |server, ctx| async move {
-                        server.initialized(&ctx, params).await;
-                    });
+                    let permit = acquire_permit(permits).await;
+                    spawn_notification(
+                        server,
+                        out_tx,
+                        span,
+                        permit,
+                        move |server, ctx| async move {
+                            server.initialized(&ctx, params).await;
+                        },
+                    );
                 }
                 "textDocument/didOpen" => {
                     let params = parse_params(&params)?;
-                    spawn_notification(server, out_tx, span, move |server, ctx| async move {
-                        server.text_document_did_open(&ctx, params).await;
-                    });
+                    let permit = acquire_permit(permits).await;
+                    spawn_notification(
+                        server,
+                        out_tx,
+                        span,
+                        permit,
+                        move |server, ctx| async move {
+                            server.text_document_did_open(&ctx, params).await;
+                        },
+                    );
                 }
                 other => {
                     debug!(method = other, "unhandled notification");
@@ -230,6 +263,7 @@ fn spawn_request<F, Fut>(
     out_tx: &UnboundedSender<RawMessage>,
     span: Span,
     id: RequestId,
+    permit: tokio::sync::OwnedSemaphorePermit,
     body: F,
 ) where
     F: FnOnce(Context, CancellationToken) -> Fut + Send + 'static,
@@ -249,6 +283,10 @@ fn spawn_request<F, Fut>(
 
     let handle = tokio::spawn(
         async move {
+            // Hold the permit for the lifetime of the task; dropping at
+            // task end (whether the body finished, was cancelled, or
+            // panicked) is what releases the concurrency slot.
+            let _permit = permit;
             let ctx = Context::for_request(id_for_ctx, span_for_ctx, out_tx_for_ctx);
             let result = tokio::select! {
                 // `biased`: poll the body before the cancel branch.
@@ -308,6 +346,7 @@ fn spawn_notification<S, F, Fut>(
     server: &Arc<S>,
     out_tx: &UnboundedSender<RawMessage>,
     span: tracing::Span,
+    permit: tokio::sync::OwnedSemaphorePermit,
     body: F,
 ) where
     S: LanguageServer,
@@ -319,11 +358,24 @@ fn spawn_notification<S, F, Fut>(
     let span_for_task = span.clone();
     tokio::spawn(
         async move {
+            let _permit = permit;
             let ctx = Context::for_notification(span_for_task, out_tx);
             body(server, ctx).await;
         }
         .instrument(span),
     );
+}
+
+/// Acquire one concurrency permit, wrapped in a span so traces show how
+/// long handlers waited when the cap is hit (ADR 0012). The span opens
+/// before the `acquire_owned().await` and closes the instant the permit
+/// is held — its `.elapsed` is the queueing latency for this handler.
+async fn acquire_permit(permits: &Arc<Semaphore>) -> tokio::sync::OwnedSemaphorePermit {
+    Arc::clone(permits)
+        .acquire_owned()
+        .instrument(info_span!("handler.acquire_permit"))
+        .await
+        .expect("dispatcher semaphore is never closed")
 }
 
 fn parse_params<P: serde::de::DeserializeOwned>(params: &Bytes) -> Result<P> {
