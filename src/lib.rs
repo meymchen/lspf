@@ -27,15 +27,36 @@ pub use transport::{
 /// Cancellation primitive passed to every request handler (ADR 0007).
 pub use tokio_util::sync::CancellationToken;
 
+/// Default cap on in-flight handler tasks (ADR 0012).
+pub const DEFAULT_CONCURRENCY_LIMIT: usize = 64;
+
 /// Drive a `LanguageServer` over a custom `Transport`.
 ///
 /// `stdio()` is the canonical entry point; `serve()` is the escape hatch
 /// for tests and for transports beyond stdio (TCP, WebSocket, in-process
-/// mocks). See ADR 0011 for the transport contract.
+/// mocks). See ADR 0011 for the transport contract. Uses
+/// [`DEFAULT_CONCURRENCY_LIMIT`] for in-flight handlers; use
+/// [`serve_with_limit`] to override.
 pub async fn serve<S, T>(server: S, transport: T) -> Result<()>
 where
     S: LanguageServer,
     T: Transport,
 {
-    dispatcher::run(server, transport).await
+    dispatcher::run(server, transport, DEFAULT_CONCURRENCY_LIMIT).await
+}
+
+/// Like [`serve`], but with an explicit cap on in-flight handler tasks
+/// (ADR 0012). When the cap is hit, the read-loop awaits a permit before
+/// spawning the next handler — visible in traces as a long
+/// `handler.acquire_permit` span.
+pub async fn serve_with_limit<S, T>(
+    server: S,
+    transport: T,
+    concurrency_limit: usize,
+) -> Result<()>
+where
+    S: LanguageServer,
+    T: Transport,
+{
+    dispatcher::run(server, transport, concurrency_limit).await
 }
