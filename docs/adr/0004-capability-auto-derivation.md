@@ -21,3 +21,8 @@ implementing `hover`, or implement `hover` while leaving `HOVER = false`.
 Neither crashes; the client either calls a default no-op or never calls
 at all. We treat this as a documentation and example-quality problem,
 not a soundness one.
+
+One capability escapes this const model: `positionEncoding` is
+*negotiated* from the client's `general.positionEncodings`, not declared
+by a const, so the capability-assembly step must see `InitializeParams`.
+See ADR 0016.
