@@ -14,7 +14,6 @@ use bytes::Bytes;
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
 
-use lspf::types::{InitializeParams, InitializeResult};
 use lspf::{
     CancellationToken, Context, LanguageServer, LspError, RawMessage, RequestId, Transport,
     TransportError, TransportReader, TransportWriter,
@@ -77,6 +76,14 @@ fn initialize_request(id: i32) -> RawMessage {
     }
 }
 
+fn shutdown_request(id: i32) -> RawMessage {
+    RawMessage::Request {
+        id: RequestId::Number(id),
+        method: Cow::Borrowed("shutdown"),
+        params: Bytes::from_static(b"{}"),
+    }
+}
+
 fn cancel_notification(id: i32) -> RawMessage {
     let params = json!({ "id": id });
     RawMessage::Notification {
@@ -109,22 +116,33 @@ async fn poll_for_response(
     }
 }
 
-/// A server whose `initialize` sleeps for a long time, bailing politely
-/// when the framework triggers its cancellation token.
-struct SleepyInit;
+/// Drive `initialize` to completion so the server reaches `Running` —
+/// the only state in which the LSP spec permits a client to send (and
+/// therefore cancel) further requests. Panics if the initialize response
+/// does not arrive promptly.
+async fn initialize(
+    in_tx: &mpsc::UnboundedSender<RawMessage>,
+    outbox: &Arc<Mutex<Vec<RawMessage>>>,
+) {
+    in_tx.send(initialize_request(1)).unwrap();
+    poll_for_response(outbox, &RequestId::Number(1), Duration::from_millis(500))
+        .await
+        .expect("initialize did not complete within 500ms");
+}
 
-impl LanguageServer for SleepyInit {
-    async fn initialize(
-        &self,
-        _ctx: &Context,
-        _params: InitializeParams,
-        ct: CancellationToken,
-    ) -> Result<InitializeResult, LspError> {
+/// A server whose `shutdown` sleeps for a long time, bailing politely
+/// when the framework triggers its cancellation token. Cancellation is
+/// exercised on `shutdown` (a post-initialize request) rather than
+/// `initialize`, because the spec forbids clients from sending anything —
+/// including `$/cancelRequest` — before the initialize response, and the
+/// dispatcher drops such notifications (issue #4).
+struct SleepyShutdown;
+
+impl LanguageServer for SleepyShutdown {
+    async fn shutdown(&self, _ctx: &Context, ct: CancellationToken) -> Result<(), LspError> {
         tokio::select! {
             _ = ct.cancelled() => Err(LspError::RequestCancelled),
-            _ = tokio::time::sleep(Duration::from_secs(1)) => {
-                Ok(InitializeResult::default())
-            }
+            _ = tokio::time::sleep(Duration::from_secs(1)) => Ok(()),
         }
     }
 }
@@ -139,18 +157,20 @@ async fn cancel_request_returns_request_cancelled() {
         outbox: outbox.clone(),
     };
     let server_handle = tokio::spawn(async move {
-        let _ = lspf::serve(SleepyInit, transport).await;
+        let _ = lspf::serve(SleepyShutdown, transport).await;
     });
 
-    in_tx.send(initialize_request(1)).unwrap();
+    initialize(&in_tx, &outbox).await;
+
+    in_tx.send(shutdown_request(2)).unwrap();
     // Give the spawned handler a moment to land in its await before the cancel.
     tokio::time::sleep(Duration::from_millis(20)).await;
     let cancel_sent = Instant::now();
-    in_tx.send(cancel_notification(1)).unwrap();
+    in_tx.send(cancel_notification(2)).unwrap();
 
-    let response = poll_for_response(&outbox, &RequestId::Number(1), Duration::from_millis(500))
+    let response = poll_for_response(&outbox, &RequestId::Number(2), Duration::from_millis(500))
         .await
-        .expect("no response for id=1 within 500ms");
+        .expect("no response for id=2 within 500ms");
     let elapsed = cancel_sent.elapsed();
 
     assert!(
@@ -174,19 +194,14 @@ async fn cancel_request_returns_request_cancelled() {
     let _ = server_handle.await;
 }
 
-/// A server whose `initialize` parks on `ct.cancelled()` then asserts the
+/// A server whose `shutdown` parks on `ct.cancelled()` then asserts the
 /// token observed the cancel, signalling via a oneshot.
 struct ObserveCancel {
     signal: Mutex<Option<oneshot::Sender<bool>>>,
 }
 
 impl LanguageServer for ObserveCancel {
-    async fn initialize(
-        &self,
-        _ctx: &Context,
-        _params: InitializeParams,
-        ct: CancellationToken,
-    ) -> Result<InitializeResult, LspError> {
+    async fn shutdown(&self, _ctx: &Context, ct: CancellationToken) -> Result<(), LspError> {
         ct.cancelled().await;
         let observed = ct.is_cancelled();
         if let Some(tx) = self.signal.lock().unwrap().take() {
@@ -213,10 +228,12 @@ async fn cancel_request_triggers_handler_token() {
         let _ = lspf::serve(server, transport).await;
     });
 
-    in_tx.send(initialize_request(1)).unwrap();
+    initialize(&in_tx, &outbox).await;
+
+    in_tx.send(shutdown_request(2)).unwrap();
     // Ensure the spawned handler reaches `ct.cancelled().await` before cancel arrives.
     tokio::time::sleep(Duration::from_millis(20)).await;
-    in_tx.send(cancel_notification(1)).unwrap();
+    in_tx.send(cancel_notification(2)).unwrap();
 
     let observed = tokio::time::timeout(Duration::from_millis(100), signal_rx)
         .await

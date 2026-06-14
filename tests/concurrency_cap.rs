@@ -224,16 +224,18 @@ async fn handler_acquire_permit_span_visible_when_cap_exceeded() {
         .filter(|(name, _)| name == "handler.acquire_permit")
         .collect();
 
-    // initialize + 2 × didOpen → 3 spawn sites → 3 acquire spans.
+    // `initialize` runs inline (ADR 0003) and so never acquires a
+    // concurrency permit; only the two spawned `didOpen` handlers do →
+    // 2 acquire spans.
     assert_eq!(
         acquire_spans.len(),
-        3,
-        "expected 3 handler.acquire_permit spans (initialize + 2 didOpen), got {:#?}",
+        2,
+        "expected 2 handler.acquire_permit spans (2 didOpen; initialize is inline), got {:#?}",
         *closed,
     );
-    // First two complete fast; the third queues behind the second didOpen
-    // handler's 150ms sleep. Allow a generous lower bound so we don't
-    // flake on slow CI but still prove queueing was observed.
+    // The second didOpen queues behind the first's 150ms sleep under
+    // cap=1. Allow a generous lower bound so we don't flake on slow CI
+    // but still prove queueing was observed.
     let max_wait = acquire_spans.iter().map(|(_, d)| *d).max().unwrap();
     assert!(
         max_wait >= Duration::from_millis(50),
