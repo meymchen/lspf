@@ -42,7 +42,8 @@ where
     S: LanguageServer,
     T: Transport,
 {
-    dispatcher::run(server, transport, DEFAULT_CONCURRENCY_LIMIT).await
+    dispatcher::run(server, transport, DEFAULT_CONCURRENCY_LIMIT).await?;
+    Ok(())
 }
 
 /// Like [`serve`], but with an explicit cap on in-flight handler tasks
@@ -54,5 +55,6 @@ where
     S: LanguageServer,
     T: Transport,
 {
-    dispatcher::run(server, transport, concurrency_limit).await
+    dispatcher::run(server, transport, concurrency_limit).await?;
+    Ok(())
 }
