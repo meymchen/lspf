@@ -49,11 +49,7 @@ where
 /// (ADR 0012). When the cap is hit, the read-loop awaits a permit before
 /// spawning the next handler — visible in traces as a long
 /// `handler.acquire_permit` span.
-pub async fn serve_with_limit<S, T>(
-    server: S,
-    transport: T,
-    concurrency_limit: usize,
-) -> Result<()>
+pub async fn serve_with_limit<S, T>(server: S, transport: T, concurrency_limit: usize) -> Result<()>
 where
     S: LanguageServer,
     T: Transport,
