@@ -73,16 +73,27 @@ pub trait TransportWriter: Send + 'static {
 /// # }
 /// ```
 pub fn stdio<S: LanguageServer>(server: S) -> StdioBuilder<S> {
-    StdioBuilder { server }
+    StdioBuilder {
+        server,
+        concurrency_limit: crate::DEFAULT_CONCURRENCY_LIMIT,
+    }
 }
 
 pub struct StdioBuilder<S> {
     server: S,
+    concurrency_limit: usize,
 }
 
 impl<S: LanguageServer> StdioBuilder<S> {
+    /// Override the default cap on in-flight handler tasks (ADR 0012,
+    /// default [`crate::DEFAULT_CONCURRENCY_LIMIT`]).
+    pub fn concurrency_limit(mut self, limit: usize) -> Self {
+        self.concurrency_limit = limit;
+        self
+    }
+
     pub async fn serve(self) -> crate::Result<()> {
         let transport = StdioTransport::new();
-        crate::dispatcher::run(self.server, transport).await
+        crate::dispatcher::run(self.server, transport, self.concurrency_limit).await
     }
 }

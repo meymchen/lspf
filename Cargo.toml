@@ -38,3 +38,7 @@ path = "tests/concurrency.rs"
 [[test]]
 name = "cancellation"
 path = "tests/cancellation.rs"
+
+[[test]]
+name = "concurrency_cap"
+path = "tests/concurrency_cap.rs"
