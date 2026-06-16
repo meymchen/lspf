@@ -5,6 +5,7 @@
 
 mod context;
 mod dispatcher;
+mod documents;
 mod error;
 mod raw;
 mod server;
@@ -16,6 +17,7 @@ pub mod types {
 }
 
 pub use context::Context;
+pub use documents::{Document, Documents, PositionEncoding};
 pub use error::{Error, LspError, Result};
 pub use raw::{JsonRpcError, RawMessage, RequestId};
 pub use server::LanguageServer;

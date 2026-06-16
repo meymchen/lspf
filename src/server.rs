@@ -7,6 +7,7 @@ use lsp_types::{
 use tokio_util::sync::CancellationToken;
 
 use crate::context::Context;
+use crate::documents::Documents;
 use crate::error::LspError;
 
 /// The user's language server (see ADR 0003, 0004, 0006, 0007, 0009).
@@ -28,6 +29,13 @@ use crate::error::LspError;
 /// commits add one const per LSP feature.
 pub trait LanguageServer: Send + Sync + 'static {
     const TEXT_DOCUMENT_SYNC: TextDocumentSyncKind = TextDocumentSyncKind::INCREMENTAL;
+
+    /// The framework-provided document store (ADR 0003).
+    ///
+    /// The typical handler reads documents through `self.documents()`
+    /// without writing lock code. The store is concurrency-safe and cheap
+    /// to clone.
+    fn documents(&self) -> &Documents;
 
     fn server_capabilities(&self) -> ServerCapabilities {
         ServerCapabilities {
