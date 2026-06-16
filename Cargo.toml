@@ -47,3 +47,7 @@ path = "tests/concurrency_cap.rs"
 [[test]]
 name = "documents"
 path = "tests/documents.rs"
+
+[[test]]
+name = "position_encoding"
+path = "tests/position_encoding.rs"
