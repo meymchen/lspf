@@ -314,3 +314,47 @@ async fn request_before_initialize_returns_server_not_initialized() {
         );
     }
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_after_shutdown_returns_invalid_request() {
+    // After `shutdown` succeeds, every request must be refused with
+    // InvalidRequest (-32600). `exit` is a notification and must still work.
+    let (in_tx, in_rx) = mpsc::unbounded_channel::<RawMessage>();
+    let outbox = Arc::new(Mutex::new(Vec::new()));
+    let transport = ChannelTransport {
+        in_rx,
+        outbox: outbox.clone(),
+    };
+
+    let server_handle = tokio::spawn(async move {
+        let _ = lspf::serve(Probe, transport).await;
+    });
+
+    // Reach Running state.
+    in_tx.send(initialize_request(1)).unwrap();
+    wait_for_response(&outbox, &RequestId::Number(1), Duration::from_millis(500)).await;
+
+    // Transition to ShuttingDown.
+    in_tx.send(request(2, "shutdown")).unwrap();
+    wait_for_response(&outbox, &RequestId::Number(2), Duration::from_millis(500)).await;
+
+    // Any request after shutdown is invalid.
+    let hover_id = RequestId::Number(3);
+    in_tx.send(request(3, "textDocument/hover")).unwrap();
+    wait_for_response(&outbox, &hover_id, Duration::from_millis(500)).await;
+
+    // exit notification must still terminate the dispatcher normally.
+    in_tx.send(notification("exit", json!(null))).unwrap();
+
+    tokio::time::timeout(Duration::from_secs(2), server_handle)
+        .await
+        .expect("serve returned within 2s")
+        .expect("server task did not panic");
+
+    assert_eq!(
+        error_code(&outbox.lock().unwrap(), &hover_id),
+        Some(-32600),
+        "request after shutdown should return InvalidRequest, got outbox {:#?}",
+        outbox.lock().unwrap()
+    );
+}
