@@ -7,8 +7,46 @@ use lsp_types::{
 use tokio_util::sync::CancellationToken;
 
 use crate::context::Context;
-use crate::documents::Documents;
+use crate::documents::{Documents, PositionEncoding};
 use crate::error::LspError;
+
+/// Intersect the client's offered `positionEncodings` with lspf's preference
+/// order (`utf-8` then `utf-16`), write the choice into the document store,
+/// and return the LSP kind to advertise (ADR 0016).
+///
+/// If the client offers nothing, nothing supported, or omits the field
+/// entirely, the encoding defaults to UTF-16.
+fn negotiate_position_encoding(
+    documents: &Documents,
+    params: &InitializeParams,
+) -> lsp_types::PositionEncodingKind {
+    let offered = params
+        .capabilities
+        .general
+        .as_ref()
+        .and_then(|g| g.position_encodings.as_deref());
+
+    let preferred = [
+        lsp_types::PositionEncodingKind::UTF8,
+        lsp_types::PositionEncodingKind::UTF16,
+    ];
+    let chosen = offered
+        .and_then(|encodings| {
+            preferred
+                .iter()
+                .find(|kind| encodings.contains(kind))
+                .cloned()
+        })
+        .unwrap_or(lsp_types::PositionEncodingKind::UTF16);
+
+    documents.set_position_encoding(if chosen == lsp_types::PositionEncodingKind::UTF8 {
+        PositionEncoding::Utf8
+    } else {
+        PositionEncoding::Utf16
+    });
+
+    chosen
+}
 
 /// The user's language server (see ADR 0003, 0004, 0006, 0007, 0009).
 ///
@@ -37,9 +75,11 @@ pub trait LanguageServer: Send + Sync + 'static {
     /// to clone.
     fn documents(&self) -> &Documents;
 
-    fn server_capabilities(&self) -> ServerCapabilities {
+    fn server_capabilities(&self, params: &InitializeParams) -> ServerCapabilities {
+        let position_encoding = negotiate_position_encoding(self.documents(), params);
         ServerCapabilities {
             text_document_sync: Some(TextDocumentSyncCapability::Kind(Self::TEXT_DOCUMENT_SYNC)),
+            position_encoding: Some(position_encoding),
             ..ServerCapabilities::default()
         }
     }
@@ -47,12 +87,12 @@ pub trait LanguageServer: Send + Sync + 'static {
     fn initialize(
         &self,
         _ctx: &Context,
-        _params: InitializeParams,
+        params: InitializeParams,
         _ct: CancellationToken,
     ) -> impl Future<Output = Result<InitializeResult, LspError>> + Send {
-        async {
+        async move {
             Ok(InitializeResult {
-                capabilities: self.server_capabilities(),
+                capabilities: self.server_capabilities(&params),
                 server_info: None,
             })
         }
