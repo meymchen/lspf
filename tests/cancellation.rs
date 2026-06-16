@@ -136,9 +136,15 @@ async fn initialize(
 /// `initialize`, because the spec forbids clients from sending anything —
 /// including `$/cancelRequest` — before the initialize response, and the
 /// dispatcher drops such notifications (issue #4).
-struct SleepyShutdown;
+struct SleepyShutdown {
+    documents: lspf::Documents,
+}
 
 impl LanguageServer for SleepyShutdown {
+    fn documents(&self) -> &lspf::Documents {
+        &self.documents
+    }
+
     async fn shutdown(&self, _ctx: &Context, ct: CancellationToken) -> Result<(), LspError> {
         tokio::select! {
             _ = ct.cancelled() => Err(LspError::RequestCancelled),
@@ -157,7 +163,13 @@ async fn cancel_request_returns_request_cancelled() {
         outbox: outbox.clone(),
     };
     let server_handle = tokio::spawn(async move {
-        let _ = lspf::serve(SleepyShutdown, transport).await;
+        let _ = lspf::serve(
+            SleepyShutdown {
+                documents: lspf::Documents::new(),
+            },
+            transport,
+        )
+        .await;
     });
 
     initialize(&in_tx, &outbox).await;
@@ -198,9 +210,14 @@ async fn cancel_request_returns_request_cancelled() {
 /// token observed the cancel, signalling via a oneshot.
 struct ObserveCancel {
     signal: Mutex<Option<oneshot::Sender<bool>>>,
+    documents: lspf::Documents,
 }
 
 impl LanguageServer for ObserveCancel {
+    fn documents(&self) -> &lspf::Documents {
+        &self.documents
+    }
+
     async fn shutdown(&self, _ctx: &Context, ct: CancellationToken) -> Result<(), LspError> {
         ct.cancelled().await;
         let observed = ct.is_cancelled();
@@ -219,6 +236,7 @@ async fn cancel_request_triggers_handler_token() {
 
     let server = ObserveCancel {
         signal: Mutex::new(Some(signal_tx)),
+        documents: lspf::Documents::new(),
     };
     let transport = ChannelTransport {
         in_rx,

@@ -5,6 +5,7 @@ use lsp_types::PublishDiagnosticsParams;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::{Span, warn};
 
+use crate::documents::Documents;
 use crate::raw::{RawMessage, RequestId};
 
 /// Per-request handle to framework state (see ADR 0009).
@@ -20,6 +21,7 @@ pub struct Context {
     pub(crate) request_id: Option<RequestId>,
     pub(crate) span: Span,
     pub(crate) outgoing: UnboundedSender<RawMessage>,
+    pub(crate) documents: Documents,
 }
 
 impl Context {
@@ -27,19 +29,26 @@ impl Context {
         id: RequestId,
         span: Span,
         outgoing: UnboundedSender<RawMessage>,
+        documents: Documents,
     ) -> Self {
         Self {
             request_id: Some(id),
             span,
             outgoing,
+            documents,
         }
     }
 
-    pub(crate) fn for_notification(span: Span, outgoing: UnboundedSender<RawMessage>) -> Self {
+    pub(crate) fn for_notification(
+        span: Span,
+        outgoing: UnboundedSender<RawMessage>,
+        documents: Documents,
+    ) -> Self {
         Self {
             request_id: None,
             span,
             outgoing,
+            documents,
         }
     }
 
@@ -49,6 +58,24 @@ impl Context {
 
     pub fn span(&self) -> &Span {
         &self.span
+    }
+
+    /// The framework document store.
+    pub fn documents(&self) -> &Documents {
+        &self.documents
+    }
+
+    #[doc(hidden)]
+    /// Test-only constructor that builds a notification context with a
+    /// dummy outgoing channel and a placeholder span.
+    pub fn for_test_notification(documents: Documents) -> Self {
+        let (outgoing, _rx) = tokio::sync::mpsc::unbounded_channel();
+        Self {
+            request_id: None,
+            span: Span::current(),
+            outgoing,
+            documents,
+        }
     }
 
     /// Push a `textDocument/publishDiagnostics` notification onto the
