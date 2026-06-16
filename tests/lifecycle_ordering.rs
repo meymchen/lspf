@@ -77,9 +77,15 @@ impl TransportWriter for ChannelWriter {
 /// A server whose every built-in override has an observable effect, so a
 /// test can tell whether a handler actually ran. `didOpen` publishes a
 /// diagnostic; `initialize`/`shutdown` use the default success replies.
-struct Probe;
+struct Probe {
+    documents: lspf::Documents,
+}
 
 impl LanguageServer for Probe {
+    fn documents(&self) -> &lspf::Documents {
+        &self.documents
+    }
+
     async fn text_document_did_open(&self, ctx: &Context, params: DidOpenTextDocumentParams) {
         ctx.publish_diagnostics(PublishDiagnosticsParams {
             uri: params.text_document.uri,
@@ -198,7 +204,13 @@ async fn drive_uninitialized(msg: RawMessage) -> Vec<RawMessage> {
     };
 
     let server_handle = tokio::spawn(async move {
-        let _ = lspf::serve(Probe, transport).await;
+        let _ = lspf::serve(
+            Probe {
+                documents: lspf::Documents::new(),
+            },
+            transport,
+        )
+        .await;
     });
 
     in_tx.send(msg).unwrap();
@@ -216,11 +228,17 @@ async fn drive_uninitialized(msg: RawMessage) -> Vec<RawMessage> {
 /// A server whose `didOpen` sleeps a long time before publishing, so a
 /// test can tell whether an in-flight handler was aborted (no publish,
 /// prompt return) or awaited to completion (publish after the sleep).
-struct SlowOpen;
+struct SlowOpen {
+    documents: lspf::Documents,
+}
 
 const SLOW: Duration = Duration::from_secs(2);
 
 impl LanguageServer for SlowOpen {
+    fn documents(&self) -> &lspf::Documents {
+        &self.documents
+    }
+
     async fn text_document_did_open(&self, ctx: &Context, params: DidOpenTextDocumentParams) {
         tokio::time::sleep(SLOW).await;
         ctx.publish_diagnostics(PublishDiagnosticsParams {
@@ -241,7 +259,13 @@ async fn exit_aborts_in_flight_handler() {
     };
 
     let server_handle = tokio::spawn(async move {
-        let _ = lspf::serve(SlowOpen, transport).await;
+        let _ = lspf::serve(
+            SlowOpen {
+                documents: lspf::Documents::new(),
+            },
+            transport,
+        )
+        .await;
     });
 
     // Reach Running so the didOpen isn't gated, then put the slow handler
@@ -327,7 +351,13 @@ async fn request_after_shutdown_returns_invalid_request() {
     };
 
     let server_handle = tokio::spawn(async move {
-        let _ = lspf::serve(Probe, transport).await;
+        let _ = lspf::serve(
+            Probe {
+                documents: lspf::Documents::new(),
+            },
+            transport,
+        )
+        .await;
     });
 
     // Reach Running state.

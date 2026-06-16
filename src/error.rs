@@ -74,7 +74,10 @@ impl LspError {
 
     pub fn message(&self) -> String {
         match self {
-            Self::Internal(m) | Self::InvalidParams(m) | Self::MethodNotFound(m) | Self::InvalidRequest(m) => m.clone(),
+            Self::Internal(m)
+            | Self::InvalidParams(m)
+            | Self::MethodNotFound(m)
+            | Self::InvalidRequest(m) => m.clone(),
             Self::RequestCancelled => "request cancelled".to_string(),
             Self::ContentModified => "content modified".to_string(),
             Self::ServerNotInitialized => "server not initialized".to_string(),

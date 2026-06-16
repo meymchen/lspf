@@ -11,6 +11,7 @@ repository = "https://github.com/meymchen/lspf"
 bytes = "1"
 futures-util = { version = "0.3", default-features = false }
 lsp-types = "0.97"
+ropey = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 thiserror = "2"
@@ -42,3 +43,7 @@ path = "tests/cancellation.rs"
 [[test]]
 name = "concurrency_cap"
 path = "tests/concurrency_cap.rs"
+
+[[test]]
+name = "documents"
+path = "tests/documents.rs"

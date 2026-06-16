@@ -85,9 +85,14 @@ impl TransportWriter for VecWriter {
 struct Gated {
     started: Arc<tokio::sync::Semaphore>,
     release: Arc<tokio::sync::Notify>,
+    documents: lspf::Documents,
 }
 
 impl LanguageServer for Gated {
+    fn documents(&self) -> &lspf::Documents {
+        &self.documents
+    }
+
     async fn text_document_did_open(&self, ctx: &Context, params: DidOpenTextDocumentParams) {
         self.started.add_permits(1);
         self.release.notified().await;
@@ -198,6 +203,7 @@ async fn handler_acquire_permit_span_visible_when_cap_exceeded() {
     let server = Gated {
         started: started.clone(),
         release: release.clone(),
+        documents: lspf::Documents::new(),
     };
 
     const QUEUE_HOLD: Duration = Duration::from_millis(80);
