@@ -70,11 +70,17 @@ impl TransportWriter for VecWriter {
     }
 }
 
-struct Sleepy;
+struct Sleepy {
+    documents: lspf::Documents,
+}
 
 const HANDLER_SLEEP: Duration = Duration::from_millis(500);
 
 impl LanguageServer for Sleepy {
+    fn documents(&self) -> &lspf::Documents {
+        &self.documents
+    }
+
     async fn text_document_did_open(&self, ctx: &Context, params: DidOpenTextDocumentParams) {
         tokio::time::sleep(HANDLER_SLEEP).await;
         ctx.publish_diagnostics(PublishDiagnosticsParams {
@@ -156,7 +162,13 @@ async fn two_did_open_handlers_run_concurrently() {
 
     let start = Instant::now();
     let server_handle = tokio::spawn(async move {
-        let _ = lspf::serve(Sleepy, transport).await;
+        let _ = lspf::serve(
+            Sleepy {
+                documents: lspf::Documents::new(),
+            },
+            transport,
+        )
+        .await;
     });
 
     // Poll until both publishDiagnostics land, capped at 2s.

@@ -67,9 +67,11 @@ pub trait TransportWriter: Send + 'static {
 ///
 /// ```no_run
 /// # async fn run() -> lspf::Result<()> {
-/// # struct Hello;
-/// # impl lspf::LanguageServer for Hello {}
-/// lspf::stdio(Hello).serve().await
+/// # struct Hello { documents: lspf::Documents }
+/// # impl lspf::LanguageServer for Hello {
+/// #     fn documents(&self) -> &lspf::Documents { &self.documents }
+/// # }
+/// lspf::stdio(Hello { documents: lspf::Documents::new() }).serve().await
 /// # }
 /// ```
 pub fn stdio<S: LanguageServer>(server: S) -> StdioBuilder<S> {

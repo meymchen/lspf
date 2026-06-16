@@ -81,9 +81,14 @@ impl TransportWriter for VecWriter {
 struct Sleepy {
     sleep: Duration,
     started: Arc<tokio::sync::Semaphore>,
+    documents: lspf::Documents,
 }
 
 impl LanguageServer for Sleepy {
+    fn documents(&self) -> &lspf::Documents {
+        &self.documents
+    }
+
     async fn text_document_did_open(&self, ctx: &Context, params: DidOpenTextDocumentParams) {
         self.started.add_permits(1);
         tokio::time::sleep(self.sleep).await;
@@ -154,6 +159,7 @@ async fn cap_of_two_serializes_five_handlers_into_three_batches() {
     let server = Sleepy {
         sleep: Duration::from_millis(200),
         started: Arc::new(tokio::sync::Semaphore::new(0)),
+        documents: lspf::Documents::new(),
     };
 
     let start = Instant::now();
