@@ -35,6 +35,9 @@ pub enum LspError {
     #[error("server not initialized")]
     ServerNotInitialized,
 
+    #[error("invalid request: {0}")]
+    InvalidRequest(String),
+
     #[error("{message}")]
     ServerError {
         code: i32,
@@ -52,6 +55,10 @@ impl LspError {
         Self::InvalidParams(e.to_string())
     }
 
+    pub fn invalid_request(e: impl Display) -> Self {
+        Self::InvalidRequest(e.to_string())
+    }
+
     pub fn code(&self) -> i32 {
         match self {
             Self::Internal(_) => -32603,
@@ -60,13 +67,14 @@ impl LspError {
             Self::RequestCancelled => -32800,
             Self::ContentModified => -32801,
             Self::ServerNotInitialized => -32002,
+            Self::InvalidRequest(_) => -32600,
             Self::ServerError { code, .. } => *code,
         }
     }
 
     pub fn message(&self) -> String {
         match self {
-            Self::Internal(m) | Self::InvalidParams(m) | Self::MethodNotFound(m) => m.clone(),
+            Self::Internal(m) | Self::InvalidParams(m) | Self::MethodNotFound(m) | Self::InvalidRequest(m) => m.clone(),
             Self::RequestCancelled => "request cancelled".to_string(),
             Self::ContentModified => "content modified".to_string(),
             Self::ServerNotInitialized => "server not initialized".to_string(),

@@ -166,6 +166,12 @@ where
                 return Ok(Flow::Continue);
             }
 
+            // After a successful shutdown, every request is invalid until exit.
+            if *state.lock().unwrap() == State::ShuttingDown {
+                enqueue_error(out_tx, id, LspError::invalid_request("invalid request"));
+                return Ok(Flow::Continue);
+            }
+
             match method.as_ref() {
                 "initialize" => {
                     if *state.lock().unwrap() != State::Uninitialized {
