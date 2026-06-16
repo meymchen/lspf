@@ -9,6 +9,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Span, debug, info_span, warn};
 
 use crate::context::Context;
+use crate::documents::Documents;
 use crate::error::Error;
 use crate::raw::{JsonRpcError, RawMessage, RequestId};
 use crate::server::LanguageServer;
@@ -197,7 +198,12 @@ where
                     // returns. initialize is therefore not cancellable; the
                     // token is a never-firing placeholder.
                     let params = parse_params(&params)?;
-                    let ctx = Context::for_request(id.clone(), span.clone(), out_tx.clone());
+                    let ctx = Context::for_request(
+                        id.clone(),
+                        span.clone(),
+                        out_tx.clone(),
+                        server.documents().clone(),
+                    );
                     let result = server
                         .initialize(&ctx, params, CancellationToken::new())
                         .instrument(span)
@@ -210,6 +216,7 @@ where
                 "shutdown" => {
                     let server = Arc::clone(server);
                     let state = Arc::clone(state);
+                    let documents = server.documents().clone();
                     let permit = acquire_permit(permits).await;
                     spawn_request(
                         tasks,
@@ -218,6 +225,7 @@ where
                         span,
                         id,
                         permit,
+                        documents,
                         move |ctx, ct| async move {
                             let result = server.shutdown(&ctx, ct).await;
                             if result.is_ok() {
@@ -252,7 +260,11 @@ where
 
             match method.as_ref() {
                 "exit" => {
-                    let ctx = Context::for_notification(span.clone(), out_tx.clone());
+                    let ctx = Context::for_notification(
+                        span.clone(),
+                        out_tx.clone(),
+                        server.documents().clone(),
+                    );
                     server.exit(&ctx).instrument(span).await;
                     let code = if *state.lock().unwrap() == State::ShuttingDown {
                         0
@@ -330,6 +342,7 @@ fn spawn_request<F, Fut>(
     span: Span,
     id: RequestId,
     permit: tokio::sync::OwnedSemaphorePermit,
+    documents: Documents,
     body: F,
 ) where
     F: FnOnce(Context, CancellationToken) -> Fut + Send + 'static,
@@ -353,7 +366,7 @@ fn spawn_request<F, Fut>(
             // task end (whether the body finished, was cancelled, or
             // panicked) is what releases the concurrency slot.
             let _permit = permit;
-            let ctx = Context::for_request(id_for_ctx, span_for_ctx, out_tx_for_ctx);
+            let ctx = Context::for_request(id_for_ctx, span_for_ctx, out_tx_for_ctx, documents);
             let result = tokio::select! {
                 // `biased`: poll the body before the cancel branch.
                 // When the token fires, both branches wake; biased
@@ -423,7 +436,7 @@ fn spawn_notification<S, F, Fut>(
     tasks.spawn(
         async move {
             let _permit = permit;
-            let ctx = Context::for_notification(span_for_task, out_tx);
+            let ctx = Context::for_notification(span_for_task, out_tx, server.documents().clone());
             body(server, ctx).await;
         }
         .instrument(span),

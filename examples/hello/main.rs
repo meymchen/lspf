@@ -2,11 +2,25 @@ use lspf::types::{
     Diagnostic, DiagnosticSeverity, DidOpenTextDocumentParams, Position, PublishDiagnosticsParams,
     Range,
 };
-use lspf::{Context, LanguageServer};
+use lspf::{Context, Documents, LanguageServer};
 
-struct Hello;
+struct Hello {
+    documents: Documents,
+}
+
+impl Hello {
+    fn new() -> Self {
+        Self {
+            documents: Documents::new(),
+        }
+    }
+}
 
 impl LanguageServer for Hello {
+    fn documents(&self) -> &Documents {
+        &self.documents
+    }
+
     async fn text_document_did_open(&self, ctx: &Context, params: DidOpenTextDocumentParams) {
         ctx.publish_diagnostics(PublishDiagnosticsParams {
             uri: params.text_document.uri,
@@ -37,5 +51,5 @@ async fn main() -> lspf::Result<()> {
         .with_writer(std::io::stderr)
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
-    lspf::stdio(Hello).serve().await
+    lspf::stdio(Hello::new()).serve().await
 }
