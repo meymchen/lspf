@@ -1,0 +1,4 @@
+[alias]
+# Generate an HTML coverage report for the library and integration tests.
+# Open target/coverage/html/index.html in a browser to inspect.
+coverage = "llvm-cov --all-features --all-targets --html --output-dir target/coverage"
