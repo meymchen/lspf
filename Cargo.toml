@@ -51,3 +51,7 @@ path = "tests/documents.rs"
 [[test]]
 name = "position_encoding"
 path = "tests/position_encoding.rs"
+
+[[test]]
+name = "doc_sync_ordering"
+path = "tests/doc_sync_ordering.rs"

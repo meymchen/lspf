@@ -1,7 +1,8 @@
 use std::future::Future;
 
 use lsp_types::{
-    DidOpenTextDocumentParams, InitializeParams, InitializeResult, InitializedParams,
+    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+    DidSaveTextDocumentParams, InitializeParams, InitializeResult, InitializedParams,
     ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
 };
 use tokio_util::sync::CancellationToken;
@@ -122,6 +123,30 @@ pub trait LanguageServer: Send + Sync + 'static {
         &self,
         _ctx: &Context,
         _params: DidOpenTextDocumentParams,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+
+    fn text_document_did_change(
+        &self,
+        _ctx: &Context,
+        _params: DidChangeTextDocumentParams,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+
+    fn text_document_did_close(
+        &self,
+        _ctx: &Context,
+        _params: DidCloseTextDocumentParams,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+
+    fn text_document_did_save(
+        &self,
+        _ctx: &Context,
+        _params: DidSaveTextDocumentParams,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
