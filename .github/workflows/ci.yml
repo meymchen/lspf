@@ -40,3 +40,23 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --all-features --all-targets
       - run: cargo test --all-features --doc
+
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: rustup component add llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-llvm-cov --version 0.6.21 --locked
+      - run: cargo llvm-cov --all-features --all-targets --no-report
+      - run: cargo llvm-cov report --html --output-dir target/coverage
+      - run: cargo llvm-cov report --lcov --output-path target/coverage/lcov.info
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            target/coverage/html
+            target/coverage/lcov.info
+          retention-days: 7

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.3] - 2026-06-17
+
+### Added
+
+- `cargo coverage` alias in `.cargo/config.toml` for local HTML coverage reports.
+- CI coverage job that generates and uploads HTML/LCOV reports as artifacts.
+- Documentation: test coverage glossary entry in `CONTEXT.md` and coverage
+  instructions in `README.md`.
+
 ## [0.1.0-alpha.2] - 2026-06-12
 
 ### Added
@@ -25,5 +34,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Toolchain pinning and lint configuration: `rust-toolchain.toml`,
   `rustfmt.toml`, `clippy.toml`.
 
-[Unreleased]: https://github.com/meymchen/lspf/compare/v0.1.0-alpha.2...HEAD
+[Unreleased]: https://github.com/meymchen/lspf/compare/v0.1.0-alpha.3...HEAD
+[0.1.0-alpha.3]: https://github.com/meymchen/lspf/releases/tag/v0.1.0-alpha.3
 [0.1.0-alpha.2]: https://github.com/meymchen/lspf/releases/tag/v0.1.0-alpha.2
