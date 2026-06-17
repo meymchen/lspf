@@ -574,6 +574,69 @@ async fn did_change_mutation_is_visible_to_following_request() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_did_change_mutations_apply_in_receipt_order() {
+    let outbox = Arc::new(Mutex::new(Vec::new()));
+    let done = Arc::new(tokio::sync::Notify::new());
+    let mut inbox = VecDeque::new();
+    inbox.push_back(initialize_request(1));
+    inbox.push_back(did_open_notification(
+        "file:///two-changes.txt",
+        "hello world",
+    ));
+    // First change: "hello world" -> "hello lspf"
+    inbox.push_back(did_change_notification(
+        "file:///two-changes.txt",
+        2,
+        6,
+        11,
+        "lspf",
+    ));
+    // Second change: "hello lspf" -> "hi lspf"
+    inbox.push_back(did_change_notification(
+        "file:///two-changes.txt",
+        3,
+        0,
+        5,
+        "hi",
+    ));
+    inbox.push_back(shutdown_request(2));
+
+    let transport = VecTransport {
+        inbox,
+        outbox: outbox.clone(),
+        done: done.clone(),
+    };
+    let server = OrderingCheck {
+        documents: lspf::Documents::new(),
+        uri: "file:///two-changes.txt".to_string(),
+    };
+
+    let server_handle = tokio::spawn(async move {
+        let _ = lspf::serve(server, transport).await;
+    });
+
+    let start = std::time::Instant::now();
+    loop {
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "timed out waiting for shutdown diagnostic"
+        );
+        if find_diagnostic_message(&outbox.lock().unwrap(), "shutdown-sees-hi lspf") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    done.notify_one();
+    let _ = server_handle.await;
+
+    assert!(
+        !find_diagnostic_message(&outbox.lock().unwrap(), "shutdown-sees-hello lspf"),
+        "two sequential didChange edits should compose in receipt order"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn did_open_mutation_lands_before_user_handler_runs() {
     let outbox = Arc::new(Mutex::new(Vec::new()));
     let done = Arc::new(tokio::sync::Notify::new());
