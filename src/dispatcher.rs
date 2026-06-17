@@ -291,7 +291,10 @@ where
                     );
                 }
                 "textDocument/didOpen" => {
-                    let params = parse_params(&params)?;
+                    let params: lsp_types::DidOpenTextDocumentParams = parse_params(&params)?;
+                    // Built-in mutation runs inline (ADR 0003 2026-06-15 addendum)
+                    // so the document is visible to the next message.
+                    server.documents().open(params.text_document.clone());
                     let permit = acquire_permit(permits).await;
                     spawn_notification(
                         tasks,
@@ -301,6 +304,61 @@ where
                         permit,
                         move |server, ctx| async move {
                             server.text_document_did_open(&ctx, params).await;
+                        },
+                    );
+                }
+                "textDocument/didChange" => {
+                    let params: lsp_types::DidChangeTextDocumentParams = parse_params(&params)?;
+                    let uri = params.text_document.uri.clone();
+                    let version = params.text_document.version;
+                    for change in &params.content_changes {
+                        if let Err(e) = server.documents().apply_incremental_change(
+                            &uri,
+                            version,
+                            change.clone(),
+                        ) {
+                            warn!(error = %e, "textDocument/didChange: failed to apply change");
+                        }
+                    }
+                    let permit = acquire_permit(permits).await;
+                    spawn_notification(
+                        tasks,
+                        server,
+                        out_tx,
+                        span,
+                        permit,
+                        move |server, ctx| async move {
+                            server.text_document_did_change(&ctx, params).await;
+                        },
+                    );
+                }
+                "textDocument/didClose" => {
+                    let params: lsp_types::DidCloseTextDocumentParams = parse_params(&params)?;
+                    server.documents().close(&params.text_document.uri);
+                    let permit = acquire_permit(permits).await;
+                    spawn_notification(
+                        tasks,
+                        server,
+                        out_tx,
+                        span,
+                        permit,
+                        move |server, ctx| async move {
+                            server.text_document_did_close(&ctx, params).await;
+                        },
+                    );
+                }
+                "textDocument/didSave" => {
+                    let params: lsp_types::DidSaveTextDocumentParams = parse_params(&params)?;
+                    server.documents().save(&params.text_document.uri);
+                    let permit = acquire_permit(permits).await;
+                    spawn_notification(
+                        tasks,
+                        server,
+                        out_tx,
+                        span,
+                        permit,
+                        move |server, ctx| async move {
+                            server.text_document_did_save(&ctx, params).await;
                         },
                     );
                 }
