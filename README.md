@@ -14,7 +14,7 @@ spans, and outgoing helpers (`publish_diagnostics`, `show_message`,
 `apply_edit`, …) are exposed on the per-request `Context` every handler
 receives.
 
-> **Status:** `0.1.0-alpha.2` is the second alpha; the first non-alpha
+> **Status:** `0.1.0-alpha.3` is the third alpha; the first non-alpha
 > `0.1.0` release is still planned, gated on the `Layer`/`Service`
 > generalization landing. The architecture is scoped in
 > [`CONTEXT.md`](./CONTEXT.md) and [`docs/adr/`](./docs/adr/); the `stdio`
@@ -174,6 +174,15 @@ Before opening a PR, please skim:
 - The relevant `docs/adr/*.md` — if the change revisits a decision,
   either justify the deviation in the PR description or write a new
   ADR.
+
+To generate a local HTML coverage report, run:
+
+```bash
+cargo coverage
+```
+
+Then open `target/coverage/html/index.html`. CI also uploads the
+report as an artifact on every pull request and `main` push.
 
 ## License
 

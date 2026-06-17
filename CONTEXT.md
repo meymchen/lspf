@@ -102,3 +102,10 @@ because it has its own method name on the wire and isn't routed through
 `workspace/executeCommand`.
 _Avoid_: Extension method (overloaded with LSP's own extension
 proposals).
+
+**Test coverage**:
+The proportion of source code lines or branches exercised by the test
+suite. Measured by a coverage tool and reported as a percentage.
+Distinct from [[helper coverage]] (the framework's built-in LSP helper
+surface, see ADR 0008).
+_Avoid_: Coverage (unqualified; use "test coverage" or "helper coverage").
