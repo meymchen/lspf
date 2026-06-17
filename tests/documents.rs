@@ -334,15 +334,20 @@ impl LanguageServer for Mirror {
         &self.documents
     }
 
-    async fn text_document_did_open(&self, ctx: &Context, params: DidOpenTextDocumentParams) {
-        let uri = params.text_document.uri.clone();
-        ctx.documents().open(params.text_document);
-        assert!(self.documents().get(&uri).is_some());
+    async fn text_document_did_open(&self, _ctx: &Context, params: DidOpenTextDocumentParams) {
+        let uri = params.text_document.uri;
+        // The dispatcher opens the document inline before invoking the user
+        // handler (ADR 0003 2026-06-15 addendum), so the handler sees the
+        // document already present.
+        assert!(
+            self.documents().get(&uri).is_some(),
+            "handler should observe the inline-opened document"
+        );
     }
 }
 
 #[tokio::test]
-async fn handler_sees_same_documents_via_self_and_context() {
+async fn handler_sees_inline_opened_document() {
     let u = uri("file:///mirror.txt");
     let item = text_item(u.clone(), "mirror me");
     let params = DidOpenTextDocumentParams {
@@ -353,6 +358,10 @@ async fn handler_sees_same_documents_via_self_and_context() {
     let server = Mirror {
         documents: documents.clone(),
     };
+
+    // Simulate the dispatcher's inline open; the handler itself must not
+    // re-open the document.
+    documents.open(params.text_document.clone());
 
     server
         .text_document_did_open(&Context::for_test_notification(documents), params)
