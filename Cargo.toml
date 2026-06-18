@@ -1,13 +1,16 @@
-[package]
-name = "lspf"
+[workspace]
+members = ["crates/lspf", "crates/lspf-hello"]
+resolver = "3"
+
+[workspace.package]
 version = "0.1.0-alpha.3"
 edition = "2024"
 authors = ["Yuming Chen"]
 license = "MIT OR Apache-2.0"
-description = "A Rust framework for building extensible LSP language servers"
 repository = "https://github.com/meymchen/lspf"
 
-[dependencies]
+[workspace.dependencies]
+lspf = { path = "crates/lspf", version = "0.1.0-alpha.3" }
 bytes = "1"
 futures-util = { version = "0.3", default-features = false }
 lsp-types = "0.97"
@@ -17,41 +20,5 @@ serde_json = { version = "1", features = ["raw_value"] }
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "io-std", "io-util", "sync"] }
 tokio-util = { version = "0.7", features = ["codec", "rt"] }
-# `rt` pulls in the `CancellationToken` primitive used by ADR 0007.
 tracing = "0.1"
-
-[dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "time"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-[[example]]
-name = "hello"
-path = "examples/hello/main.rs"
-
-[[test]]
-name = "smoke"
-path = "tests/smoke.rs"
-
-[[test]]
-name = "concurrency"
-path = "tests/concurrency.rs"
-
-[[test]]
-name = "cancellation"
-path = "tests/cancellation.rs"
-
-[[test]]
-name = "concurrency_cap"
-path = "tests/concurrency_cap.rs"
-
-[[test]]
-name = "documents"
-path = "tests/documents.rs"
-
-[[test]]
-name = "position_encoding"
-path = "tests/position_encoding.rs"
-
-[[test]]
-name = "doc_sync_ordering"
-path = "tests/doc_sync_ordering.rs"
