@@ -1,0 +1,21 @@
+[package]
+name = "lspf-hello"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "An installable template language server built on the lspf framework"
+
+[[bin]]
+name = "lspf-hello"
+path = "src/main.rs"
+
+[dependencies]
+lspf.workspace = true
+tokio.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "time"] }

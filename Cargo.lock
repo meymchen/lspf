@@ -145,6 +145,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lspf-hello"
+version = "0.1.0-alpha.3"
+dependencies = [
+ "lspf",
+ "serde_json",
+ "tokio",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "matchers"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
