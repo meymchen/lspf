@@ -1,5 +1,5 @@
-//! End-to-end smoke tests — drive `examples/hello` over stdio and assert
-//! both the lifecycle responses (commit 1) and the outgoing
+//! End-to-end smoke tests — drive the `lspf-hello` binary over stdio and
+//! assert both the lifecycle responses (commit 1) and the outgoing
 //! `publishDiagnostics` notification (commit 2).
 
 use std::path::PathBuf;
@@ -11,18 +11,10 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout, Command};
 
 fn hello_binary() -> PathBuf {
-    let status = std::process::Command::new("cargo")
-        .args(["build", "--example", "hello", "--quiet"])
-        .status()
-        .expect("cargo build --example hello failed to launch");
-    assert!(status.success(), "cargo build --example hello failed");
-
-    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    p.push("target");
-    p.push("debug");
-    p.push("examples");
-    p.push("hello");
-    p
+    // Cargo builds the binary target before running integration tests and
+    // exposes its path through this env var, so the test always drives the
+    // freshly compiled `lspf-hello`.
+    PathBuf::from(env!("CARGO_BIN_EXE_lspf-hello"))
 }
 
 async fn write_framed(stdin: &mut ChildStdin, body: &[u8]) {
