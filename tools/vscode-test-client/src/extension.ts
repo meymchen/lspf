@@ -7,12 +7,14 @@ import {
     TransportKind,
 } from 'vscode-languageclient/node';
 
+import { resolveServerBinary } from './serverPath.js';
+
 let client: LanguageClient | undefined;
 
 export function activate(context: ExtensionContext): void {
-    // tools/vscode-test-client/out/extension.js  →  repo root is four levels up.
+    // tools/vscode-test-client/out/extension.js  →  repo root is two levels up.
     const repoRoot = path.resolve(context.extensionPath, '..', '..');
-    const serverBinary = path.join(repoRoot, 'target', 'debug', 'examples', 'hello');
+    const serverBinary = resolveServerBinary(repoRoot);
 
     const serverOptions: ServerOptions = {
         command: serverBinary,
