@@ -1,8 +1,9 @@
 # lspf VSCode test client
 
-Minimal VSCode extension that spawns `target/debug/examples/hello` as a
+Minimal VSCode extension that spawns `target/debug/lspf-hello` as a
 language server. Used for manual smoke testing during development —
-the CI side of the same path is `cargo test --test smoke`.
+the CI side of the same path is the `lspf-hello` end-to-end suite,
+run with `cargo test -p lspf-hello` (or `cargo test --workspace`).
 
 ## Setup (one-time)
 
@@ -12,12 +13,18 @@ npm install
 npm run compile
 ```
 
+The extension's server-path resolution has a small unit test; run it with:
+
+```sh
+npm test
+```
+
 ## Build the server
 
 From the repo root:
 
 ```sh
-cargo build --example hello
+cargo build -p lspf-hello
 ```
 
 ## Launch
