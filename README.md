@@ -67,7 +67,9 @@ async fn main() -> lspf::Result<()> {
 }
 ```
 
-A runnable copy lives at [`examples/hello/main.rs`](./examples/hello/main.rs).
+A runnable copy lives at
+[`crates/lspf-hello/src/main.rs`](./crates/lspf-hello/src/main.rs) — the
+installable template server described under [Editor setup](#editor-setup).
 
 ## Install
 
@@ -150,14 +152,102 @@ milestones:
 
 ## Examples
 
-Run the hello example against a real editor, or point any LSP-aware tool
-at the spawned process:
+Run the template server straight from the workspace, or point any
+LSP-aware tool at the spawned process:
 
 ```bash
-cargo run --example hello
+cargo run -p lspf-hello
 ```
 
+To wire it into a real editor instead, see [Editor setup](#editor-setup).
 More examples land as the framework grows.
+
+## Editor setup
+
+This repository is a Cargo workspace with two members:
+
+- [`crates/lspf`](./crates/lspf) — the framework library you depend on
+  (`lspf = "0.1"`).
+- [`crates/lspf-hello`](./crates/lspf-hello) — an installable **template
+  server**. It builds a `lspf-hello` binary that speaks LSP over stdio and,
+  on every `textDocument/didOpen`, publishes an informational diagnostic
+  ("lspf saw this document open"). Fork it as the starting point for your
+  own language server.
+
+### Install the server
+
+```bash
+cargo install --path crates/lspf-hello
+```
+
+This installs the `lspf-hello` binary into Cargo's bin directory
+(`~/.cargo/bin` by default). Make sure that directory is on your `PATH` so
+your editor can launch the server by name.
+
+### VS Code
+
+VS Code has no built-in generic LSP client, so install a thin generic-client
+extension such as [Generic LSP Client
+(v2)](https://marketplace.visualstudio.com/items?itemName=zsol.vscode-glspc),
+then add this to your `settings.json`:
+
+```json
+{
+  "glspc.server.command": "lspf-hello",
+  "glspc.server.commandArguments": [],
+  "glspc.server.languageId": ["plaintext"]
+}
+```
+
+Open any plain-text (`.txt`) file and you should see the
+"lspf saw this document open" diagnostic on line 1.
+
+> During framework development you can skip the install and use the bundled
+> [`tools/vscode-test-client`](./tools/vscode-test-client) instead, which
+> launches the freshly built binary from `target/`.
+
+### Zed
+
+Zed launches a custom server straight from `settings.json`. Register the
+binary under `lsp` and attach it to the built-in **Plain Text** language:
+
+```json
+{
+  "languages": {
+    "Plain Text": {
+      "language_servers": ["lspf-hello"]
+    }
+  },
+  "lsp": {
+    "lspf-hello": {
+      "binary": {
+        "path": "lspf-hello",
+        "arguments": []
+      }
+    }
+  }
+}
+```
+
+Open any `.txt` file; the "lspf saw this document open" diagnostic appears
+on the first line. If Zed cannot find `lspf-hello` on your `PATH`, set
+`path` to the absolute path printed by `which lspf-hello`
+(`where lspf-hello` on Windows).
+
+### Troubleshooting
+
+- **`lspf-hello` not found / "command not found".** The binary isn't on your
+  `PATH`. Confirm `which lspf-hello` resolves; if not, add `~/.cargo/bin` to
+  your `PATH`, or use the absolute path in the editor config above.
+- **The server doesn't start or no diagnostic appears.** Make sure you
+  ran `cargo install --path crates/lspf-hello` after your latest changes,
+  and that the file you opened is recognized as plain text (the server only
+  reacts to `plaintext` / **Plain Text** documents). Run `lspf-hello` in a
+  terminal with `RUST_LOG=lspf=trace` to confirm it starts and to see LSP
+  traffic on stderr.
+- **Edited the config but nothing changed.** Editors read LSP settings at
+  startup — reload the window after editing `settings.json` (VS Code:
+  *Developer: Reload Window*; Zed: reopen the workspace).
 
 ## Contributing
 
