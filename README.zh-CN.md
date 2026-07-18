@@ -114,7 +114,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 | `LanguageServer`    | 应用实现的异步 trait；当前包含生命周期和文本文档处理器。                               |
 | Handler             | 处理 LSP 请求或通知的异步 trait 方法。                                                 |
 | `Document`          | 框架跟踪的文本资源：URI、语言 ID、版本和基于 rope 的内容。                             |
-| `Documents`         | 服务器和每个处理器 `Context` 共享的并发安全文档存储。                                 |
+| `Documents`         | 服务器和每个处理器 `Context` 共享的并发安全文档存储。                                  |
 | `Context`           | 处理器访问 `Documents`、请求 ID、`tracing` span 和 `publish_diagnostics` 的入口。      |
 | `CancellationToken` | 传递给请求处理器的取消信号。                                                           |
 | `Transport`         | 供分发器使用、拆分为 reader 和 writer 两部分的消息帧通道。                             |
@@ -230,6 +230,18 @@ Issue 位于 GitHub 仓库
 - [`CONTEXT.md`](./CONTEXT.md)：确认修改符合项目词汇。
 - 相关的 `docs/adr/*.md`：如果修改重新讨论了已有决策，请在 PR 描述中解释偏离原因，
   或新增一份 ADR。
+
+使用仓库共享配置检查全部 Markdown（Node.js 24）：
+
+```bash
+npx --yes markdownlint-cli2@0.22.1
+```
+
+大多数机械性的 Markdown 问题可以先自动修复，再人工检查结果：
+
+```bash
+npx --yes markdownlint-cli2@0.22.1 --fix
+```
 
 生成本地 HTML 覆盖率报告：
 

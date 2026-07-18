@@ -122,7 +122,7 @@ the docs.
 
 | Term                | Meaning                                                                                                  |
 | ------------------- | -------------------------------------------------------------------------------------------------------- |
-| `LanguageServer`    | The async trait implemented by an application. It exposes lifecycle and text-document handlers today.   |
+| `LanguageServer`    | The async trait implemented by an application. It exposes lifecycle and text-document handlers today.    |
 | Handler             | An async trait method invoked for an LSP request or notification.                                        |
 | `Document`          | A text resource tracked by the framework: URI, language id, version, and rope-backed contents.           |
 | `Documents`         | The concurrency-safe store shared by the server and every handler's `Context`.                           |
@@ -259,6 +259,19 @@ Before opening a PR, please skim:
 - The relevant `docs/adr/*.md` — if the change revisits a decision,
   either justify the deviation in the PR description or write a new
   ADR.
+
+Lint all Markdown with the repository's shared configuration (Node.js 24):
+
+```bash
+npx --yes markdownlint-cli2@0.22.1
+```
+
+Most mechanical Markdown issues can be fixed locally before reviewing the
+result:
+
+```bash
+npx --yes markdownlint-cli2@0.22.1 --fix
+```
 
 To generate a local HTML coverage report, run:
 

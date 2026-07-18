@@ -10,6 +10,15 @@ env:
   RUSTFLAGS: -D warnings
 
 jobs:
+  markdownlint:
+    name: markdownlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DavidAnson/markdownlint-cli2-action@v23.2.0
+        with:
+          globs: "**/*.md"
+
   fmt:
     name: fmt
     runs-on: ubuntu-latest
