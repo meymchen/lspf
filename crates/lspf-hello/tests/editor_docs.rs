@@ -1,10 +1,10 @@
 //! Doc-sync test for the editor-setup documentation (issue #22).
 //!
-//! The README ships copy-paste VS Code and Zed configuration snippets that
-//! launch the `lspf-hello` binary. A user pastes these verbatim, so a typo in
-//! the JSON or a drift away from the real binary name silently breaks the MVP
-//! onboarding path. This test pins the snippets: it parses them as JSON and
-//! asserts they reference the binary this crate actually installs.
+//! The README ships a copy-paste VS Code configuration snippet that launches
+//! the `lspf-hello` binary. A typo in the JSON or a drift away from the real
+//! binary name silently breaks the MVP onboarding path. Zed cannot register
+//! arbitrary servers from settings alone, so its section is pinned to explain
+//! the required extension path instead.
 
 use serde_json::Value;
 
@@ -99,25 +99,19 @@ fn vscode_snippet_is_valid_json_targeting_the_binary() {
 }
 
 #[test]
-fn zed_snippet_is_valid_json_targeting_the_binary() {
+fn zed_section_explains_extension_requirement() {
     let zed = section(README, "Zed");
-    let blocks = json_blocks(zed);
-    assert_eq!(
-        blocks.len(),
-        1,
-        "Zed section must contain exactly one json settings snippet"
-    );
-
-    let settings: Value = serde_json::from_str(blocks[0])
-        .expect("Zed settings snippet must be valid, copy-paste-able JSON");
-    let rendered = settings.to_string();
     assert!(
-        rendered.contains(BINARY),
-        "Zed snippet must launch the `{BINARY}` binary"
+        zed.contains("language extension"),
+        "Zed section must explain that a language extension is required"
     );
     assert!(
-        rendered.contains("Plain Text"),
-        "Zed snippet must register the server for the Plain Text language"
+        zed.contains("cannot register a new arbitrary server"),
+        "Zed section must not imply that settings alone can register the server"
+    );
+    assert!(
+        zed.contains("https://zed.dev/docs/extensions/languages"),
+        "Zed section must link to the language extension documentation"
     );
 }
 
