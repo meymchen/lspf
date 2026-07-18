@@ -6,6 +6,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "An installable template language server built on the lspf framework"
+publish = false
 
 [[bin]]
 name = "lspf-hello"
