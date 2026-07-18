@@ -1,0 +1,17 @@
+[workspace]
+# Keep workspace crates on one version and create a single tag/release from
+# the main crate.
+git_tag_enable = false
+git_release_enable = false
+
+[[package]]
+name = "lspf"
+git_tag_enable = true
+git_tag_name = "v{{ version }}"
+git_release_enable = true
+git_release_name = "v{{ version }}"
+
+[[package]]
+name = "lspf-hello"
+release = false
+publish = false

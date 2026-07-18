@@ -5,6 +5,7 @@
   "version": "0.1.0",
   "private": true,
   "engines": {
+    "node": "24.x",
     "vscode": "^1.80.0"
   },
   "main": "./out/extension.js",
@@ -21,7 +22,7 @@
     "vscode-languageclient": "^9.0.1"
   },
   "devDependencies": {
-    "@types/node": "^20",
+    "@types/node": "^24",
     "@types/vscode": "^1.80.0",
     "typescript": "^5"
   }
