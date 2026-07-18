@@ -1,0 +1,17 @@
+# Keep CLI, editor, and CI behavior in one repository-level configuration.
+gitignore: true
+globs:
+  - "**/*.md"
+
+config:
+  default: true
+
+  # Prose, tables, badges, and long links are more readable when wrapping is
+  # left to authors and renderers. This also matches vscode-markdownlint's
+  # default behavior.
+  MD013: false
+
+  # Reusing a heading under different parent sections is valid documentation
+  # structure; duplicates among siblings remain errors.
+  MD024:
+    siblings_only: true
