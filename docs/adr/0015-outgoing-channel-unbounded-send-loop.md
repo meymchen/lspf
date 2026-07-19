@@ -1,5 +1,8 @@
 # Outgoing channel: unbounded, drained by a dedicated send-loop task
 
+Status note: [ADR 0018](0018-protocol-engine-and-outbound-request-broker.md)
+assigns ownership of the outbound queue to `ProtocolEngine`.
+
 [[Context]]'s outgoing helpers (`publish_diagnostics`, `show_message`,
 `apply_edit`, …) push [[RawMessage]]s onto a single
 `tokio::sync::mpsc::unbounded_channel`. A dedicated task, spawned by
