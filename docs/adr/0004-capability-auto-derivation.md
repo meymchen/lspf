@@ -1,5 +1,7 @@
 # Server capabilities are auto-derived from the trait impl
 
+Status: Superseded by [ADR 0017](0017-typed-router-and-capability-catalog.md).
+
 The `LanguageServer` trait carries one associated const per LSP feature
 (`const HOVER: bool = false;`,
 `const COMPLETION: Option<CompletionConfig> = None;`, …). The default
