@@ -21,8 +21,11 @@ how the project describes "what the framework provides by default".
 
 **User handler**:
 A handler that the user registers. For any LSP method that also has a
-built-in, the user handler takes priority — override happens via
-registration, not subclassing.
+built-in feature handler, the user handler takes priority — override happens
+via registration, not subclassing. Protocol built-ins fixed by ADR 0018 are
+the exception: their validation and mutation cannot be replaced, and a
+notification registration for one of those methods adds a post-mutation user
+hook.
 _Avoid_: Custom handler (less precise), override (the mechanism, not the
 thing being registered).
 
