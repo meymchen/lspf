@@ -13,9 +13,13 @@ every supported target.
 _Avoid_: Feature (pygls's term), callback, endpoint.
 
 **Built-in handler**:
-A handler that the framework ships out of the box. Initial scope: LSP
-lifecycle (`initialize`, `initialized`, `shutdown`, `exit`) and text-document
-sync (`didOpen`, `didChange`, `didClose`, `didSave`).
+A handler that the framework ships out of the box. Scope: LSP lifecycle
+(`initialize`, `initialized`, `shutdown`, `exit`), text-document sync
+(`didOpen`, `didChange`, `didClose`), cancellation (`$/cancelRequest`),
+`$/setTrace`, workspace-folder sync, and work-done progress cancellation.
+The protocol built-ins fixed by ADR 0018 cannot be replaced; registering one
+of their notification methods records a post-mutation hook instead (see
+[[User handler]]).
 _Avoid_: Default handler — we standardize on "built-in" because it matches
 how the project describes "what the framework provides by default".
 
@@ -29,22 +33,56 @@ hook.
 _Avoid_: Custom handler (less precise), override (the mechanism, not the
 thing being registered).
 
+**Server**:
+The object (`Server<S>`) that owns exactly one LSP connection and its
+initialization lifecycle, built by `Server::builder(state)` after static
+registrations and served through a [[Transport]] constructor such as
+`lspf::stdio(server)`. A second connection requires a second `Server`;
+connection state is never shared between servers. Defined by ADR 0017.
+_Avoid_: Session, backend, dispatcher (the pre-0.2 concept).
+
+**Router**:
+The permanently frozen table (`Router<S>`) of user request, notification,
+and [[Command]] handlers for one connection, plus the capability catalog
+those registrations imply (ADR 0017). Registrations commit through the
+static builder and the single `configure_initialize` transaction; the
+protocol engine then freezes the Router forever and computes
+`ServerCapabilities` from it. No API mutates a frozen Router.
+_Avoid_: Dispatch table, route table (descriptive, but not the type name).
+
 **Document**:
 A text resource the framework tracks on behalf of the user, kept in sync
-with the editor through `textDocument/didOpen`, `didChange`, `didClose`,
-and `didSave`. Identified by URI; carries language ID, version, and
+with the editor through `textDocument/didOpen`, `didChange`, and
+`didClose`. Identified by URI; carries language ID, version, and
 contents.
 _Avoid_: File (a document may have no on-disk file), buffer (editor-side
 term).
 
 **Documents**:
-The framework-provided, concurrency-safe handle to all tracked
-[[Document]]s. Available on every [[Handler]] receiver through
-`self.documents()`. Users read from it freely; mutations happen only
-through the built-in document-sync handlers (unless explicitly
-overridden).
-_Avoid_: Workspace (broader concept in LSP), document store (correct but
-verbose).
+The framework-owned, concurrency-safe store of all tracked [[Document]]s
+for a connection — users never construct it, store it in their state
+struct, or hand it back through a getter. Mutations happen only through
+the protocol engine's built-in document-sync handlers; user code reads it
+through a read-only `DocumentsView` from the [[Context]] parameter
+(`ctx.documents()`), and post-mutation hooks observe the updated state.
+_Avoid_: Document store (correct but verbose).
+
+**Workspace**:
+The cloneable handle to workspace-folder and configuration state, exposed
+through [[Context]] (ADR 0017). The protocol engine establishes it from
+`InitializeParams` during initialization and owns its mutation
+(`workspace/didChangeWorkspaceFolders`); user hooks observe post-mutation
+state. Document contents live in [[Documents]], not here.
+_Avoid_: Project, root (the LSP `rootUri` is only an input to it).
+
+**Client**:
+The cloneable typed handle for server-to-client requests and notifications,
+exposed through [[Context]] (`ctx.client()`). A typed notification is
+encoded and enqueued without allocating an ID; a typed request reserves a
+connection-local ID and awaits its correlated response (ADR 0018).
+`Client` is only a handle — the outbound queue, ID allocator, and pending
+registry are owned by the connection's protocol engine.
+_Avoid_: Connection (that is the transport level), sender.
 
 **Command**:
 A user-registered async closure dispatched on `workspace/executeCommand`
@@ -56,14 +94,15 @@ _Avoid_: Action (LSP uses "code action" for something different),
 custom request (a separate extension mechanism, see below).
 
 **Context**:
-The framework-state handle passed to every [[Handler]] as a parameter.
-Carries the [[Documents]] store, the workspace-folder cache, every
-outgoing helper (`publish_diagnostics`, `show_message`, `apply_edit`,
-…), and the current request's scope (id, tracing span). It is the only
-way a handler reaches framework state — the user's own struct holds
-only user-owned state.
-_Avoid_: Client (the LSP-client direction is a sub-concern of
-`Context`, not its name), session, server-state.
+The cheap-to-clone framework-state handle passed by value to every
+[[Handler]] (ADR 0017, revising ADR 0009's borrowed `&Context`). Through
+it handlers reach the read-only [[Documents]] view, the [[Workspace]]
+handle, and the [[Client]] handle for outgoing requests and
+notifications, plus the current request's scope (id, tracing span).
+It is the only way a handler reaches framework state — the user's own
+struct holds only user-owned state, and user code never constructs a
+`Context`.
+_Avoid_: Session, server-state.
 
 **Transport**:
 The message-framed channel over which LSP JSON-RPC envelopes flow into
@@ -75,19 +114,37 @@ concern.
 _Avoid_: Connection (overloaded with TCP-specific meaning), socket
 (byte-stream connotation), channel.
 
+**Runtime**:
+The internal, crate-private trait through which the framework spawns and
+cancels tasks (ADR 0020). Exactly two implementations exist —
+`TokioRuntime` on native targets and `WasmRuntime` on browser WASM —
+selected by compile target, with no runtime-selection API. `Runtime`
+executes spawn, abort, and join but owns no protocol state; it is not
+implementable or nameable by users.
+_Avoid_: Executor, reactor (those are what `Runtime` delegates to).
+
 **Layer**:
 A framework-defined wrapper around a [[Service]] that adds cross-cutting
-behavior (panic catching, rate limits, audit logging, …). Composable
-with other layers. This is lspf's own trait — narrower than
-`tower::Layer` and intentionally not interoperable with it.
+behavior to user dispatch (rate limits, audit logging, …). User Layers
+are registered with `.layer(...)` and wrap only the user Service — the
+last registered is outermost — while panic isolation, tracing, and
+concurrency limiting are fixed framework-owned Layers outside them
+(ADR 0019). Layers see decoded `IncomingCall` / `ServiceResult` values,
+never transport bytes, and cannot intercept lifecycle, cancellation, or
+document mutation, which are protocol built-ins. This is lspf's own
+trait — narrower than `tower::Layer` and intentionally not interoperable
+with it.
 _Avoid_: Middleware (less precise; "layer" is the trait name and the
 canonical term), interceptor.
 
 **Service**:
-The internal abstraction the dispatcher and every [[Layer]] implement.
-Handles one request → response or one notification → unit at a time.
-Users normally never see `Service` directly — their `LanguageServer`
-impl is adapted into a `Service` by the framework.
+The internal abstraction (`Service<State>`) that consumes one normalized
+`IncomingCall` and asynchronously returns exactly one `ServiceResult`
+(ADR 0019). Every [[Layer]] wraps a `Service`; the terminal
+`RouterService` adapts the frozen [[Router]] and invokes the matching
+typed [[Handler]]. Users never implement `Service` for their own logic —
+the framework adapts their registered handlers into the terminal service.
+_Avoid_: Dispatcher, endpoint.
 
 **Default stack**:
 The fixed `Service` stack installed by `lspf::stdio()`, `tcp()`,
