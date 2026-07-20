@@ -90,12 +90,15 @@ Users normally never see `Service` directly — their `LanguageServer`
 impl is adapted into a `Service` by the framework.
 
 **Default stack**:
-The built-in set of [[Layer]]s installed by `lspf::stdio()`, `tcp()`,
-`websocket()`, and `worker_channel()` when no explicit layer
-configuration is provided. Currently: lifecycle, panic catching,
-`$/cancelRequest` routing, bounded concurrency (64 in-flight by
-default), and `tracing` spans. Users opt out with
-`.no_default_layers()`.
+The fixed `Service` stack installed by `lspf::stdio()`, `tcp()`,
+`websocket()`, and `worker_channel()`. In v1, its outer-to-inner order is the
+framework-owned panic-isolation, tracing, and bounded-concurrency [[Layer]]s
+(64 in-flight by default), zero or more registered user Layers (last
+registered outermost), and the terminal Router service. Registering a user
+Layer does not replace any framework position. Panic isolation cannot be
+disabled, and there is no all-off switch. Lifecycle, `$/cancelRequest`,
+document mutation, and workspace-folder mutation are always-on
+`ProtocolEngine` built-ins outside the Layer stack.
 _Avoid_: Default middleware (we use "layer"), built-in middleware.
 
 **Custom request / notification**:
