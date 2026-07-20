@@ -2,6 +2,10 @@
 
 Status note: [ADR 0018](0018-protocol-engine-and-outbound-request-broker.md)
 assigns ownership of the outbound queue to `ProtocolEngine`.
+[ADR 0020](0020-runtime-and-native-wasm-send-model.md) retains the
+unbounded, dedicated-send-loop behavior while superseding the concrete
+`tokio::sync::mpsc::unbounded_channel` selection: the queue primitive must
+compile on `wasm32-unknown-unknown` and pass the pre-0.5 compile spike.
 
 [[Context]]'s outgoing helpers (`publish_diagnostics`, `show_message`,
 `apply_edit`, …) push [[RawMessage]]s onto a single
