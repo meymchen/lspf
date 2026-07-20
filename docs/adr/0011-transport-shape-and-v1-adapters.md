@@ -1,5 +1,12 @@
 # Transport is message-framed; v1 ships four adapters
 
+Status note:
+[ADR 0020](0020-runtime-and-native-wasm-send-model.md) retains this
+Transport shape and its four v1 adapters while updating the execution
+constraints: the `Send + 'static` supertrait shown below applies to native
+targets only, and on `wasm32` the worker-channel adapter is not `Send`. The
+historical body below is unchanged.
+
 The `Transport` trait is message-framed:
 
 ```rust
