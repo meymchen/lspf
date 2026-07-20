@@ -2,6 +2,8 @@
 gitignore: true
 globs:
   - "**/*.md"
+ignores:
+  - "CLAUDE.md"
 
 config:
   default: true
