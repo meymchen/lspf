@@ -1,5 +1,8 @@
 # Ship our own `Layer` trait; don't depend on `tower`
 
+Status: Accepted. Refined by
+[ADR 0019](0019-protocol-invariants-and-service-layers.md).
+
 lspf defines its own `Layer` and `Service` traits, narrowly shaped to LSP
 dispatch (request → response future, notification → unit future). The
 default `lspf::stdio()` / `tcp()` / `websocket()` constructors wrap the
