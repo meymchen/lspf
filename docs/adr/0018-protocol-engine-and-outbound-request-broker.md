@@ -6,6 +6,11 @@ registration model fixed by
 of the unbounded outbound queue selected by
 [ADR 0015](0015-outgoing-channel-unbounded-send-loop.md).
 
+Status note:
+[ADR 0019](0019-protocol-invariants-and-service-layers.md) supersedes this
+ADR's references to `.no_default_layers()`; there is no all-off switch and
+panic isolation is always installed. The historical body below is unchanged.
+
 ## Context
 
 ADR 0017 makes `Router<S>` immutable after initialization and identifies

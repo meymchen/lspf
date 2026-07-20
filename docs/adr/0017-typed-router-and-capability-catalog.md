@@ -8,6 +8,11 @@ Revises the public handler-interface choices in ADRs
 [0009](0009-context-as-handler-parameter.md), and clarifies the user-Layer
 placement in [ADR 0010](0010-own-layer-trait-not-tower.md).
 
+Status note:
+[ADR 0019](0019-protocol-invariants-and-service-layers.md) supersedes this
+ADR's first-registered-outermost user-Layer composition rule with
+last-registered-outermost. The historical body below is unchanged.
+
 ## Context
 
 ADR 0004 coupled user handlers and advertised capabilities through
