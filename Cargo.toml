@@ -3,14 +3,14 @@ members = ["crates/lspf", "crates/lspf-hello"]
 resolver = "3"
 
 [workspace.package]
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 authors = ["Yuming Chen"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/meymchen/lspf"
 
 [workspace.dependencies]
-lspf = { path = "crates/lspf", version = "0.1.2" }
+lspf = { path = "crates/lspf", version = "0.1.3" }
 bytes = "1"
 futures-util = { version = "0.3", default-features = false }
 lsp-types = "0.97"
