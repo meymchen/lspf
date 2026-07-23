@@ -1,5 +1,6 @@
 mod envelope;
 pub mod framing;
+#[cfg(not(target_arch = "wasm32"))]
 mod stdio;
 
 use std::future::Future;
@@ -10,6 +11,7 @@ use thiserror::Error;
 use crate::raw::RawMessage;
 use crate::server::LanguageServer;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub use stdio::{StdioReader, StdioTransport, StdioWriter};
 
 #[derive(Debug, Error)]
@@ -63,6 +65,7 @@ pub trait TransportWriter: Send + 'static {
     fn shutdown(self) -> impl Future<Output = std::result::Result<(), TransportError>> + Send;
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Entry point: wrap a `LanguageServer` in the default stdio adapter.
 ///
 /// ```no_run
@@ -81,11 +84,13 @@ pub fn stdio<S: LanguageServer>(server: S) -> StdioBuilder<S> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub struct StdioBuilder<S> {
     server: S,
     concurrency_limit: usize,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl<S: LanguageServer> StdioBuilder<S> {
     /// Override the default cap on in-flight handler tasks (ADR 0012,
     /// default [`crate::DEFAULT_CONCURRENCY_LIMIT`]).
