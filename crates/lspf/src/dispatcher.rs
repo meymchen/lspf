@@ -370,6 +370,9 @@ where
         RawMessage::Response { .. } => {
             warn!("ignoring unexpected response");
         }
+        RawMessage::ProtocolError { error } => {
+            let _ = out_tx.send(RawMessage::ProtocolError { error });
+        }
     }
 
     Ok(Flow::Continue)

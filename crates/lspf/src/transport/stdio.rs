@@ -54,7 +54,7 @@ impl TransportReader for StdioReader {
             .next()
             .await
             .ok_or(TransportError::Closed)??;
-        envelope::parse(body)
+        Ok(envelope::parse(body))
     }
 }
 
