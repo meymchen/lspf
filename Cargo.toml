@@ -18,7 +18,8 @@ ropey = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 thiserror = "2"
-tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "io-std", "io-util", "sync"] }
+tokio = { version = "1", features = ["macros", "rt", "io-util", "sync"] }
 tokio-util = { version = "0.7", features = ["codec", "rt"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+wasm-bindgen-futures = "0.4"
