@@ -14,6 +14,8 @@
 //! out of band and the outbox inspected directly.
 
 use std::borrow::Cow;
+use std::future::pending;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -238,6 +240,32 @@ struct SlowOpen {
     documents: lspf::Documents,
 }
 
+struct DropSignal(Arc<AtomicBool>);
+
+impl Drop for DropSignal {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+struct DropAwareOpen {
+    documents: lspf::Documents,
+    started: Arc<tokio::sync::Notify>,
+    dropped: Arc<AtomicBool>,
+}
+
+impl LanguageServer for DropAwareOpen {
+    fn documents(&self) -> &lspf::Documents {
+        &self.documents
+    }
+
+    async fn text_document_did_open(&self, _ctx: &Context, _params: DidOpenTextDocumentParams) {
+        let _signal = DropSignal(Arc::clone(&self.dropped));
+        self.started.notify_one();
+        pending::<()>().await;
+    }
+}
+
 const SLOW: Duration = Duration::from_secs(2);
 
 impl LanguageServer for SlowOpen {
@@ -299,6 +327,55 @@ async fn exit_aborts_in_flight_handler() {
         !has_publish_diagnostics(&outbox.lock().unwrap()),
         "aborted handler must not have published its diagnostic"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dispatch_error_aborts_and_joins_in_flight_handlers() {
+    let (in_tx, in_rx) = mpsc::unbounded_channel::<RawMessage>();
+    let outbox = Arc::new(Mutex::new(Vec::new()));
+    let started = Arc::new(tokio::sync::Notify::new());
+    let dropped = Arc::new(AtomicBool::new(false));
+    let transport = ChannelTransport {
+        in_rx,
+        outbox: outbox.clone(),
+    };
+
+    let server_handle = tokio::spawn({
+        let started = Arc::clone(&started);
+        let dropped = Arc::clone(&dropped);
+        async move {
+            lspf::serve(
+                DropAwareOpen {
+                    documents: lspf::Documents::new(),
+                    started,
+                    dropped,
+                },
+                transport,
+            )
+            .await
+        }
+    });
+
+    in_tx.send(initialize_request(1)).unwrap();
+    wait_for_response(&outbox, &RequestId::Number(1), Duration::from_millis(500)).await;
+    in_tx
+        .send(did_open_notification("file:///drop-aware"))
+        .unwrap();
+    tokio::time::timeout(Duration::from_millis(500), started.notified())
+        .await
+        .expect("handler started");
+
+    in_tx
+        .send(notification("textDocument/didChange", json!({})))
+        .unwrap();
+
+    let result = tokio::time::timeout(Duration::from_millis(500), server_handle)
+        .await
+        .expect("dispatcher returned after the malformed notification")
+        .expect("server task did not panic");
+
+    assert!(result.is_err());
+    assert!(dropped.load(Ordering::SeqCst));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

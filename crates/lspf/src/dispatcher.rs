@@ -1,10 +1,10 @@
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
 use tokio::sync::Semaphore;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
-use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Span, debug, info_span, warn};
 
@@ -12,6 +12,7 @@ use crate::context::Context;
 use crate::documents::Documents;
 use crate::error::Error;
 use crate::raw::{JsonRpcError, RawMessage, RequestId};
+use crate::runtime::{Runtime, TaskHandle, TaskSend, default_runtime};
 use crate::server::LanguageServer;
 use crate::transport::{Transport, TransportError, TransportReader, TransportWriter};
 use crate::{LspError, Result};
@@ -22,12 +23,12 @@ use crate::{LspError, Result};
 /// half. The writer half moves into a dedicated send-loop task that
 /// drains an `unbounded_channel` of outgoing messages. The read-loop
 /// owns the reader and spawns every spawned handler into a shared
-/// [`JoinSet`] against `Arc<S>`. Each in-flight request is also tracked
+/// [`TaskGroup`] against `Arc<S>`. Each in-flight request is also tracked
 /// in a registry keyed by `RequestId` holding its [`CancellationToken`],
 /// so a `$/cancelRequest` can trigger that token and drop the handler
 /// future at its next yield — the wire then carries a `-32800
 /// RequestCancelled` response (ADR 0007). On `exit`, the read-loop aborts
-/// the entire [`JoinSet`] so no in-flight handler is awaited to
+/// the entire [`TaskGroup`] so no in-flight handler is awaited to
 /// completion (issue #4). Responses and outgoing notifications all flow
 /// through the same channel — the send-loop is the sole writer to the
 /// transport.
@@ -39,7 +40,8 @@ where
     let (mut reader, writer) = transport.split();
     let server = Arc::new(server);
     let (out_tx, out_rx) = mpsc::unbounded_channel::<RawMessage>();
-    let send_handle = tokio::spawn(send_loop(writer, out_rx));
+    let runtime = default_runtime();
+    let send_handle = runtime.spawn(send_loop(writer, out_rx));
 
     let state: SharedState = Arc::new(Mutex::new(State::Uninitialized));
     let registry: Registry = Arc::new(Mutex::new(HashMap::new()));
@@ -47,12 +49,12 @@ where
     // Every spawned handler lives here. Requests also self-remove from
     // `registry` on completion; this set additionally lets `exit` abort
     // them all at once.
-    let mut tasks: JoinSet<()> = JoinSet::new();
+    let mut tasks = TaskGroup::new(runtime);
 
     loop {
         // Reap finished handlers so the set doesn't grow unbounded over a
         // long session (each completed task already released its permit).
-        while tasks.try_join_next().is_some() {}
+        tasks.reap_finished().await;
 
         let msg = match reader.recv().await {
             Ok(msg) => msg,
@@ -63,16 +65,31 @@ where
                 // rather than abort them.
                 warn!("transport closed by peer before exit notification");
                 drop(out_tx);
-                let _ = send_handle.await;
+                tasks.join_all().await;
+                send_handle.join().await;
                 return Ok(Outcome::TransportClosed);
             }
-            Err(e) => return Err(Error::Transport(e)),
+            Err(e) => {
+                tasks.abort_and_join().await;
+                send_handle.abort();
+                send_handle.join().await;
+                return Err(Error::Transport(e));
+            }
         };
 
-        let flow = dispatch(
+        let flow = match dispatch(
             &server, &out_tx, &state, &registry, &permits, &mut tasks, msg,
         )
-        .await?;
+        .await
+        {
+            Ok(flow) => flow,
+            Err(error) => {
+                tasks.abort_and_join().await;
+                send_handle.abort();
+                send_handle.join().await;
+                return Err(error);
+            }
+        };
         if let Flow::Exit(code) = flow {
             // `exit` means "stop now": abort every in-flight handler and
             // wait for them to drop (which releases their clones of the
@@ -81,10 +98,59 @@ where
             // cleanly, and hand the exit code back to the entry point —
             // which decides whether to terminate the process (binary) or
             // simply return (library / tests).
-            tasks.shutdown().await;
+            tasks.abort_and_join().await;
             drop(out_tx);
-            let _ = send_handle.await;
+            send_handle.join().await;
             return Ok(Outcome::Exit(code));
+        }
+    }
+}
+
+/// Dispatcher-owned group of tasks for one connection. The Runtime only
+/// executes requested tasks; this group retains the dispatcher policy for
+/// reaping completed tasks and cancelling then joining them on exit.
+struct TaskGroup<R> {
+    runtime: R,
+    handles: Vec<TaskHandle>,
+}
+
+impl<R: Runtime> TaskGroup<R> {
+    fn new(runtime: R) -> Self {
+        Self {
+            runtime,
+            handles: Vec::new(),
+        }
+    }
+
+    fn spawn<F>(&mut self, future: F)
+    where
+        F: Future<Output = ()> + TaskSend + 'static,
+    {
+        self.handles.push(self.runtime.spawn(future));
+    }
+
+    async fn reap_finished(&mut self) {
+        let mut running = Vec::with_capacity(self.handles.len());
+        for handle in std::mem::take(&mut self.handles) {
+            if handle.is_finished() {
+                handle.join().await;
+            } else {
+                running.push(handle);
+            }
+        }
+        self.handles = running;
+    }
+
+    async fn abort_and_join(&mut self) {
+        for handle in &self.handles {
+            handle.abort();
+        }
+        self.join_all().await;
+    }
+
+    async fn join_all(&mut self) {
+        for handle in std::mem::take(&mut self.handles) {
+            handle.join().await;
         }
     }
 }
@@ -133,7 +199,7 @@ enum Flow {
 /// whichever happens first — the handler completing, or a
 /// `$/cancelRequest` arriving for its id — and that removal arbitrates
 /// who writes the single wire response. The handler's [`JoinHandle`]
-/// lives in the read-loop's [`JoinSet`], not here.
+/// lives in the read-loop's [`TaskGroup`], not here.
 type Registry = Arc<Mutex<HashMap<RequestId, CancellationToken>>>;
 
 #[derive(serde::Deserialize)]
@@ -141,17 +207,18 @@ struct CancelParams {
     id: RequestId,
 }
 
-async fn dispatch<S>(
+async fn dispatch<S, R>(
     server: &Arc<S>,
     out_tx: &UnboundedSender<RawMessage>,
     state: &SharedState,
     registry: &Registry,
     permits: &Arc<Semaphore>,
-    tasks: &mut JoinSet<()>,
+    tasks: &mut TaskGroup<R>,
     msg: RawMessage,
 ) -> Result<Flow>
 where
     S: LanguageServer,
+    R: Runtime,
 {
     match msg {
         RawMessage::Request { id, method, params } => {
@@ -394,10 +461,10 @@ where
 /// already removed it (and wrote `-32800`), the task's response is
 /// dropped silently.
 ///
-/// The task is spawned into the shared [`JoinSet`] so `exit` can abort it
+/// The task is spawned into the shared [`TaskGroup`] so `exit` can abort it
 /// along with every other in-flight handler.
-fn spawn_request<F, Fut>(
-    tasks: &mut JoinSet<()>,
+fn spawn_request<R, F, Fut>(
+    tasks: &mut TaskGroup<R>,
     registry: &Registry,
     out_tx: &UnboundedSender<RawMessage>,
     span: Span,
@@ -406,9 +473,10 @@ fn spawn_request<F, Fut>(
     documents: Documents,
     body: F,
 ) where
-    F: FnOnce(Context, CancellationToken) -> Fut + Send + 'static,
+    R: Runtime,
+    F: FnOnce(Context, CancellationToken) -> Fut + TaskSend + 'static,
     Fut: std::future::Future<Output = std::result::Result<serde_json::Value, LspError>>
-        + Send
+        + TaskSend
         + 'static,
 {
     let ct = CancellationToken::new();
@@ -472,24 +540,25 @@ fn handle_cancel(registry: &Registry, out_tx: &UnboundedSender<RawMessage>, para
         // its next yield — we don't abort its `JoinHandle` directly
         // because abort races with the polite path: it can drop the
         // future before the handler ever gets polled with the token
-        // observed. (The task stays in the `JoinSet` and is reaped once
+        // observed. (The task stays in the `TaskGroup` and is reaped once
         // it finishes.)
         token.cancel();
         enqueue_error(out_tx, parsed.id, LspError::RequestCancelled);
     }
 }
 
-fn spawn_notification<S, F, Fut>(
-    tasks: &mut JoinSet<()>,
+fn spawn_notification<R, S, F, Fut>(
+    tasks: &mut TaskGroup<R>,
     server: &Arc<S>,
     out_tx: &UnboundedSender<RawMessage>,
     span: tracing::Span,
     permit: tokio::sync::OwnedSemaphorePermit,
     body: F,
 ) where
+    R: Runtime,
     S: LanguageServer,
-    F: FnOnce(Arc<S>, Context) -> Fut + Send + 'static,
-    Fut: std::future::Future<Output = ()> + Send + 'static,
+    F: FnOnce(Arc<S>, Context) -> Fut + TaskSend + 'static,
+    Fut: std::future::Future<Output = ()> + TaskSend + 'static,
 {
     let server = Arc::clone(server);
     let out_tx = out_tx.clone();
