@@ -8,6 +8,7 @@ mod dispatcher;
 mod documents;
 mod error;
 mod raw;
+mod runtime;
 mod server;
 mod transport;
 
@@ -21,10 +22,9 @@ pub use documents::{Document, Documents, PositionEncoding};
 pub use error::{Error, LspError, Result};
 pub use raw::{JsonRpcError, RawMessage, RequestId};
 pub use server::LanguageServer;
-pub use transport::{
-    StdioBuilder, StdioReader, StdioTransport, StdioWriter, Transport, TransportError,
-    TransportReader, TransportWriter, stdio,
-};
+#[cfg(not(target_arch = "wasm32"))]
+pub use transport::{StdioBuilder, StdioReader, StdioTransport, StdioWriter, stdio};
+pub use transport::{Transport, TransportError, TransportReader, TransportWriter};
 
 /// Cancellation primitive passed to every request handler (ADR 0007).
 pub use tokio_util::sync::CancellationToken;
