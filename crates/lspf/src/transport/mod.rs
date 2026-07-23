@@ -106,3 +106,115 @@ impl<S: LanguageServer> StdioBuilder<S> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+
+    use bytes::Bytes;
+
+    use super::{
+        RawMessage, Transport, TransportError, TransportReader, TransportWriter, envelope,
+    };
+    use crate::{Documents, LanguageServer, RequestId};
+
+    struct FrameTransport {
+        frames: VecDeque<Bytes>,
+        outbox: Arc<Mutex<Vec<RawMessage>>>,
+    }
+
+    struct FrameReader {
+        frames: VecDeque<Bytes>,
+    }
+
+    struct FrameWriter {
+        outbox: Arc<Mutex<Vec<RawMessage>>>,
+    }
+
+    impl Transport for FrameTransport {
+        type Reader = FrameReader;
+        type Writer = FrameWriter;
+
+        fn split(self) -> (Self::Reader, Self::Writer) {
+            (
+                FrameReader {
+                    frames: self.frames,
+                },
+                FrameWriter {
+                    outbox: self.outbox,
+                },
+            )
+        }
+    }
+
+    impl TransportReader for FrameReader {
+        async fn recv(&mut self) -> Result<RawMessage, TransportError> {
+            self.frames
+                .pop_front()
+                .map(envelope::parse)
+                .ok_or(TransportError::Closed)
+        }
+    }
+
+    impl TransportWriter for FrameWriter {
+        async fn send(&mut self, msg: RawMessage) -> Result<(), TransportError> {
+            self.outbox.lock().unwrap().push(msg);
+            Ok(())
+        }
+
+        async fn shutdown(self) -> Result<(), TransportError> {
+            Ok(())
+        }
+    }
+
+    struct TestServer {
+        documents: Documents,
+    }
+
+    impl LanguageServer for TestServer {
+        fn documents(&self) -> &Documents {
+            &self.documents
+        }
+    }
+
+    #[tokio::test]
+    async fn complete_protocol_error_frames_do_not_close_the_connection() {
+        let outbox = Arc::new(Mutex::new(Vec::new()));
+        let transport = FrameTransport {
+            frames: VecDeque::from([
+                Bytes::from_static(br#"{"jsonrpc":"2.0","method":"initialize""#),
+                Bytes::from_static(br#"{"jsonrpc":"1.0","method":"initialize"}"#),
+                Bytes::from_static(
+                    br#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}}"#,
+                ),
+            ]),
+            outbox: outbox.clone(),
+        };
+
+        crate::serve(
+            TestServer {
+                documents: Documents::new(),
+            },
+            transport,
+        )
+        .await
+        .expect("complete protocol errors do not become transport errors");
+
+        let outbox = outbox.lock().unwrap();
+        let error_codes: Vec<_> = outbox
+            .iter()
+            .filter_map(|message| match message {
+                RawMessage::ProtocolError { error } => Some(error.code),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(error_codes, vec![-32700, -32600]);
+        assert!(
+            outbox.iter().any(|message| {
+                matches!(message, RawMessage::Response { id, result: Ok(_) } if *id == RequestId::Number(1))
+            }),
+            "initialize after protocol errors should still be processed, got outbox {outbox:#?}"
+        );
+    }
+}
