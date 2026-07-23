@@ -43,6 +43,12 @@ struct ChannelWriter {
     outbox: Arc<Mutex<Vec<RawMessage>>>,
 }
 
+struct FailingTransport;
+
+struct FailingReader;
+
+struct FailingWriter;
+
 impl Transport for ChannelTransport {
     type Reader = ChannelReader;
     type Writer = ChannelWriter;
@@ -387,4 +393,48 @@ async fn request_after_shutdown_returns_invalid_request() {
         "request after shutdown should return InvalidRequest, got outbox {:#?}",
         outbox.lock().unwrap()
     );
+}
+
+impl Transport for FailingTransport {
+    type Reader = FailingReader;
+    type Writer = FailingWriter;
+
+    fn split(self) -> (Self::Reader, Self::Writer) {
+        (FailingReader, FailingWriter)
+    }
+}
+
+impl TransportReader for FailingReader {
+    async fn recv(&mut self) -> Result<RawMessage, TransportError> {
+        Err(TransportError::Malformed(
+            "invalid Content-Length header".into(),
+        ))
+    }
+}
+
+impl TransportWriter for FailingWriter {
+    async fn send(&mut self, _msg: RawMessage) -> Result<(), TransportError> {
+        Ok(())
+    }
+
+    async fn shutdown(self) -> Result<(), TransportError> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn transport_failures_still_end_the_connection() {
+    let result = lspf::serve(
+        Probe {
+            documents: lspf::Documents::new(),
+        },
+        FailingTransport,
+    )
+    .await;
+
+    assert!(matches!(
+        result,
+        Err(lspf::Error::Transport(TransportError::Malformed(message)))
+            if message == "invalid Content-Length header"
+    ));
 }
