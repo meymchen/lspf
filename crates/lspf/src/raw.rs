@@ -21,6 +21,10 @@ pub enum RawMessage {
         id: RequestId,
         result: std::result::Result<Bytes, JsonRpcError>,
     },
+    /// A JSON-RPC parse or envelope-validation error. Serializes as an
+    /// error response with a null ID because no ordinary request ID is safe
+    /// to echo (JSON-RPC 2.0 §5).
+    ProtocolError { error: JsonRpcError },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,14 +39,14 @@ impl RawMessage {
     pub fn method(&self) -> Option<&str> {
         match self {
             Self::Request { method, .. } | Self::Notification { method, .. } => Some(method),
-            Self::Response { .. } => None,
+            Self::Response { .. } | Self::ProtocolError { .. } => None,
         }
     }
 
     pub fn id(&self) -> Option<&RequestId> {
         match self {
             Self::Request { id, .. } | Self::Response { id, .. } => Some(id),
-            Self::Notification { .. } => None,
+            Self::Notification { .. } | Self::ProtocolError { .. } => None,
         }
     }
 }
