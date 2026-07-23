@@ -146,7 +146,7 @@ dependencies = [
 
 [[package]]
 name = "lspf"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "bytes",
  "futures-util",
@@ -164,7 +164,7 @@ dependencies = [
 
 [[package]]
 name = "lspf-hello"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "lspf",
  "serde_json",
