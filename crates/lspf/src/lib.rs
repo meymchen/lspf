@@ -3,9 +3,12 @@
 //! See `CONTEXT.md` and `docs/adr/` at the repository root for the domain
 //! language and the architectural decisions that shape this crate.
 
+mod builder;
+mod codec;
 mod context;
 mod dispatcher;
 mod documents;
+mod engine;
 mod error;
 mod raw;
 mod runtime;
@@ -17,9 +20,10 @@ pub mod types {
     pub use lsp_types::*;
 }
 
+pub use builder::{Server, ServerBuilder};
 pub use context::Context;
 pub use documents::{Document, Documents, PositionEncoding};
-pub use error::{Error, LspError, Result};
+pub use error::{BuildError, Error, LspError, Result};
 pub use raw::{JsonRpcError, RawMessage, RequestId};
 pub use server::LanguageServer;
 #[cfg(not(target_arch = "wasm32"))]
