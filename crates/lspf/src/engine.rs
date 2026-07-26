@@ -151,6 +151,12 @@ where
                     enqueue_ok(out_tx, id, &serde_json::Value::Null);
                     *lifecycle = Lifecycle::ShuttingDown;
                 }
+                // Commands dispatch beneath `workspace/executeCommand`; an
+                // explicit request handler for that method is a build-time
+                // conflict, so the two never coexist.
+                "workspace/executeCommand" if router.has_commands() => {
+                    dispatch_command(state, router, documents, out_tx, &span, id, params).await;
+                }
                 other => match router.request(other) {
                     Some(handler) => {
                         let ctx = Context::for_request(
@@ -171,9 +177,25 @@ where
                 },
             }
         }
-        RawMessage::Notification { method, .. } => match method.as_ref() {
+        RawMessage::Notification { method, params } => match method.as_ref() {
             "exit" => return Flow::Exit,
-            other => debug!(method = other, "notification ignored"),
+            other => {
+                // Until `initialize` completes, drop every notification but the
+                // `exit` handled above. A registered custom notification then
+                // dispatches with no response; an unregistered one is ignored.
+                if *lifecycle != Lifecycle::Running {
+                    debug!(method = other, "notification before running state ignored");
+                } else if let Some(handler) = router.notification(other) {
+                    let span = info_span!("notification", method = %other);
+                    let ctx =
+                        Context::for_notification(span.clone(), out_tx.clone(), documents.clone());
+                    handler(Arc::clone(state), ctx, params)
+                        .instrument(span)
+                        .await;
+                } else {
+                    debug!(method = other, "notification ignored");
+                }
+            }
         },
         RawMessage::Response { .. } => warn!("ignoring unexpected response"),
         RawMessage::ProtocolError { error } => {
@@ -182,6 +204,52 @@ where
     }
 
     Flow::Continue
+}
+
+/// Route one `workspace/executeCommand` request to the typed command table.
+///
+/// The engine decodes [`ExecuteCommandParams`](lsp_types::ExecuteCommandParams)
+/// to select the command by name, then hands the raw argument array to the
+/// erased command handler, which decodes it into the typed `Args` once. An
+/// unknown command name is an invalid parameter for this method.
+async fn dispatch_command<S>(
+    state: &Arc<S>,
+    router: &Router<S>,
+    documents: &Documents,
+    out_tx: &UnboundedSender<RawMessage>,
+    span: &tracing::Span,
+    id: RequestId,
+    params: Bytes,
+) where
+    S: Send + Sync + 'static,
+{
+    let params: lsp_types::ExecuteCommandParams = match decode_params(&params) {
+        Ok(params) => params,
+        Err(err) => {
+            enqueue_error(out_tx, id, err);
+            return;
+        }
+    };
+    match router.command(&params.command) {
+        Some(handler) => {
+            let ctx =
+                Context::for_request(id.clone(), span.clone(), out_tx.clone(), documents.clone());
+            let result = handler(
+                Arc::clone(state),
+                ctx,
+                params.arguments,
+                CancellationToken::new(),
+            )
+            .instrument(span.clone())
+            .await;
+            enqueue_encoded(out_tx, id, result);
+        }
+        None => enqueue_error(
+            out_tx,
+            id,
+            LspError::invalid_params(format!("unknown command: {}", params.command)),
+        ),
+    }
 }
 
 /// Enqueue a success response from an already-encoded result (as produced by

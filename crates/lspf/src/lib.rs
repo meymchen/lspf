@@ -4,12 +4,14 @@
 //! language and the architectural decisions that shape this crate.
 
 mod builder;
+mod capability;
 mod codec;
 mod context;
 mod dispatcher;
 mod documents;
 mod engine;
 mod error;
+pub mod features;
 mod raw;
 mod runtime;
 mod server;
@@ -24,6 +26,7 @@ pub use builder::{Server, ServerBuilder};
 pub use context::Context;
 pub use documents::{Document, Documents, PositionEncoding};
 pub use error::{BuildError, Error, LspError, Result};
+pub use features::FeatureSpec;
 pub use raw::{JsonRpcError, RawMessage, RequestId};
 pub use server::LanguageServer;
 #[cfg(not(target_arch = "wasm32"))]
