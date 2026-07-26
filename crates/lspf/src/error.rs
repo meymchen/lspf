@@ -15,6 +15,24 @@ pub enum Error {
     Transport(#[from] TransportError),
 }
 
+/// A configuration error surfaced by [`ServerBuilder::build`](crate::ServerBuilder::build).
+///
+/// `BuildError` is deliberately distinct from [`LspError`]: it names a static
+/// registration mistake the developer must fix before the server ever runs,
+/// never a value that goes on the wire. `build()` performs no I/O and returns
+/// this before any transport is touched.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum BuildError {
+    /// Two handlers were registered for the same request method.
+    #[error("duplicate handler registered for method `{0}`")]
+    DuplicateMethod(String),
+
+    /// A custom request was registered under a method the framework owns
+    /// (`initialize`, `shutdown`, `exit`, `initialized`, `$/cancelRequest`).
+    #[error("method `{0}` is reserved by the framework and cannot be overridden")]
+    ReservedMethod(String),
+}
+
 #[derive(Debug, Error)]
 pub enum LspError {
     #[error("internal error: {0}")]
