@@ -27,10 +27,35 @@ pub enum BuildError {
     #[error("duplicate handler registered for method `{0}`")]
     DuplicateMethod(String),
 
-    /// A custom request was registered under a method the framework owns
-    /// (`initialize`, `shutdown`, `exit`, `initialized`, `$/cancelRequest`).
+    /// A custom request or notification was registered under a method the
+    /// framework owns (`initialize`, `shutdown`, `exit`, `initialized`,
+    /// `$/cancelRequest`).
     #[error("method `{0}` is reserved by the framework and cannot be overridden")]
     ReservedMethod(String),
+
+    /// Two handlers were registered for the same command name.
+    #[error("duplicate handler registered for command `{0}`")]
+    DuplicateCommand(String),
+
+    /// A command was registered with an empty name; a command name is the key
+    /// the editor sends on `workspace/executeCommand`, so it cannot be empty.
+    #[error("a command name cannot be empty")]
+    EmptyCommandName,
+
+    /// One or more commands were registered alongside an explicit
+    /// `workspace/executeCommand` request handler. Commands already dispatch
+    /// beneath that method, so a user handler for it would shadow them.
+    #[error(
+        "commands conflict with an explicit `workspace/executeCommand` handler; \
+         register either commands or the raw method, not both"
+    )]
+    ExecuteCommandConflict,
+
+    /// Two feature contributions disagreed on a capability field that must be
+    /// singular within its family (ADR 0017). Capability construction never
+    /// resolves such a clash by last-write-wins; it fails the build instead.
+    #[error("conflicting contributions for capability field `{field}`")]
+    ConflictingCapability { field: &'static str },
 }
 
 #[derive(Debug, Error)]
