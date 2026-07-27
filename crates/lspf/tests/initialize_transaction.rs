@@ -160,7 +160,13 @@ async fn drive(server: Server<AppState>, messages: Vec<RawMessage>) -> Vec<RawMe
     let handle = tokio::spawn(async move { server.serve(transport).await });
 
     for msg in messages {
-        in_tx.send(msg).unwrap();
+        // The close-path tests make the server terminate mid-stream (a failed
+        // initialize drops the reader), so a send can legitimately race the
+        // disconnect. Treat a closed channel like a real transport would —
+        // stop feeding it — rather than panicking on `SendError`.
+        if in_tx.send(msg).is_err() {
+            break;
+        }
     }
     drop(in_tx); // peer disconnect → serve drains and returns
 
