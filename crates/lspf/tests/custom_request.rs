@@ -209,13 +209,18 @@ async fn initialize_custom_request_shutdown_round_trip() {
     ])
     .await;
 
-    // initialize succeeded and advertised no custom capabilities.
+    // initialize succeeded and advertised no custom capabilities. Only the
+    // protocol-negotiated position encoding (ADR 0016) is present; the client
+    // offered none, so it defaults to UTF-16.
     let init: lspf::types::InitializeResult =
         serde_json::from_value(ok_result(&outbox, 1).expect("initialize response")).unwrap();
     assert_eq!(
         init.capabilities,
-        lspf::types::ServerCapabilities::default(),
-        "custom requests must not add ServerCapabilities"
+        lspf::types::ServerCapabilities {
+            position_encoding: Some(lspf::types::PositionEncodingKind::UTF16),
+            ..lspf::types::ServerCapabilities::default()
+        },
+        "custom requests must not add ServerCapabilities beyond negotiated fields"
     );
 
     // The custom request decoded, ran its typed handler, and encoded a result.

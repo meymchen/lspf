@@ -1,11 +1,18 @@
-//! The 0.2 connection-owned builder surface (ADR 0017).
+//! The 0.2 connection-owned builder surface (ADR 0017, ADR 0018).
 //!
 //! [`Server::builder`] collects static registrations against one application
-//! state value, and [`ServerBuilder::build`] freezes them into a [`Router`]
-//! without performing any I/O. This surface wires typed custom requests and
-//! notifications, typed commands beneath `workspace/executeCommand`, and the
-//! standard hover and completion features. The initialize transaction and the
-//! remaining catalog features arrive in later slices of PRD 0.2.
+//! state value; [`ServerBuilder::build`] validates them and returns a [`Server`]
+//! without performing any I/O or freezing the [`Router`]. The protocol engine
+//! freezes the Router later, when it commits the initialize transaction: after a
+//! valid `initialize`, it runs the sole [`configure_initialize`] callback
+//! against a transactional [`InitializeRegistrar`], then the [`on_initialize`]
+//! lifecycle hook. This surface wires typed custom requests and notifications,
+//! typed commands beneath `workspace/executeCommand`, the standard hover and
+//! completion features, and the two initialize-time hooks. The remaining catalog
+//! features arrive in later slices of PRD 0.2.
+//!
+//! [`configure_initialize`]: ServerBuilder::configure_initialize
+//! [`on_initialize`]: ServerBuilder::on_initialize
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -13,9 +20,9 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use lsp_types::ServerCapabilities;
 use lsp_types::notification::Notification;
 use lsp_types::request::Request;
+use lsp_types::{InitializeParams, ServerCapabilities, ServerInfo};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -80,6 +87,28 @@ pub(crate) type ErasedNotificationHandler<S> =
 pub(crate) type ErasedCommandHandler<S> =
     Box<dyn Fn(Arc<S>, Context, Vec<Value>, CancellationToken) -> HandlerFuture + Send + Sync>;
 
+/// The synchronous, run-at-most-once initialization-dependent registration
+/// callback (ADR 0017). It receives read-only `InitializeParams` and a
+/// transactional [`InitializeRegistrar`]; returning `Err` discards the whole
+/// transaction. Boxed `FnOnce` because the engine invokes it exactly once.
+pub(crate) type ConfigureInitialize<S> =
+    Box<dyn FnOnce(&InitializeParams, &mut InitializeRegistrar<S>) -> Result<(), LspError> + Send>;
+
+/// The future produced by the erased `on_initialize` hook: optional
+/// [`ServerInfo`] to combine with the generated capabilities, or an
+/// [`LspError`] that fails initialization.
+type OnInitializeFuture =
+    Pin<Box<dyn Future<Output = Result<Option<ServerInfo>, LspError>> + Send>>;
+
+/// The erased `on_initialize` lifecycle hook (ADR 0018). It has the request
+/// handler shape but returns optional [`ServerInfo`]; it cannot register routes
+/// or replace the generated capabilities.
+pub(crate) type OnInitialize<S> = Box<
+    dyn Fn(Arc<S>, Context, InitializeParams, CancellationToken) -> OnInitializeFuture
+        + Send
+        + Sync,
+>;
+
 /// Wrap a typed request handler in the erased closure the [`Router`] stores.
 /// Shared by [`ServerBuilder::request`] and [`ServerBuilder::feature`], which
 /// differ only in whether the method also contributes a capability.
@@ -101,14 +130,182 @@ where
     })
 }
 
+/// The still-mutable set of handler registrations and their capability
+/// contributions (ADR 0017). Both [`ServerBuilder`] and [`InitializeRegistrar`]
+/// accumulate into one of these; the protocol engine [`freeze`](Self::freeze)s
+/// it into a [`Router`] once the initialize transaction commits.
+///
+/// Each `add_*` method performs the same conflict detection the frozen table
+/// relies on, returning the first [`BuildError`] to its caller, who decides
+/// whether to record it (the builder) or abort the transaction (the registrar).
+pub(crate) struct Registrations<S> {
+    requests: HashMap<String, ErasedRequestHandler<S>>,
+    notifications: HashMap<String, ErasedNotificationHandler<S>>,
+    commands: HashMap<String, ErasedCommandHandler<S>>,
+    capabilities: CapabilityBuilder,
+}
+
+impl<S: Send + Sync + 'static> Registrations<S> {
+    fn new() -> Self {
+        Self {
+            requests: HashMap::new(),
+            notifications: HashMap::new(),
+            commands: HashMap::new(),
+            capabilities: CapabilityBuilder::default(),
+        }
+    }
+
+    /// Register a standard feature handler and its capability contribution.
+    fn add_feature<F, H, Fut>(&mut self, spec: F, handler: H) -> Result<(), BuildError>
+    where
+        F: FeatureSpec,
+        H: Fn(Arc<S>, Context, <F::Marker as Request>::Params, CancellationToken) -> Fut
+            + Send
+            + Sync
+            + 'static,
+        Fut: Future<Output = Result<<F::Marker as Request>::Result, LspError>> + Send + 'static,
+    {
+        let method = <F::Marker as Request>::METHOD.to_string();
+        let erased = erase_request::<S, F::Marker, H, Fut>(handler);
+        self.insert_request(method, erased)?;
+        spec.contribute(&mut self.capabilities)
+    }
+
+    /// Register a typed custom request handler (contributes no capability).
+    fn add_request<R, H, Fut>(&mut self, handler: H) -> Result<(), BuildError>
+    where
+        R: Request,
+        H: Fn(Arc<S>, Context, R::Params, CancellationToken) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R::Result, LspError>> + Send + 'static,
+    {
+        let method = R::METHOD.to_string();
+        let erased = erase_request::<S, R, H, Fut>(handler);
+        self.insert_request(method, erased)
+    }
+
+    /// Insert an already-erased request handler under `method`, rejecting a
+    /// reserved method or a duplicate. Shared by [`add_feature`](Self::add_feature)
+    /// and [`add_request`](Self::add_request), which differ only in the capability
+    /// contribution that follows a successful insert.
+    fn insert_request(
+        &mut self,
+        method: String,
+        erased: ErasedRequestHandler<S>,
+    ) -> Result<(), BuildError> {
+        if RESERVED_METHODS.contains(&method.as_str()) {
+            return Err(BuildError::ReservedMethod(method));
+        }
+        if self.requests.insert(method.clone(), erased).is_some() {
+            return Err(BuildError::DuplicateMethod(method));
+        }
+        Ok(())
+    }
+
+    /// Register a typed custom notification handler (contributes no capability).
+    fn add_notification<N, H, Fut>(&mut self, handler: H) -> Result<(), BuildError>
+    where
+        N: Notification,
+        H: Fn(Arc<S>, Context, N::Params) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        let method = N::METHOD.to_string();
+        let handler = Arc::new(handler);
+        let erased: ErasedNotificationHandler<S> = Box::new(move |state, ctx, params| {
+            let handler = Arc::clone(&handler);
+            Box::pin(async move {
+                let parsed: N::Params = match decode_params(&params) {
+                    Ok(parsed) => parsed,
+                    Err(err) => {
+                        // A notification has no reply, so a decode failure is
+                        // reported through tracing and dropped; later messages
+                        // are unaffected (ADR 0017).
+                        warn!(
+                            method = N::METHOD,
+                            error = %err,
+                            "dropping notification with malformed params"
+                        );
+                        return;
+                    }
+                };
+                handler(state, ctx, parsed).await;
+            })
+        });
+
+        if RESERVED_METHODS.contains(&method.as_str()) {
+            return Err(BuildError::ReservedMethod(method));
+        }
+        if self.notifications.insert(method.clone(), erased).is_some() {
+            return Err(BuildError::DuplicateMethod(method));
+        }
+        Ok(())
+    }
+
+    /// Register a typed command beneath `workspace/executeCommand`.
+    fn add_command<Args, Output, H, Fut>(
+        &mut self,
+        name: String,
+        handler: H,
+    ) -> Result<(), BuildError>
+    where
+        Args: DeserializeOwned + Send + 'static,
+        Output: Serialize + 'static,
+        H: Fn(Arc<S>, Context, Args, CancellationToken) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Output, LspError>> + Send + 'static,
+    {
+        if name.is_empty() {
+            return Err(BuildError::EmptyCommandName);
+        }
+        let handler = Arc::new(handler);
+        let erased: ErasedCommandHandler<S> = Box::new(move |state, ctx, arguments, ct| {
+            let handler = Arc::clone(&handler);
+            Box::pin(async move {
+                let args: Args = serde_json::from_value(Value::Array(arguments))
+                    .map_err(LspError::invalid_params)?;
+                let result = handler(state, ctx, args, ct).await?;
+                encode_body(&result)
+            })
+        });
+        if self.commands.insert(name.clone(), erased).is_some() {
+            return Err(BuildError::DuplicateCommand(name));
+        }
+        self.capabilities.add_command(name);
+        Ok(())
+    }
+
+    /// Cross-cutting validation that no single registration can detect on its
+    /// own. Run both at static build time and when the initialize transaction
+    /// commits, so a conditional registration cannot smuggle in a conflict.
+    fn validate(&self) -> Result<(), BuildError> {
+        // A command registration and an explicit `workspace/executeCommand`
+        // request handler both claim the same method; they cannot coexist.
+        if !self.commands.is_empty() && self.requests.contains_key(EXECUTE_COMMAND_METHOD) {
+            return Err(BuildError::ExecuteCommandConflict);
+        }
+        Ok(())
+    }
+
+    /// Freeze the registrations into the connection's permanent [`Router`],
+    /// computing its capability catalog once from the same registrations used
+    /// for dispatch (ADR 0017).
+    pub(crate) fn freeze(self) -> Router<S> {
+        Router {
+            requests: self.requests,
+            notifications: self.notifications,
+            commands: self.commands,
+            capabilities: self.capabilities.finish(),
+        }
+    }
+}
+
 /// The permanently frozen table of user handlers for one connection
-/// (ADR 0017). Built by [`ServerBuilder::build`]; no API mutates it.
+/// (ADR 0017). The protocol engine produces it by freezing [`Registrations`]
+/// once the initialize transaction commits; no API mutates it afterward.
 pub(crate) struct Router<S> {
     requests: HashMap<String, ErasedRequestHandler<S>>,
     notifications: HashMap<String, ErasedNotificationHandler<S>>,
     commands: HashMap<String, ErasedCommandHandler<S>>,
     /// Capabilities implied by the frozen registrations, computed once at
-    /// build time from the same registrations used for dispatch.
+    /// freeze time from the same registrations used for dispatch.
     capabilities: ServerCapabilities,
 }
 
@@ -144,15 +341,14 @@ impl<S> Router<S> {
     }
 }
 
-/// Collects static registrations for one connection before freezing them into
-/// a [`Server`] (ADR 0017). Registration mistakes are recorded and surfaced by
+/// Collects static registrations for one connection before handing them to a
+/// [`Server`] (ADR 0017). Registration mistakes are recorded and surfaced by
 /// [`build`](Self::build); the builder methods stay chainable.
 pub struct ServerBuilder<S> {
     state: Arc<S>,
-    requests: HashMap<String, ErasedRequestHandler<S>>,
-    notifications: HashMap<String, ErasedNotificationHandler<S>>,
-    commands: HashMap<String, ErasedCommandHandler<S>>,
-    capabilities: CapabilityBuilder,
+    registrations: Registrations<S>,
+    configure_initialize: Option<ConfigureInitialize<S>>,
+    on_initialize: Option<OnInitialize<S>>,
     /// First registration error seen, if any. Reported by `build`.
     error: Option<BuildError>,
 }
@@ -161,10 +357,9 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
     fn new(state: S) -> Self {
         Self {
             state: Arc::new(state),
-            requests: HashMap::new(),
-            notifications: HashMap::new(),
-            commands: HashMap::new(),
-            capabilities: CapabilityBuilder::default(),
+            registrations: Registrations::new(),
+            configure_initialize: None,
+            on_initialize: None,
             error: None,
         }
     }
@@ -192,14 +387,7 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
             + 'static,
         Fut: Future<Output = Result<<F::Marker as Request>::Result, LspError>> + Send + 'static,
     {
-        let method = <F::Marker as Request>::METHOD.to_string();
-        let erased = erase_request::<S, F::Marker, H, Fut>(handler);
-
-        if RESERVED_METHODS.contains(&method.as_str()) {
-            self.record(BuildError::ReservedMethod(method));
-        } else if self.requests.insert(method.clone(), erased).is_some() {
-            self.record(BuildError::DuplicateMethod(method));
-        } else if let Err(err) = spec.contribute(&mut self.capabilities) {
+        if let Err(err) = self.registrations.add_feature(spec, handler) {
             self.record(err);
         }
         self
@@ -222,13 +410,8 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
         H: Fn(Arc<S>, Context, R::Params, CancellationToken) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<R::Result, LspError>> + Send + 'static,
     {
-        let method = R::METHOD.to_string();
-        let erased = erase_request::<S, R, H, Fut>(handler);
-
-        if RESERVED_METHODS.contains(&method.as_str()) {
-            self.record(BuildError::ReservedMethod(method));
-        } else if self.requests.insert(method.clone(), erased).is_some() {
-            self.record(BuildError::DuplicateMethod(method));
+        if let Err(err) = self.registrations.add_request::<R, H, Fut>(handler) {
+            self.record(err);
         }
         self
     }
@@ -252,33 +435,8 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
         H: Fn(Arc<S>, Context, N::Params) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
-        let method = N::METHOD.to_string();
-        let handler = Arc::new(handler);
-        let erased: ErasedNotificationHandler<S> = Box::new(move |state, ctx, params| {
-            let handler = Arc::clone(&handler);
-            Box::pin(async move {
-                let parsed: N::Params = match decode_params(&params) {
-                    Ok(parsed) => parsed,
-                    Err(err) => {
-                        // A notification has no reply, so a decode failure is
-                        // reported through tracing and dropped; later messages
-                        // are unaffected (ADR 0017).
-                        warn!(
-                            method = N::METHOD,
-                            error = %err,
-                            "dropping notification with malformed params"
-                        );
-                        return;
-                    }
-                };
-                handler(state, ctx, parsed).await;
-            })
-        });
-
-        if RESERVED_METHODS.contains(&method.as_str()) {
-            self.record(BuildError::ReservedMethod(method));
-        } else if self.notifications.insert(method.clone(), erased).is_some() {
-            self.record(BuildError::DuplicateMethod(method));
+        if let Err(err) = self.registrations.add_notification::<N, H, Fut>(handler) {
+            self.record(err);
         }
         self
     }
@@ -304,49 +462,85 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
         H: Fn(Arc<S>, Context, Args, CancellationToken) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<Output, LspError>> + Send + 'static,
     {
-        let name = name.into();
-        let handler = Arc::new(handler);
-        let erased: ErasedCommandHandler<S> = Box::new(move |state, ctx, arguments, ct| {
-            let handler = Arc::clone(&handler);
-            Box::pin(async move {
-                let args: Args = serde_json::from_value(Value::Array(arguments))
-                    .map_err(LspError::invalid_params)?;
-                let result = handler(state, ctx, args, ct).await?;
-                encode_body(&result)
-            })
-        });
-
-        if name.is_empty() {
-            self.record(BuildError::EmptyCommandName);
-        } else if self.commands.insert(name.clone(), erased).is_some() {
-            self.record(BuildError::DuplicateCommand(name));
-        } else {
-            self.capabilities.add_command(name);
+        if let Err(err) = self
+            .registrations
+            .add_command::<Args, Output, H, Fut>(name.into(), handler)
+        {
+            self.record(err);
         }
         self
     }
 
-    /// Validate the complete static registration set and freeze the Router.
+    /// Register the sole synchronous initialization-dependent registration
+    /// callback (ADR 0017).
     ///
-    /// Performs no I/O and does not run any initialization callback. Returns
+    /// After a valid `initialize` request the engine runs `callback` exactly
+    /// once against a transactional [`InitializeRegistrar`], passing read-only
+    /// `InitializeParams`. The callback may conditionally register features,
+    /// requests, notifications, and commands; returning `Err` discards the
+    /// whole transaction. It performs no I/O and cannot `.await`.
+    ///
+    /// Supplying `configure_initialize` more than once is a
+    /// [`BuildError::DuplicateConfigureInitialize`] reported by
+    /// [`build`](Self::build).
+    pub fn configure_initialize<F>(mut self, callback: F) -> Self
+    where
+        F: FnOnce(&InitializeParams, &mut InitializeRegistrar<S>) -> Result<(), LspError>
+            + Send
+            + 'static,
+    {
+        if self.configure_initialize.is_some() {
+            self.record(BuildError::DuplicateConfigureInitialize);
+        } else {
+            self.configure_initialize = Some(Box::new(callback));
+        }
+        self
+    }
+
+    /// Register the `on_initialize` lifecycle hook (ADR 0018).
+    ///
+    /// The hook runs after the `Workspace`, `Documents`, and negotiated
+    /// position encoding are established and after the Router is frozen, but
+    /// before the `InitializeResult` is sent. It may contribute an optional
+    /// [`ServerInfo`], but it cannot register routes or replace the generated
+    /// `ServerCapabilities`. Returning `Err` fails initialization.
+    ///
+    /// Supplying `on_initialize` more than once is a
+    /// [`BuildError::DuplicateLifecycleHook`] reported by [`build`](Self::build).
+    pub fn on_initialize<H, Fut>(mut self, hook: H) -> Self
+    where
+        H: Fn(Arc<S>, Context, InitializeParams, CancellationToken) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Option<ServerInfo>, LspError>> + Send + 'static,
+    {
+        if self.on_initialize.is_some() {
+            self.record(BuildError::DuplicateLifecycleHook("on_initialize"));
+        } else {
+            // The hook runs once, so — unlike the many-shot request handlers —
+            // it needs no `Arc`; the erasing closure just boxes its future.
+            self.on_initialize = Some(Box::new(move |state, ctx, params, ct| {
+                Box::pin(hook(state, ctx, params, ct))
+            }));
+        }
+        self
+    }
+
+    /// Validate the complete static registration set and return the [`Server`].
+    ///
+    /// Performs no I/O and does not run `configure_initialize`; the Router is
+    /// frozen later, when the engine commits the initialize transaction. Returns
     /// the first [`BuildError`] recorded during registration, if any.
     pub fn build(mut self) -> Result<Server<S>, BuildError> {
-        // A command registration and an explicit `workspace/executeCommand`
-        // request handler both claim the same method; they cannot coexist.
-        if !self.commands.is_empty() && self.requests.contains_key(EXECUTE_COMMAND_METHOD) {
-            self.record(BuildError::ExecuteCommandConflict);
+        if let Err(err) = self.registrations.validate() {
+            self.record(err);
         }
         if let Some(error) = self.error {
             return Err(error);
         }
         Ok(Server {
             state: self.state,
-            router: Arc::new(Router {
-                requests: self.requests,
-                notifications: self.notifications,
-                commands: self.commands,
-                capabilities: self.capabilities.finish(),
-            }),
+            registrations: self.registrations,
+            configure_initialize: self.configure_initialize,
+            on_initialize: self.on_initialize,
         })
     }
 
@@ -359,12 +553,116 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
     }
 }
 
-/// Owns exactly one LSP connection and its frozen [`Router`] (ADR 0017). A
-/// second connection requires a second `Server`; connection state is never
-/// shared between servers.
+/// The transactional registrar handed to `configure_initialize` (ADR 0017).
+///
+/// It offers the same `feature`, `request`, `notification`, and `command`
+/// registration semantics as the static [`ServerBuilder`], starting from a
+/// view of all static registrations, but exposes no `layer`, nested
+/// `configure_initialize`, `build`, or dynamic-client operation. Conditional
+/// registration mistakes are recorded and abort the whole transaction when the
+/// engine commits it, so no partial route or capability ever becomes visible.
+pub struct InitializeRegistrar<S> {
+    registrations: Registrations<S>,
+    /// First conditional registration error seen, if any. Once set, later
+    /// registrations are skipped and the transaction fails on commit.
+    error: Option<BuildError>,
+}
+
+impl<S: Send + Sync + 'static> InitializeRegistrar<S> {
+    pub(crate) fn new(registrations: Registrations<S>) -> Self {
+        Self {
+            registrations,
+            error: None,
+        }
+    }
+
+    /// Conditionally register a standard feature and its capability. See
+    /// [`ServerBuilder::feature`].
+    pub fn feature<F, H, Fut>(&mut self, spec: F, handler: H) -> &mut Self
+    where
+        F: FeatureSpec,
+        H: Fn(Arc<S>, Context, <F::Marker as Request>::Params, CancellationToken) -> Fut
+            + Send
+            + Sync
+            + 'static,
+        Fut: Future<Output = Result<<F::Marker as Request>::Result, LspError>> + Send + 'static,
+    {
+        self.try_register(|r| r.add_feature(spec, handler))
+    }
+
+    /// Conditionally register a typed custom request. See
+    /// [`ServerBuilder::request`].
+    pub fn request<R, H, Fut>(&mut self, handler: H) -> &mut Self
+    where
+        R: Request,
+        H: Fn(Arc<S>, Context, R::Params, CancellationToken) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R::Result, LspError>> + Send + 'static,
+    {
+        self.try_register(|r| r.add_request::<R, H, Fut>(handler))
+    }
+
+    /// Conditionally register a typed custom notification. See
+    /// [`ServerBuilder::notification`].
+    pub fn notification<N, H, Fut>(&mut self, handler: H) -> &mut Self
+    where
+        N: Notification,
+        H: Fn(Arc<S>, Context, N::Params) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        self.try_register(|r| r.add_notification::<N, H, Fut>(handler))
+    }
+
+    /// Conditionally register a typed command. See [`ServerBuilder::command`].
+    pub fn command<Args, Output, H, Fut>(
+        &mut self,
+        name: impl Into<String>,
+        handler: H,
+    ) -> &mut Self
+    where
+        Args: DeserializeOwned + Send + 'static,
+        Output: Serialize + 'static,
+        H: Fn(Arc<S>, Context, Args, CancellationToken) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Output, LspError>> + Send + 'static,
+    {
+        self.try_register(|r| r.add_command::<Args, Output, H, Fut>(name.into(), handler))
+    }
+
+    /// Apply one registration, recording its first error and skipping later
+    /// ones so a broken transaction cannot accumulate more partial state.
+    fn try_register(
+        &mut self,
+        op: impl FnOnce(&mut Registrations<S>) -> Result<(), BuildError>,
+    ) -> &mut Self {
+        if self.error.is_none() {
+            if let Err(err) = op(&mut self.registrations) {
+                self.error = Some(err);
+            }
+        }
+        self
+    }
+
+    /// Commit the transaction: on success return the extended, validated
+    /// registrations to be frozen; otherwise the first recorded error. Called
+    /// by the engine only after `configure_initialize` returns `Ok`.
+    pub(crate) fn commit(self) -> Result<Registrations<S>, BuildError> {
+        if let Some(error) = self.error {
+            return Err(error);
+        }
+        self.registrations.validate()?;
+        Ok(self.registrations)
+    }
+}
+
+/// Owns exactly one LSP connection: its application state, the static
+/// registrations awaiting the initialize transaction, and the optional
+/// initialization-dependent callback and `on_initialize` hook (ADR 0017,
+/// ADR 0018). A second connection requires a second `Server`; connection state
+/// is never shared between servers.
 pub struct Server<S> {
     pub(crate) state: Arc<S>,
-    pub(crate) router: Arc<Router<S>>,
+    pub(crate) registrations: Registrations<S>,
+    pub(crate) configure_initialize: Option<ConfigureInitialize<S>>,
+    pub(crate) on_initialize: Option<OnInitialize<S>>,
 }
 
 impl<S: Send + Sync + 'static> Server<S> {
@@ -372,6 +670,14 @@ impl<S: Send + Sync + 'static> Server<S> {
     /// value. Every handler for the connection shares `state` as `Arc<S>`.
     pub fn builder(state: S) -> ServerBuilder<S> {
         ServerBuilder::new(state)
+    }
+
+    /// Freeze the static registrations into a [`Router`] for inspection,
+    /// bypassing the initialize transaction. Test-only: at runtime the engine
+    /// freezes the Router after `configure_initialize` commits.
+    #[cfg(test)]
+    pub(crate) fn into_router(self) -> Router<S> {
+        self.registrations.freeze()
     }
 
     /// Drive this server to completion over a custom [`Transport`](crate::Transport).
@@ -463,10 +769,11 @@ mod tests {
             .request::<HoverRequest, _, _>(ok_hover)
             .build()
             .expect("a lone custom request builds");
-        assert!(server.router.request("textDocument/hover").is_some());
-        assert!(server.router.request("nope").is_none());
+        let router = server.into_router();
+        assert!(router.request("textDocument/hover").is_some());
+        assert!(router.request("nope").is_none());
         assert_eq!(
-            server.router.capabilities(),
+            router.capabilities(),
             ServerCapabilities::default(),
             "custom requests must not contribute capabilities"
         );
@@ -508,13 +815,13 @@ mod tests {
             )
             .build()
             .expect("a lone notification builds");
+        let router = server.into_router();
         assert!(
-            server
-                .router
+            router
                 .notification("workspace/didChangeConfiguration")
                 .is_some()
         );
-        assert_eq!(server.router.capabilities(), ServerCapabilities::default());
+        assert_eq!(router.capabilities(), ServerCapabilities::default());
     }
 
     #[test]
@@ -565,7 +872,7 @@ mod tests {
             .build()
             .expect("commands build");
         let provider = server
-            .router
+            .into_router()
             .capabilities()
             .execute_command_provider
             .expect("commands advertise an execute-command capability");
@@ -582,13 +889,14 @@ mod tests {
             .feature(crate::features::hover(), ok_hover)
             .build()
             .expect("hover builds");
-        let caps = server.router.capabilities();
+        let router = server.into_router();
+        let caps = router.capabilities();
         assert_eq!(
             caps.hover_provider,
             Some(HoverProviderCapability::Simple(true))
         );
         assert_eq!(caps.completion_provider, None);
-        assert!(server.router.request("textDocument/hover").is_some());
+        assert!(router.request("textDocument/hover").is_some());
     }
 
     #[test]
@@ -602,14 +910,14 @@ mod tests {
             .feature(crate::features::completion(options.clone()), ok_completion)
             .build()
             .expect("hover then completion builds")
-            .router
+            .into_router()
             .capabilities();
         let completion_first = Server::builder(DummyState)
             .feature(crate::features::completion(options.clone()), ok_completion)
             .feature(crate::features::hover(), ok_hover)
             .build()
             .expect("completion then hover builds")
-            .router
+            .into_router()
             .capabilities();
         assert_eq!(
             hover_first, completion_first,
@@ -634,5 +942,36 @@ mod tests {
             err,
             BuildError::DuplicateMethod("textDocument/hover".to_string())
         );
+    }
+
+    async fn noop_on_initialize(
+        _state: Arc<DummyState>,
+        _ctx: Context,
+        _params: lsp_types::InitializeParams,
+        _ct: CancellationToken,
+    ) -> Result<Option<lsp_types::ServerInfo>, LspError> {
+        Ok(None)
+    }
+
+    #[test]
+    fn duplicate_configure_initialize_is_a_build_error() {
+        let err = Server::builder(DummyState)
+            .configure_initialize(|_params, _registrar| Ok(()))
+            .configure_initialize(|_params, _registrar| Ok(()))
+            .build()
+            .err()
+            .expect("supplying configure_initialize twice must fail");
+        assert_eq!(err, BuildError::DuplicateConfigureInitialize);
+    }
+
+    #[test]
+    fn duplicate_on_initialize_is_a_build_error() {
+        let err = Server::builder(DummyState)
+            .on_initialize(noop_on_initialize)
+            .on_initialize(noop_on_initialize)
+            .build()
+            .err()
+            .expect("supplying on_initialize twice must fail");
+        assert_eq!(err, BuildError::DuplicateLifecycleHook("on_initialize"));
     }
 }
