@@ -56,6 +56,16 @@ pub enum BuildError {
     /// resolves such a clash by last-write-wins; it fails the build instead.
     #[error("conflicting contributions for capability field `{field}`")]
     ConflictingCapability { field: &'static str },
+
+    /// `configure_initialize` was supplied more than once. There is exactly one
+    /// initialization-dependent registration transaction (ADR 0017).
+    #[error("`configure_initialize` may only be supplied once")]
+    DuplicateConfigureInitialize,
+
+    /// A lifecycle hook (`on_initialize`, …) was supplied more than once. Each
+    /// hook has at most one registration (ADR 0018).
+    #[error("lifecycle hook `{0}` may only be supplied once")]
+    DuplicateLifecycleHook(&'static str),
 }
 
 #[derive(Debug, Error)]

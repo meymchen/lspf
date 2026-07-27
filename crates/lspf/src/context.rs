@@ -7,6 +7,7 @@ use tracing::{Span, warn};
 
 use crate::documents::Documents;
 use crate::raw::{RawMessage, RequestId};
+use crate::workspace::Workspace;
 
 /// Per-request handle to framework state (see ADR 0009).
 ///
@@ -22,6 +23,11 @@ pub struct Context {
     pub(crate) span: Span,
     pub(crate) outgoing: UnboundedSender<RawMessage>,
     pub(crate) documents: Documents,
+    /// The connection's established [`Workspace`], present once the initialize
+    /// transaction has run. Handlers only run after that point, so a handler
+    /// always observes `Some`; it is `None` only in the pre-init lifecycle
+    /// hooks and legacy dispatch paths that predate workspace establishment.
+    pub(crate) workspace: Option<Workspace>,
 }
 
 impl Context {
@@ -36,6 +42,7 @@ impl Context {
             span,
             outgoing,
             documents,
+            workspace: None,
         }
     }
 
@@ -49,7 +56,17 @@ impl Context {
             span,
             outgoing,
             documents,
+            workspace: None,
         }
+    }
+
+    /// Attach the connection's established [`Workspace`] to this context. The
+    /// protocol engine calls this once the initialize transaction has run, so
+    /// every handler and lifecycle hook that observes a workspace sees the same
+    /// established state.
+    pub(crate) fn with_workspace(mut self, workspace: Workspace) -> Self {
+        self.workspace = Some(workspace);
+        self
     }
 
     pub fn request_id(&self) -> Option<&RequestId> {
@@ -65,6 +82,17 @@ impl Context {
         &self.documents
     }
 
+    /// The connection's [`Workspace`], established from `InitializeParams`
+    /// during the initialize transaction (ADR 0017, ADR 0018).
+    ///
+    /// Returns `None` only where no workspace has been established: the
+    /// `on_initialize`-and-later handlers of the 0.2 engine always see `Some`,
+    /// while the 0.1 `LanguageServer` dispatch path and the test-only
+    /// constructor carry none.
+    pub fn workspace(&self) -> Option<&Workspace> {
+        self.workspace.as_ref()
+    }
+
     #[doc(hidden)]
     /// Test-only constructor that builds a notification context with a
     /// dummy outgoing channel and a placeholder span.
@@ -75,6 +103,7 @@ impl Context {
             span: Span::current(),
             outgoing,
             documents,
+            workspace: None,
         }
     }
 

@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use lsp_types::{Position, TextDocumentContentChangeEvent, TextDocumentItem, Uri};
+use lsp_types::{
+    InitializeParams, Position, PositionEncodingKind, TextDocumentContentChangeEvent,
+    TextDocumentItem, Uri,
+};
 use ropey::Rope;
 
 /// Negotiated meaning of `Position.character` (ADR 0016).
@@ -265,5 +268,39 @@ impl Documents {
     /// handshake; everything else reads it.
     pub fn set_position_encoding(&self, encoding: PositionEncoding) {
         self.inner.write().unwrap().encoding = encoding;
+    }
+
+    /// Negotiate the position encoding from `InitializeParams`, store it, and
+    /// return the LSP kind to advertise in `InitializeResult` (ADR 0016).
+    ///
+    /// lspf intersects the client's offered `general.positionEncodings` with
+    /// its own preference order (`utf-8` then `utf-16`). A client that offers
+    /// nothing, nothing supported, or omits the field defaults to UTF-16.
+    pub(crate) fn negotiate_position_encoding(
+        &self,
+        params: &InitializeParams,
+    ) -> PositionEncodingKind {
+        let offered = params
+            .capabilities
+            .general
+            .as_ref()
+            .and_then(|g| g.position_encodings.as_deref());
+
+        let preferred = [PositionEncodingKind::UTF8, PositionEncodingKind::UTF16];
+        let chosen = offered
+            .and_then(|encodings| {
+                preferred
+                    .iter()
+                    .find(|kind| encodings.contains(kind))
+                    .cloned()
+            })
+            .unwrap_or(PositionEncodingKind::UTF16);
+
+        self.set_position_encoding(if chosen == PositionEncodingKind::UTF8 {
+            PositionEncoding::Utf8
+        } else {
+            PositionEncoding::Utf16
+        });
+        chosen
     }
 }
