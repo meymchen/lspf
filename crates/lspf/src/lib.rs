@@ -16,13 +16,14 @@ mod raw;
 mod runtime;
 mod server;
 mod transport;
+mod workspace;
 
 pub mod types {
     //! LSP protocol types — re-exported from `lsp-types` per ADR 0014.
     pub use lsp_types::*;
 }
 
-pub use builder::{Server, ServerBuilder};
+pub use builder::{InitializeRegistrar, Server, ServerBuilder};
 pub use context::Context;
 pub use documents::{Document, Documents, PositionEncoding};
 pub use error::{BuildError, Error, LspError, Result};
@@ -32,6 +33,7 @@ pub use server::LanguageServer;
 #[cfg(not(target_arch = "wasm32"))]
 pub use transport::{StdioBuilder, StdioReader, StdioTransport, StdioWriter, stdio};
 pub use transport::{Transport, TransportError, TransportReader, TransportWriter};
+pub use workspace::Workspace;
 
 /// Cancellation primitive passed to every request handler (ADR 0007).
 pub use tokio_util::sync::CancellationToken;

@@ -258,10 +258,13 @@ async fn features_advertise_no_unrelated_capabilities() {
     let init: lspf::types::InitializeResult =
         serde_json::from_value(ok_result(&outbox, 1).expect("initialize response")).unwrap();
 
-    // Only hover and completion are set; everything else stays default.
+    // Only hover and completion are set; everything else stays default apart
+    // from the protocol-negotiated position encoding (ADR 0016), which defaults
+    // to UTF-16 when the client offers none.
     let expected = ServerCapabilities {
         hover_provider: Some(lspf::types::HoverProviderCapability::Simple(true)),
         completion_provider: Some(completion_options()),
+        position_encoding: Some(lspf::types::PositionEncodingKind::UTF16),
         ..ServerCapabilities::default()
     };
     assert_eq!(init.capabilities, expected);
