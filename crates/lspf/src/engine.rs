@@ -15,6 +15,7 @@ use std::future::Future;
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
+use futures_util::future::{Either, select};
 use lsp_types::{InitializeParams, InitializeResult};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio_util::sync::CancellationToken;
@@ -56,7 +57,8 @@ where
             Ok(msg) => msg,
             Err(TransportError::Closed) => {
                 warn!("transport closed by peer before exit notification");
-                engine.tasks.join_all().await;
+                engine.lifecycle = Lifecycle::Exited;
+                engine.tasks.abort_and_join().await;
                 break Ok(());
             }
             Err(e) => {
@@ -71,7 +73,7 @@ where
                 // reader accepts the next envelope. This preserves receipt
                 // order at the spawn boundary while still allowing handlers
                 // to remain concurrently in flight after they yield.
-                tokio::task::yield_now().await;
+                engine.tasks.yield_now().await;
             }
             // `exit`, and the terminal close path a failed initialize enters,
             // both end the read-loop; the send-loop then drains what is queued.
@@ -121,6 +123,10 @@ impl<R: Runtime> TaskGroup<R> {
         self.handles = running;
     }
 
+    async fn yield_now(&self) {
+        self.runtime.yield_now().await;
+    }
+
     async fn abort_and_join(&mut self) {
         for handle in &self.handles {
             handle.abort();
@@ -161,9 +167,18 @@ impl InboundRegistry {
         }
     }
 
-    fn cancel(&self, id: &RequestId) {
-        if let Some(token) = self.entries.lock().unwrap().get(id).and_then(Clone::clone) {
+    fn complete_cancellation(&self, out_tx: &UnboundedSender<RawMessage>, id: &RequestId) {
+        let token = {
+            let mut entries = self.entries.lock().unwrap();
+            if entries.get(id).is_some_and(Option::is_some) {
+                entries.remove(id).flatten()
+            } else {
+                None
+            }
+        };
+        if let Some(token) = token {
             token.cancel();
+            enqueue_encoded(out_tx, id.clone(), Err(LspError::RequestCancelled));
         }
     }
 }
@@ -364,7 +379,7 @@ where
             "$/cancelRequest" => {
                 let bytes: &[u8] = if params.is_empty() { b"{}" } else { &params };
                 match serde_json::from_slice::<CancelParams>(bytes) {
-                    Ok(cancel) => inbound.cancel(&cancel.id),
+                    Ok(cancel) => inbound.complete_cancellation(out_tx, &cancel.id),
                     Err(error) => {
                         debug!(%error, "ignoring malformed $/cancelRequest");
                     }
@@ -447,10 +462,9 @@ fn spawn_router_request<S, R>(
                     .await
                 }
             };
-            let result = tokio::select! {
-                biased;
-                result = handler => result,
-                _ = cancellation.cancelled() => Err(LspError::RequestCancelled),
+            let result = match select(Box::pin(handler), Box::pin(cancellation.cancelled())).await {
+                Either::Left((result, _)) => result,
+                Either::Right(((), _)) => Err(LspError::RequestCancelled),
             };
             inbound.complete(&out_tx, id, result);
         }

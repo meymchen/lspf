@@ -32,6 +32,8 @@ pub(crate) trait Runtime {
     fn spawn<F>(&self, future: F) -> TaskHandle
     where
         F: Future<Output = ()> + TaskSend + 'static;
+
+    fn yield_now(&self) -> impl Future<Output = ()> + TaskSend;
 }
 
 /// Runtime selected for native targets.
@@ -51,6 +53,10 @@ impl Runtime for TokioRuntime {
         F: Future<Output = ()> + TaskSend + 'static,
     {
         TaskHandle(tokio::spawn(future))
+    }
+
+    async fn yield_now(&self) {
+        tokio::task::yield_now().await;
     }
 }
 
@@ -88,6 +94,10 @@ impl Runtime for WasmRuntime {
             completed: completed_rx,
             finished,
         }
+    }
+
+    fn yield_now(&self) -> impl Future<Output = ()> + TaskSend {
+        futures_util::future::ready(())
     }
 }
 

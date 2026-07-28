@@ -25,6 +25,14 @@ impl Request for Controlled {
     const METHOD: &'static str = "test/controlled";
 }
 
+enum ReturnsAfterCancellation {}
+
+impl Request for ReturnsAfterCancellation {
+    type Params = ();
+    type Result = String;
+    const METHOD: &'static str = "test/returns-after-cancellation";
+}
+
 struct AppState {
     calls: Arc<AtomicUsize>,
     started: Mutex<Option<oneshot::Sender<()>>>,
@@ -51,6 +59,22 @@ async fn controlled(
             std::future::pending().await
         }
     }
+}
+
+async fn returns_after_cancellation(
+    state: Arc<AppState>,
+    _ctx: Context,
+    (): (),
+    ct: lspf::CancellationToken,
+) -> Result<String, lspf::LspError> {
+    if let Some(started) = state.started.lock().await.take() {
+        let _ = started.send(());
+    }
+    ct.cancelled().await;
+    if let Some(observed) = state.cancellation_observed.lock().await.take() {
+        let _ = observed.send(());
+    }
+    Ok("too late".to_string())
 }
 
 struct ChannelTransport {
@@ -249,6 +273,60 @@ async fn cancellation_reaches_handler_token_and_completes_unfinished_request_onc
         );
     }
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancellation_wins_when_handler_returns_success_after_observing_token() {
+    let (incoming_tx, incoming_rx) = mpsc::unbounded_channel();
+    let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel();
+    let (started_tx, started_rx) = oneshot::channel();
+    let (observed_tx, observed_rx) = oneshot::channel();
+    let state = AppState {
+        calls: Arc::new(AtomicUsize::new(0)),
+        started: Mutex::new(Some(started_tx)),
+        cancellation_observed: Mutex::new(Some(observed_tx)),
+        release: Arc::new(Notify::new()),
+    };
+    let server = Server::builder(state)
+        .request::<ReturnsAfterCancellation, _, _>(returns_after_cancellation)
+        .build()
+        .expect("server builds");
+    let serve = tokio::spawn(server.serve(ChannelTransport {
+        incoming: incoming_rx,
+        outgoing: outgoing_tx,
+    }));
+
+    incoming_tx
+        .send(request(
+            1,
+            "initialize",
+            json!({ "processId": null, "rootUri": null, "capabilities": {} }),
+        ))
+        .unwrap();
+    let _ = receive_for(&mut outgoing_rx, 1).await;
+
+    incoming_tx
+        .send(request(2, ReturnsAfterCancellation::METHOD, json!(null)))
+        .unwrap();
+    started_rx.await.expect("handler started");
+    incoming_tx
+        .send(notification("$/cancelRequest", json!({ "id": 2 })))
+        .unwrap();
+    observed_rx.await.expect("handler observed cancellation");
+
+    assert!(matches!(
+        receive_for(&mut outgoing_rx, 2).await,
+        RawMessage::Response {
+            result: Err(ref error),
+            ..
+        } if error.code == -32800
+    ));
+
+    incoming_tx.send(notification("exit", json!(null))).unwrap();
+    serve
+        .await
+        .expect("serve task did not panic")
+        .expect("serve ended cleanly");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
