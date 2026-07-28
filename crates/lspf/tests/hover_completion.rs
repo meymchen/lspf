@@ -13,7 +13,6 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use serde_json::json;
-use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 
 use lspf::types::{
@@ -62,7 +61,7 @@ fn completion_options() -> CompletionOptions {
 
 struct ChannelTransport {
     in_rx: mpsc::UnboundedReceiver<RawMessage>,
-    outbox: Arc<Mutex<Vec<RawMessage>>>,
+    out_tx: mpsc::UnboundedSender<RawMessage>,
 }
 
 struct ChannelReader {
@@ -70,7 +69,7 @@ struct ChannelReader {
 }
 
 struct ChannelWriter {
-    outbox: Arc<Mutex<Vec<RawMessage>>>,
+    out_tx: mpsc::UnboundedSender<RawMessage>,
 }
 
 impl Transport for ChannelTransport {
@@ -81,7 +80,7 @@ impl Transport for ChannelTransport {
         (
             ChannelReader { in_rx: self.in_rx },
             ChannelWriter {
-                outbox: self.outbox,
+                out_tx: self.out_tx,
             },
         )
     }
@@ -95,8 +94,7 @@ impl TransportReader for ChannelReader {
 
 impl TransportWriter for ChannelWriter {
     async fn send(&mut self, msg: RawMessage) -> Result<(), TransportError> {
-        self.outbox.lock().await.push(msg);
-        Ok(())
+        self.out_tx.send(msg).map_err(|_| TransportError::Closed)
     }
 
     async fn shutdown(self) -> Result<(), TransportError> {
@@ -144,11 +142,8 @@ fn exit() -> RawMessage {
 /// so `serve` returns once everything is processed. Returns the outbox.
 async fn drive(messages: Vec<RawMessage>) -> Vec<RawMessage> {
     let (in_tx, in_rx) = mpsc::unbounded_channel::<RawMessage>();
-    let outbox = Arc::new(Mutex::new(Vec::new()));
-    let transport = ChannelTransport {
-        in_rx,
-        outbox: outbox.clone(),
-    };
+    let (out_tx, mut out_rx) = mpsc::unbounded_channel::<RawMessage>();
+    let transport = ChannelTransport { in_rx, out_tx };
 
     let server = Server::builder(AppState)
         .feature(lspf::features::hover(), hover)
@@ -158,8 +153,18 @@ async fn drive(messages: Vec<RawMessage>) -> Vec<RawMessage> {
 
     let handle = tokio::spawn(async move { server.serve(transport).await });
 
+    let mut outbox = Vec::new();
     for msg in messages {
+        let response_id = msg.id().cloned();
         in_tx.send(msg).unwrap();
+        if let Some(response_id) = response_id {
+            let response = tokio::time::timeout(Duration::from_secs(2), out_rx.recv())
+                .await
+                .expect("response arrived within 2s")
+                .expect("writer remained open");
+            assert_eq!(response.id(), Some(&response_id));
+            outbox.push(response);
+        }
     }
     drop(in_tx);
 
@@ -169,7 +174,8 @@ async fn drive(messages: Vec<RawMessage>) -> Vec<RawMessage> {
         .expect("server task did not panic")
         .expect("serve ended cleanly");
 
-    Arc::try_unwrap(outbox).unwrap().into_inner()
+    outbox.extend(std::iter::from_fn(|| out_rx.try_recv().ok()));
+    outbox
 }
 
 fn response(outbox: &[RawMessage], id: i32) -> Option<&RawMessage> {
