@@ -76,7 +76,7 @@ struct Observed {
 
 struct ChannelTransport {
     in_rx: mpsc::UnboundedReceiver<RawMessage>,
-    outbox: Arc<Mutex<Vec<RawMessage>>>,
+    out_tx: mpsc::UnboundedSender<RawMessage>,
 }
 
 struct ChannelReader {
@@ -84,7 +84,7 @@ struct ChannelReader {
 }
 
 struct ChannelWriter {
-    outbox: Arc<Mutex<Vec<RawMessage>>>,
+    out_tx: mpsc::UnboundedSender<RawMessage>,
 }
 
 impl Transport for ChannelTransport {
@@ -95,7 +95,7 @@ impl Transport for ChannelTransport {
         (
             ChannelReader { in_rx: self.in_rx },
             ChannelWriter {
-                outbox: self.outbox,
+                out_tx: self.out_tx,
             },
         )
     }
@@ -109,8 +109,7 @@ impl TransportReader for ChannelReader {
 
 impl TransportWriter for ChannelWriter {
     async fn send(&mut self, msg: RawMessage) -> Result<(), TransportError> {
-        self.outbox.lock().await.push(msg);
-        Ok(())
+        self.out_tx.send(msg).map_err(|_| TransportError::Closed)
     }
 
     async fn shutdown(self) -> Result<(), TransportError> {
@@ -151,15 +150,15 @@ fn notification(method: &'static str) -> RawMessage {
 /// once everything is processed. Returns the outbox.
 async fn drive(server: Server<AppState>, messages: Vec<RawMessage>) -> Vec<RawMessage> {
     let (in_tx, in_rx) = mpsc::unbounded_channel::<RawMessage>();
-    let outbox = Arc::new(Mutex::new(Vec::new()));
-    let transport = ChannelTransport {
-        in_rx,
-        outbox: outbox.clone(),
-    };
+    let (out_tx, mut out_rx) = mpsc::unbounded_channel::<RawMessage>();
+    let transport = ChannelTransport { in_rx, out_tx };
 
-    let handle = tokio::spawn(async move { server.serve(transport).await });
+    let mut handle = tokio::spawn(async move { server.serve(transport).await });
+    let mut server_done = false;
+    let mut outbox = Vec::new();
 
-    for msg in messages {
+    'messages: for msg in messages {
+        let response_id = msg.id().cloned();
         // The close-path tests make the server terminate mid-stream (a failed
         // initialize drops the reader), so a send can legitimately race the
         // disconnect. Treat a closed channel like a real transport would —
@@ -167,16 +166,43 @@ async fn drive(server: Server<AppState>, messages: Vec<RawMessage>) -> Vec<RawMe
         if in_tx.send(msg).is_err() {
             break;
         }
+        if let Some(response_id) = response_id {
+            tokio::select! {
+                response = out_rx.recv() => {
+                    if let Some(response) = response {
+                        assert_eq!(response.id(), Some(&response_id));
+                        outbox.push(response);
+                    } else {
+                        (&mut handle)
+                            .await
+                            .expect("server task did not panic")
+                            .expect("serve ended cleanly");
+                        server_done = true;
+                        break 'messages;
+                    }
+                }
+                result = &mut handle => {
+                    result
+                        .expect("server task did not panic")
+                        .expect("serve ended cleanly");
+                    server_done = true;
+                    break 'messages;
+                }
+            }
+        }
     }
     drop(in_tx); // peer disconnect → serve drains and returns
 
-    tokio::time::timeout(Duration::from_secs(2), handle)
-        .await
-        .expect("serve returned within 2s")
-        .expect("server task did not panic")
-        .expect("serve ended cleanly");
+    if !server_done {
+        tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("serve returned within 2s")
+            .expect("server task did not panic")
+            .expect("serve ended cleanly");
+    }
 
-    Arc::try_unwrap(outbox).unwrap().into_inner()
+    outbox.extend(std::iter::from_fn(|| out_rx.try_recv().ok()));
+    outbox
 }
 
 fn response(outbox: &[RawMessage], id: i32) -> Option<&RawMessage> {

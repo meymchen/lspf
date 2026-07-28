@@ -57,29 +57,21 @@ where
             Ok(msg) => msg,
             Err(TransportError::Closed) => {
                 warn!("transport closed by peer before exit notification");
-                engine.lifecycle = Lifecycle::Exited;
-                engine.tasks.abort_and_join().await;
+                engine.close().await;
                 break Ok(());
             }
             Err(e) => {
-                engine.tasks.abort_and_join().await;
+                engine.close().await;
                 break Err(Error::Transport(e));
             }
         };
 
         match engine.dispatch(msg).await {
-            Flow::Continue => {
-                // Give newly spawned request work its first poll before the
-                // reader accepts the next envelope. This preserves receipt
-                // order at the spawn boundary while still allowing handlers
-                // to remain concurrently in flight after they yield.
-                engine.tasks.yield_now().await;
-            }
+            Flow::Continue => {}
             // `exit`, and the terminal close path a failed initialize enters,
             // both end the read-loop; the send-loop then drains what is queued.
             Flow::Exit | Flow::Close => {
-                engine.lifecycle = Lifecycle::Exited;
-                engine.tasks.abort_and_join().await;
+                engine.close().await;
                 break Ok(());
             }
         }
@@ -121,10 +113,6 @@ impl<R: Runtime> TaskGroup<R> {
             }
         }
         self.handles = running;
-    }
-
-    async fn yield_now(&self) {
-        self.runtime.yield_now().await;
     }
 
     async fn abort_and_join(&mut self) {
@@ -179,6 +167,13 @@ impl InboundRegistry {
         if let Some(token) = token {
             token.cancel();
             enqueue_encoded(out_tx, id.clone(), Err(LspError::RequestCancelled));
+        }
+    }
+
+    fn cancel_all(&self) {
+        let entries = std::mem::take(&mut *self.entries.lock().unwrap());
+        for cancellation in entries.into_values().flatten() {
+            cancellation.cancel();
         }
     }
 }
@@ -268,6 +263,15 @@ where
             msg,
         )
         .await
+    }
+
+    async fn close(&mut self) {
+        if matches!(self.lifecycle, Lifecycle::Exited) {
+            return;
+        }
+        self.lifecycle = Lifecycle::Exited;
+        self.inbound.cancel_all();
+        self.tasks.abort_and_join().await;
     }
 }
 
