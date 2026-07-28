@@ -1,4 +1,4 @@
-//! Minimal protocol engine for the 0.2 `Server<S>` (PRD 0.2 slices 3–6).
+//! Connection-owned protocol engine for the 0.2 `Server<S>`.
 //!
 //! This slice serves a connection end to end for the lifecycle plus typed
 //! custom requests, notifications, and commands. `initialize` is the one
@@ -6,18 +6,19 @@
 //! generate capabilities, establish the connection's [`Workspace`],
 //! [`Documents`], and negotiated position encoding, and run the
 //! `on_initialize` lifecycle hook — all without exposing partial state
-//! (ADR 0017, ADR 0018). `shutdown` and `exit` close the session. Concurrency,
-//! cancellation, layers, and the outbound client arrive in later slices; here
-//! each custom request runs inline.
+//! (ADR 0017, ADR 0018). `shutdown` and `exit` close the session. Inbound
+//! requests reserve their IDs before user work is spawned; the engine's atomic
+//! completion gate then arbitrates success, errors, and cancellation.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::future::Future;
+use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
 use lsp_types::{InitializeParams, InitializeResult};
-use serde::Serialize;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, debug, info_span, warn};
+use tracing::{Instrument, Span, debug, info_span, warn};
 
 use crate::builder::{
     ConfigureInitialize, InitializeRegistrar, OnInitialize, Registrations, Router, Server,
@@ -27,7 +28,7 @@ use crate::context::Context;
 use crate::documents::Documents;
 use crate::error::Error;
 use crate::raw::{JsonRpcError, RawMessage, RequestId};
-use crate::runtime::{Runtime, default_runtime};
+use crate::runtime::{Runtime, TaskHandle, TaskSend, default_runtime};
 use crate::transport::{Transport, TransportError, TransportReader, TransportWriter};
 use crate::workspace::Workspace;
 use crate::{LspError, Result};
@@ -47,43 +48,129 @@ where
     let (out_tx, out_rx) = mpsc::unbounded_channel::<RawMessage>();
     let runtime = default_runtime();
     let send_handle = runtime.spawn(send_loop(writer, out_rx));
-
-    let state = server.state;
-    // Every connection owns a document store; document-sync built-ins are
-    // wired in a later slice, so for now it backs the handler `Context` and
-    // holds the negotiated position encoding established at initialize.
-    let documents = Documents::new();
-    // The `Workspace` is established from `InitializeParams` during the
-    // initialize transaction; until then no handler runs, so it is `None`.
-    let mut workspace: Option<Workspace> = None;
-    let mut phase = Phase::Uninitialized(Box::new(Pending {
-        registrations: server.registrations,
-        configure_initialize: server.configure_initialize,
-        on_initialize: server.on_initialize,
-    }));
+    let mut engine = ProtocolEngine::new(server, runtime, out_tx);
 
     let outcome = loop {
+        engine.tasks.reap_finished().await;
         let msg = match reader.recv().await {
             Ok(msg) => msg,
             Err(TransportError::Closed) => {
                 warn!("transport closed by peer before exit notification");
+                engine.tasks.join_all().await;
                 break Ok(());
             }
-            Err(e) => break Err(Error::Transport(e)),
+            Err(e) => {
+                engine.tasks.abort_and_join().await;
+                break Err(Error::Transport(e));
+            }
         };
 
-        match dispatch(&state, &documents, &mut workspace, &out_tx, &mut phase, msg).await {
-            Flow::Continue => {}
+        match engine.dispatch(msg).await {
+            Flow::Continue => {
+                // Give newly spawned request work its first poll before the
+                // reader accepts the next envelope. This preserves receipt
+                // order at the spawn boundary while still allowing handlers
+                // to remain concurrently in flight after they yield.
+                tokio::task::yield_now().await;
+            }
             // `exit`, and the terminal close path a failed initialize enters,
             // both end the read-loop; the send-loop then drains what is queued.
-            Flow::Exit | Flow::Close => break Ok(()),
+            Flow::Exit | Flow::Close => {
+                engine.lifecycle = Lifecycle::Exited;
+                engine.tasks.abort_and_join().await;
+                break Ok(());
+            }
         }
     };
 
     // Drop the master sender so the send-loop drains what is queued and exits.
-    drop(out_tx);
+    drop(engine);
     send_handle.join().await;
     outcome
+}
+
+struct TaskGroup<R> {
+    runtime: R,
+    handles: Vec<TaskHandle>,
+}
+
+impl<R: Runtime> TaskGroup<R> {
+    fn new(runtime: R) -> Self {
+        Self {
+            runtime,
+            handles: Vec::new(),
+        }
+    }
+
+    fn spawn<F>(&mut self, future: F)
+    where
+        F: Future<Output = ()> + TaskSend + 'static,
+    {
+        self.handles.push(self.runtime.spawn(future));
+    }
+
+    async fn reap_finished(&mut self) {
+        let mut running = Vec::with_capacity(self.handles.len());
+        for handle in std::mem::take(&mut self.handles) {
+            if handle.is_finished() {
+                handle.join().await;
+            } else {
+                running.push(handle);
+            }
+        }
+        self.handles = running;
+    }
+
+    async fn abort_and_join(&mut self) {
+        for handle in &self.handles {
+            handle.abort();
+        }
+        self.join_all().await;
+    }
+
+    async fn join_all(&mut self) {
+        for handle in std::mem::take(&mut self.handles) {
+            handle.join().await;
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+struct InboundRegistry {
+    entries: Arc<Mutex<HashMap<RequestId, Option<CancellationToken>>>>,
+}
+
+impl InboundRegistry {
+    fn reserve(&self, id: RequestId, cancellation: Option<CancellationToken>) -> bool {
+        let mut entries = self.entries.lock().unwrap();
+        if entries.contains_key(&id) {
+            return false;
+        }
+        entries.insert(id, cancellation);
+        true
+    }
+
+    fn complete(
+        &self,
+        out_tx: &UnboundedSender<RawMessage>,
+        id: RequestId,
+        result: std::result::Result<Bytes, LspError>,
+    ) {
+        if self.entries.lock().unwrap().remove(&id).is_some() {
+            enqueue_encoded(out_tx, id, result);
+        }
+    }
+
+    fn cancel(&self, id: &RequestId) {
+        if let Some(token) = self.entries.lock().unwrap().get(id).and_then(Clone::clone) {
+            token.cancel();
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct CancelParams {
+    id: RequestId,
 }
 
 async fn send_loop<W: TransportWriter>(mut writer: W, mut out_rx: UnboundedReceiver<RawMessage>) {
@@ -99,7 +186,7 @@ async fn send_loop<W: TransportWriter>(mut writer: W, mut out_rx: UnboundedRecei
 }
 
 /// The static registrations and lifecycle callbacks awaiting the initialize
-/// transaction. Held only while the connection is [`Phase::Uninitialized`];
+/// transaction. Held only while the connection is [`Lifecycle::Uninitialized`];
 /// the transaction consumes it once, so it need not be `Clone`.
 struct Pending<S> {
     registrations: Registrations<S>,
@@ -108,12 +195,65 @@ struct Pending<S> {
 }
 
 /// The connection's lifecycle phase. The frozen [`Router`] exists only after a
-/// successful initialize transaction, so it lives inside [`Phase::Running`]
+/// successful initialize transaction, so it lives inside [`Lifecycle::Running`]
 /// rather than being available up front.
-enum Phase<S> {
+enum Lifecycle<S> {
     Uninitialized(Box<Pending<S>>),
+    Initializing,
     Running(Arc<Router<S>>),
     ShuttingDown,
+    Exited,
+}
+
+/// The single owner of mutable protocol coordination for one connection.
+///
+/// Transport code only feeds envelopes in and drains envelopes out. Lifecycle
+/// selection, request registration, cancellation, task ownership, and terminal
+/// response arbitration all remain behind this boundary.
+struct ProtocolEngine<S, R> {
+    state: Arc<S>,
+    documents: Documents,
+    workspace: Option<Workspace>,
+    lifecycle: Lifecycle<S>,
+    inbound: InboundRegistry,
+    tasks: TaskGroup<R>,
+    out_tx: UnboundedSender<RawMessage>,
+}
+
+impl<S, R> ProtocolEngine<S, R>
+where
+    S: Send + Sync + 'static,
+    R: Runtime,
+{
+    fn new(server: Server<S>, runtime: R, out_tx: UnboundedSender<RawMessage>) -> Self {
+        Self {
+            state: server.state,
+            documents: Documents::new(),
+            workspace: None,
+            lifecycle: Lifecycle::Uninitialized(Box::new(Pending {
+                registrations: server.registrations,
+                configure_initialize: server.configure_initialize,
+                on_initialize: server.on_initialize,
+            })),
+            inbound: InboundRegistry::default(),
+            tasks: TaskGroup::new(runtime),
+            out_tx,
+        }
+    }
+
+    async fn dispatch(&mut self, msg: RawMessage) -> Flow {
+        dispatch(
+            &self.state,
+            &self.documents,
+            &mut self.workspace,
+            &self.out_tx,
+            &mut self.lifecycle,
+            &self.inbound,
+            &mut self.tasks,
+            msg,
+        )
+        .await
+    }
 }
 
 enum Flow {
@@ -130,7 +270,9 @@ async fn dispatch<S>(
     documents: &Documents,
     workspace: &mut Option<Workspace>,
     out_tx: &UnboundedSender<RawMessage>,
-    phase: &mut Phase<S>,
+    phase: &mut Lifecycle<S>,
+    inbound: &InboundRegistry,
+    tasks: &mut TaskGroup<impl Runtime>,
     msg: RawMessage,
 ) -> Flow
 where
@@ -139,76 +281,101 @@ where
     match msg {
         RawMessage::Request { id, method, params } => {
             let span = info_span!("request", method = %method, id = ?id);
+            let cancellation = (method != "initialize").then(CancellationToken::new);
+            if !inbound.reserve(id.clone(), cancellation.clone()) {
+                enqueue_error(
+                    out_tx,
+                    id,
+                    LspError::invalid_request("duplicate request id"),
+                );
+                return Flow::Continue;
+            }
 
             // Initialize precedence: until `initialize` completes, refuse
             // every other request with `ServerNotInitialized`.
-            if method != "initialize" && matches!(phase, Phase::Uninitialized(_)) {
-                enqueue_error(out_tx, id, LspError::ServerNotInitialized);
+            if method != "initialize"
+                && matches!(phase, Lifecycle::Uninitialized(_) | Lifecycle::Initializing)
+            {
+                inbound.complete(out_tx, id, Err(LspError::ServerNotInitialized));
                 return Flow::Continue;
             }
             // After `shutdown`, every request is invalid until `exit`.
-            if matches!(phase, Phase::ShuttingDown) {
-                enqueue_error(out_tx, id, LspError::invalid_request("invalid request"));
+            if matches!(phase, Lifecycle::ShuttingDown | Lifecycle::Exited) {
+                inbound.complete(
+                    out_tx,
+                    id,
+                    Err(LspError::invalid_request("invalid request")),
+                );
                 return Flow::Continue;
             }
 
             match method.as_ref() {
                 "initialize" => {
                     return initialize(
-                        state, documents, workspace, out_tx, phase, &span, id, params,
+                        state, documents, workspace, out_tx, phase, inbound, &span, id, params,
                     )
                     .await;
                 }
                 "shutdown" => {
-                    enqueue_ok(out_tx, id, &serde_json::Value::Null);
-                    *phase = Phase::ShuttingDown;
+                    inbound.complete(out_tx, id, encode_body(&serde_json::Value::Null));
+                    *phase = Lifecycle::ShuttingDown;
                 }
                 other => {
                     // Precedence guarantees the connection is running here.
                     let router = match phase {
-                        Phase::Running(router) => Arc::clone(router),
+                        Lifecycle::Running(router) => Arc::clone(router),
                         _ => {
-                            enqueue_error(out_tx, id, LspError::ServerNotInitialized);
+                            inbound.complete(out_tx, id, Err(LspError::ServerNotInitialized));
                             return Flow::Continue;
                         }
                     };
                     // Commands dispatch beneath `workspace/executeCommand`; an
                     // explicit request handler for that method is a build-time
                     // conflict, so the two never coexist.
-                    if other == "workspace/executeCommand" && router.has_commands() {
-                        dispatch_command(
-                            state, &router, documents, workspace, out_tx, &span, id, params,
-                        )
-                        .await;
-                    } else if let Some(handler) = router.request(other) {
-                        let ctx = attach_workspace(
-                            Context::for_request(
-                                id.clone(),
-                                span.clone(),
-                                out_tx.clone(),
-                                documents.clone(),
-                            ),
-                            workspace,
+                    if (other == "workspace/executeCommand" && router.has_commands())
+                        || router.request(other).is_some()
+                    {
+                        spawn_router_request(
+                            tasks,
+                            Arc::clone(state),
+                            router,
+                            documents.clone(),
+                            workspace.clone(),
+                            out_tx.clone(),
+                            inbound.clone(),
+                            span,
+                            id,
+                            method.into_owned(),
+                            params,
+                            cancellation.expect("non-initialize requests are cancellable"),
                         );
-                        let result =
-                            handler(Arc::clone(state), ctx, params, CancellationToken::new())
-                                .instrument(span)
-                                .await;
-                        enqueue_encoded(out_tx, id, result);
                     } else {
-                        enqueue_error(out_tx, id, LspError::MethodNotFound(other.to_string()));
+                        inbound.complete(
+                            out_tx,
+                            id,
+                            Err(LspError::MethodNotFound(other.to_string())),
+                        );
                     }
                 }
             }
         }
         RawMessage::Notification { method, params } => match method.as_ref() {
             "exit" => return Flow::Exit,
+            "$/cancelRequest" => {
+                let bytes: &[u8] = if params.is_empty() { b"{}" } else { &params };
+                match serde_json::from_slice::<CancelParams>(bytes) {
+                    Ok(cancel) => inbound.cancel(&cancel.id),
+                    Err(error) => {
+                        debug!(%error, "ignoring malformed $/cancelRequest");
+                    }
+                }
+            }
             other => {
                 // Until `initialize` completes, drop every notification but the
                 // `exit` handled above. A registered custom notification then
                 // dispatches with no response; an unregistered one is ignored.
                 match phase {
-                    Phase::Running(router) => {
+                    Lifecycle::Running(router) => {
                         if let Some(handler) = router.notification(other) {
                             let span = info_span!("notification", method = %other);
                             let ctx = attach_workspace(
@@ -239,6 +406,78 @@ where
     Flow::Continue
 }
 
+#[allow(clippy::too_many_arguments)]
+fn spawn_router_request<S, R>(
+    tasks: &mut TaskGroup<R>,
+    state: Arc<S>,
+    router: Arc<Router<S>>,
+    documents: Documents,
+    workspace: Option<Workspace>,
+    out_tx: UnboundedSender<RawMessage>,
+    inbound: InboundRegistry,
+    span: Span,
+    id: RequestId,
+    method: String,
+    params: Bytes,
+    cancellation: CancellationToken,
+) where
+    S: Send + Sync + 'static,
+    R: Runtime,
+{
+    let task_span = span.clone();
+    tasks.spawn(
+        async move {
+            let ctx = attach_workspace(
+                Context::for_request(id.clone(), task_span.clone(), out_tx.clone(), documents),
+                &workspace,
+            );
+            let cancellation_for_handler = cancellation.clone();
+            let handler = async {
+                if method == "workspace/executeCommand" && router.has_commands() {
+                    execute_command(&state, &router, ctx, params, cancellation_for_handler).await
+                } else {
+                    router
+                        .request(&method)
+                        .expect("registered request remains in frozen Router")(
+                        state,
+                        ctx,
+                        params,
+                        cancellation_for_handler,
+                    )
+                    .await
+                }
+            };
+            let result = tokio::select! {
+                biased;
+                result = handler => result,
+                _ = cancellation.cancelled() => Err(LspError::RequestCancelled),
+            };
+            inbound.complete(&out_tx, id, result);
+        }
+        .instrument(span),
+    );
+}
+
+async fn execute_command<S>(
+    state: &Arc<S>,
+    router: &Router<S>,
+    ctx: Context,
+    params: Bytes,
+    cancellation: CancellationToken,
+) -> std::result::Result<Bytes, LspError>
+where
+    S: Send + Sync + 'static,
+{
+    let params: lsp_types::ExecuteCommandParams = decode_params(&params)?;
+    match router.command(&params.command) {
+        Some(handler) => handler(Arc::clone(state), ctx, params.arguments, cancellation).await,
+        None => Err(LspError::invalid_params(format!(
+            "unknown command: {}",
+            params.command
+        ))),
+    }
+}
+
 /// Run the one `initialize` transaction (ADR 0017, ADR 0018).
 ///
 /// In order: validate and consume the sole `initialize`; run
@@ -254,7 +493,8 @@ async fn initialize<S>(
     documents: &Documents,
     workspace: &mut Option<Workspace>,
     out_tx: &UnboundedSender<RawMessage>,
-    phase: &mut Phase<S>,
+    phase: &mut Lifecycle<S>,
+    inbound: &InboundRegistry,
     span: &tracing::Span,
     id: RequestId,
     params: Bytes,
@@ -263,15 +503,15 @@ where
     S: Send + Sync + 'static,
 {
     // A second `initialize` after the transaction has run is invalid.
-    if !matches!(phase, Phase::Uninitialized(_)) {
-        enqueue_error(
+    if !matches!(phase, Lifecycle::Uninitialized(_)) {
+        inbound.complete(
             out_tx,
             id,
-            LspError::ServerError {
+            Err(LspError::ServerError {
                 code: -32600,
                 message: "server already initialized".into(),
                 data: None,
-            },
+            }),
         );
         return Flow::Continue;
     }
@@ -281,15 +521,15 @@ where
     let params = match decode_params::<InitializeParams>(&params) {
         Ok(params) => params,
         Err(err) => {
-            enqueue_error(out_tx, id, err);
+            inbound.complete(out_tx, id, Err(err));
             return Flow::Continue;
         }
     };
 
     // Take ownership of the pending registrations and callbacks; the transaction
     // consumes them exactly once.
-    let pending = match std::mem::replace(phase, Phase::ShuttingDown) {
-        Phase::Uninitialized(pending) => *pending,
+    let pending = match std::mem::replace(phase, Lifecycle::Initializing) {
+        Lifecycle::Uninitialized(pending) => *pending,
         // The `matches!` guard above already established this arm.
         _ => unreachable!("initialize runs only while uninitialized"),
     };
@@ -315,7 +555,7 @@ where
         Err(_err) => {
             // ADR 0017's fixed error: configuration or combined-validation
             // failure reports InternalError and enters the close path.
-            enqueue_error(out_tx, id, LspError::internal("initialization failed"));
+            inbound.complete(out_tx, id, Err(LspError::internal("initialization failed")));
             return Flow::Close;
         }
     };
@@ -350,7 +590,7 @@ where
                     // ADR 0018: on_initialize failure sends that error, then
                     // enters the close path; the frozen Router and established
                     // Workspace are never exposed to later dispatch.
-                    enqueue_error(out_tx, id, err);
+                    inbound.complete(out_tx, id, Err(err));
                     return Flow::Close;
                 }
             }
@@ -358,15 +598,15 @@ where
         None => None,
     };
 
-    enqueue_ok(
+    inbound.complete(
         out_tx,
         id,
-        &InitializeResult {
+        encode_body(&InitializeResult {
             capabilities,
             server_info,
-        },
+        }),
     );
-    *phase = Phase::Running(router);
+    *phase = Lifecycle::Running(router);
     Flow::Continue
 }
 
@@ -376,56 +616,6 @@ fn attach_workspace(ctx: Context, workspace: &Option<Workspace>) -> Context {
     match workspace {
         Some(ws) => ctx.with_workspace(ws.clone()),
         None => ctx,
-    }
-}
-
-/// Route one `workspace/executeCommand` request to the typed command table.
-///
-/// The engine decodes [`ExecuteCommandParams`](lsp_types::ExecuteCommandParams)
-/// to select the command by name, then hands the raw argument array to the
-/// erased command handler, which decodes it into the typed `Args` once. An
-/// unknown command name is an invalid parameter for this method.
-#[allow(clippy::too_many_arguments)]
-async fn dispatch_command<S>(
-    state: &Arc<S>,
-    router: &Router<S>,
-    documents: &Documents,
-    workspace: &Option<Workspace>,
-    out_tx: &UnboundedSender<RawMessage>,
-    span: &tracing::Span,
-    id: RequestId,
-    params: Bytes,
-) where
-    S: Send + Sync + 'static,
-{
-    let params: lsp_types::ExecuteCommandParams = match decode_params(&params) {
-        Ok(params) => params,
-        Err(err) => {
-            enqueue_error(out_tx, id, err);
-            return;
-        }
-    };
-    match router.command(&params.command) {
-        Some(handler) => {
-            let ctx = attach_workspace(
-                Context::for_request(id.clone(), span.clone(), out_tx.clone(), documents.clone()),
-                workspace,
-            );
-            let result = handler(
-                Arc::clone(state),
-                ctx,
-                params.arguments,
-                CancellationToken::new(),
-            )
-            .instrument(span.clone())
-            .await;
-            enqueue_encoded(out_tx, id, result);
-        }
-        None => enqueue_error(
-            out_tx,
-            id,
-            LspError::invalid_params(format!("unknown command: {}", params.command)),
-        ),
     }
 }
 
@@ -444,12 +634,6 @@ fn enqueue_encoded(
         Err(err) => error_response(id, &err),
     };
     let _ = out_tx.send(response);
-}
-
-/// Encode `value` and enqueue it as a success response. Used for lifecycle
-/// replies the engine owns directly.
-fn enqueue_ok<R: Serialize>(out_tx: &UnboundedSender<RawMessage>, id: RequestId, value: &R) {
-    enqueue_encoded(out_tx, id, encode_body(value));
 }
 
 fn error_response(id: RequestId, err: &LspError) -> RawMessage {
