@@ -8,6 +8,7 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Span, debug, info_span, warn};
 
+use crate::client::Client;
 use crate::context::Context;
 use crate::documents::Documents;
 use crate::error::Error;
@@ -40,8 +41,9 @@ where
     let (mut reader, writer) = transport.split();
     let server = Arc::new(server);
     let (out_tx, out_rx) = mpsc::unbounded_channel::<RawMessage>();
+    let client = Client::new(out_tx.clone());
     let runtime = default_runtime();
-    let send_handle = runtime.spawn(send_loop(writer, out_rx));
+    let send_handle = runtime.spawn(send_loop(writer, out_rx, client.clone()));
 
     let state: SharedState = Arc::new(Mutex::new(State::Uninitialized));
     let registry: Registry = Arc::new(Mutex::new(HashMap::new()));
@@ -64,28 +66,32 @@ where
                 // unlike `exit`, we let outstanding handlers finish
                 // rather than abort them.
                 warn!("transport closed by peer before exit notification");
-                drop(out_tx);
                 tasks.join_all().await;
+                client.close_connection();
+                client.close_outbound();
+                drop(out_tx);
                 send_handle.join().await;
                 return Ok(Outcome::TransportClosed);
             }
             Err(e) => {
+                client.close_connection();
                 tasks.abort_and_join().await;
-                send_handle.abort();
+                client.close_outbound();
                 send_handle.join().await;
                 return Err(Error::Transport(e));
             }
         };
 
         let flow = match dispatch(
-            &server, &out_tx, &state, &registry, &permits, &mut tasks, msg,
+            &server, &out_tx, &client, &state, &registry, &permits, &mut tasks, msg,
         )
         .await
         {
             Ok(flow) => flow,
             Err(error) => {
+                client.close_connection();
                 tasks.abort_and_join().await;
-                send_handle.abort();
+                client.close_outbound();
                 send_handle.join().await;
                 return Err(error);
             }
@@ -98,7 +104,9 @@ where
             // cleanly, and hand the exit code back to the entry point —
             // which decides whether to terminate the process (binary) or
             // simply return (library / tests).
+            client.close_connection();
             tasks.abort_and_join().await;
+            client.close_outbound();
             drop(out_tx);
             send_handle.join().await;
             return Ok(Outcome::Exit(code));
@@ -168,10 +176,34 @@ pub(crate) enum Outcome {
     Exit(i32),
 }
 
-async fn send_loop<W: TransportWriter>(mut writer: W, mut out_rx: UnboundedReceiver<RawMessage>) {
-    while let Some(msg) = out_rx.recv().await {
+async fn send_loop<W: TransportWriter>(
+    mut writer: W,
+    mut out_rx: UnboundedReceiver<RawMessage>,
+    client: Client,
+) {
+    let outbound_closing = client.outbound_closing();
+    loop {
+        let msg = tokio::select! {
+            biased;
+            msg = out_rx.recv() => msg,
+            () = outbound_closing.cancelled() => {
+                out_rx.close();
+                break;
+            }
+        };
+        let Some(msg) = msg else {
+            client.close_outbound();
+            break;
+        };
         if let Err(e) = writer.send(msg).await {
             warn!(error = %e, "send_loop: transport write failed");
+            client.close_outbound();
+            return;
+        }
+    }
+    while let Some(msg) = out_rx.recv().await {
+        if let Err(e) = writer.send(msg).await {
+            warn!(error = %e, "send_loop: transport write failed while draining");
             return;
         }
     }
@@ -210,6 +242,7 @@ struct CancelParams {
 async fn dispatch<S, R>(
     server: &Arc<S>,
     out_tx: &UnboundedSender<RawMessage>,
+    client: &Client,
     state: &SharedState,
     registry: &Registry,
     permits: &Arc<Semaphore>,
@@ -268,7 +301,7 @@ where
                     let ctx = Context::for_request(
                         id.clone(),
                         span.clone(),
-                        out_tx.clone(),
+                        client.clone(),
                         server.documents().clone(),
                     );
                     let result = server
@@ -289,6 +322,7 @@ where
                         tasks,
                         registry,
                         out_tx,
+                        client,
                         span,
                         id,
                         permit,
@@ -329,7 +363,7 @@ where
                 "exit" => {
                     let ctx = Context::for_notification(
                         span.clone(),
-                        out_tx.clone(),
+                        client.clone(),
                         server.documents().clone(),
                     );
                     server.exit(&ctx).instrument(span).await;
@@ -350,6 +384,7 @@ where
                         tasks,
                         server,
                         out_tx,
+                        client,
                         span,
                         permit,
                         move |server, ctx| async move {
@@ -367,6 +402,7 @@ where
                         tasks,
                         server,
                         out_tx,
+                        client,
                         span,
                         permit,
                         move |server, ctx| async move {
@@ -392,6 +428,7 @@ where
                         tasks,
                         server,
                         out_tx,
+                        client,
                         span,
                         permit,
                         move |server, ctx| async move {
@@ -407,6 +444,7 @@ where
                         tasks,
                         server,
                         out_tx,
+                        client,
                         span,
                         permit,
                         move |server, ctx| async move {
@@ -422,6 +460,7 @@ where
                         tasks,
                         server,
                         out_tx,
+                        client,
                         span,
                         permit,
                         move |server, ctx| async move {
@@ -463,10 +502,12 @@ where
 ///
 /// The task is spawned into the shared [`TaskGroup`] so `exit` can abort it
 /// along with every other in-flight handler.
+#[allow(clippy::too_many_arguments)]
 fn spawn_request<R, F, Fut>(
     tasks: &mut TaskGroup<R>,
     registry: &Registry,
     out_tx: &UnboundedSender<RawMessage>,
+    client: &Client,
     span: Span,
     id: RequestId,
     permit: tokio::sync::OwnedSemaphorePermit,
@@ -487,7 +528,7 @@ fn spawn_request<R, F, Fut>(
     let id_for_task = id.clone();
     let id_for_ctx = id.clone();
     let span_for_ctx = span.clone();
-    let out_tx_for_ctx = out_tx.clone();
+    let client_for_ctx = client.clone();
 
     tasks.spawn(
         async move {
@@ -495,7 +536,7 @@ fn spawn_request<R, F, Fut>(
             // task end (whether the body finished, was cancelled, or
             // panicked) is what releases the concurrency slot.
             let _permit = permit;
-            let ctx = Context::for_request(id_for_ctx, span_for_ctx, out_tx_for_ctx, documents);
+            let ctx = Context::for_request(id_for_ctx, span_for_ctx, client_for_ctx, documents);
             let result = tokio::select! {
                 // `biased`: poll the body before the cancel branch.
                 // When the token fires, both branches wake; biased
@@ -550,7 +591,8 @@ fn handle_cancel(registry: &Registry, out_tx: &UnboundedSender<RawMessage>, para
 fn spawn_notification<R, S, F, Fut>(
     tasks: &mut TaskGroup<R>,
     server: &Arc<S>,
-    out_tx: &UnboundedSender<RawMessage>,
+    _out_tx: &UnboundedSender<RawMessage>,
+    client: &Client,
     span: tracing::Span,
     permit: tokio::sync::OwnedSemaphorePermit,
     body: F,
@@ -561,12 +603,12 @@ fn spawn_notification<R, S, F, Fut>(
     Fut: std::future::Future<Output = ()> + TaskSend + 'static,
 {
     let server = Arc::clone(server);
-    let out_tx = out_tx.clone();
+    let client = client.clone();
     let span_for_task = span.clone();
     tasks.spawn(
         async move {
             let _permit = permit;
-            let ctx = Context::for_notification(span_for_task, out_tx, server.documents().clone());
+            let ctx = Context::for_notification(span_for_task, client, server.documents().clone());
             body(server, ctx).await;
         }
         .instrument(span),

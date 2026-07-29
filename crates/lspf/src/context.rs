@@ -1,28 +1,23 @@
-use std::borrow::Cow;
-
-use bytes::Bytes;
 use lsp_types::PublishDiagnosticsParams;
-use tokio::sync::mpsc::UnboundedSender;
+use lsp_types::notification::PublishDiagnostics;
 use tokio_util::sync::CancellationToken;
 use tracing::{Span, warn};
 
+use crate::client::Client;
 use crate::documents::Documents;
-use crate::raw::{RawMessage, RequestId};
+use crate::raw::RequestId;
 use crate::workspace::Workspace;
 
 /// Per-request handle to framework state (see ADR 0009).
 ///
-/// Commit 1 carried only the request scope; commit 2 adds the send-side
-/// channel through which outgoing helpers (`publish_diagnostics`,
-/// `show_message`, `apply_edit`, …) push notifications and requests onto
-/// the wire. The `Documents` store and workspace-folder cache are
-/// added field-by-field as later commits implement them — `Context`
-/// grows by accretion, never holding `todo!()` stubs.
+/// The handle exposes connection-scoped capabilities such as [`Client`],
+/// [`Documents`], and [`Workspace`] without exposing protocol-owned queues or
+/// registries.
 #[derive(Debug, Clone)]
 pub struct Context {
     pub(crate) request_id: Option<RequestId>,
     pub(crate) span: Span,
-    pub(crate) outgoing: UnboundedSender<RawMessage>,
+    pub(crate) client: Client,
     pub(crate) documents: Documents,
     /// The connection's established [`Workspace`], present once the initialize
     /// transaction has run. Handlers only run after that point, so a handler
@@ -36,28 +31,24 @@ impl Context {
     pub(crate) fn for_request(
         id: RequestId,
         span: Span,
-        outgoing: UnboundedSender<RawMessage>,
+        client: Client,
         documents: Documents,
     ) -> Self {
         Self {
             request_id: Some(id),
             span,
-            outgoing,
+            client,
             documents,
             workspace: None,
             cancellation: None,
         }
     }
 
-    pub(crate) fn for_notification(
-        span: Span,
-        outgoing: UnboundedSender<RawMessage>,
-        documents: Documents,
-    ) -> Self {
+    pub(crate) fn for_notification(span: Span, client: Client, documents: Documents) -> Self {
         Self {
             request_id: None,
             span,
-            outgoing,
+            client,
             documents,
             workspace: None,
             cancellation: None,
@@ -95,6 +86,11 @@ impl Context {
         &self.documents
     }
 
+    /// A cheap clone of the typed handle for this connection's LSP client.
+    pub fn client(&self) -> Client {
+        self.client.clone()
+    }
+
     /// The connection's [`Workspace`], established from `InitializeParams`
     /// during the initialize transaction (ADR 0017, ADR 0018).
     ///
@@ -114,35 +110,23 @@ impl Context {
         Self {
             request_id: None,
             span: Span::current(),
-            outgoing,
+            client: Client::new(outgoing),
             documents,
             workspace: None,
             cancellation: None,
         }
     }
 
-    /// Push a `textDocument/publishDiagnostics` notification onto the
-    /// outgoing channel (fire-and-forget). The dispatcher drains the
-    /// channel into the transport between handler invocations.
+    /// Push a `textDocument/publishDiagnostics` notification through the
+    /// connection's typed [`Client`] (fire-and-forget).
     ///
     /// Errors during serialization or send (channel closed during
     /// shutdown) are logged via `tracing::warn!` rather than surfaced —
     /// the LSP semantics of `publishDiagnostics` is "best effort"; a
     /// failed publish never invalidates the handler that triggered it.
     pub fn publish_diagnostics(&self, params: PublishDiagnosticsParams) {
-        let body = match serde_json::to_vec(&params) {
-            Ok(b) => b,
-            Err(e) => {
-                warn!(error = %e, "publish_diagnostics: serialize failed");
-                return;
-            }
-        };
-        let msg = RawMessage::Notification {
-            method: Cow::Borrowed("textDocument/publishDiagnostics"),
-            params: Bytes::from(body),
-        };
-        if self.outgoing.send(msg).is_err() {
-            warn!("publish_diagnostics: outgoing channel closed");
+        if let Err(error) = self.client.notify::<PublishDiagnostics>(params) {
+            warn!(%error, "publish_diagnostics: notification failed");
         }
     }
 }
