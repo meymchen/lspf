@@ -22,14 +22,15 @@ use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Span, debug, info_span, warn};
 
 use crate::builder::{
-    ConfigureInitialize, InitializeRegistrar, OnInitialize, Registrations, Router, Server,
+    ConfigureInitialize, InitializeRegistrar, OnInitialize, Registrations, Server,
 };
-use crate::codec::{decode_params, encode_body};
+use crate::codec::{decode_params, decode_value, encode_body};
 use crate::context::Context;
 use crate::documents::Documents;
 use crate::error::Error;
 use crate::raw::{JsonRpcError, RawMessage, RequestId};
 use crate::runtime::{Runtime, TaskHandle, TaskSend, default_runtime};
+use crate::service::{IncomingCall, ServiceResult, UserLayer, UserService, build_service_stack};
 use crate::transport::{Transport, TransportError, TransportReader, TransportWriter};
 use crate::workspace::Workspace;
 use crate::{LspError, Result};
@@ -202,6 +203,8 @@ struct Pending<S> {
     registrations: Registrations<S>,
     configure_initialize: Option<ConfigureInitialize<S>>,
     on_initialize: Option<OnInitialize<S>>,
+    layers: Vec<UserLayer<S>>,
+    concurrency_limit: usize,
 }
 
 /// The connection's lifecycle phase. The frozen [`Router`] exists only after a
@@ -210,7 +213,7 @@ struct Pending<S> {
 enum Lifecycle<S> {
     Uninitialized(Box<Pending<S>>),
     Initializing,
-    Running(Arc<Router<S>>),
+    Running(UserService<S>),
     ShuttingDown,
     Exited,
 }
@@ -244,6 +247,8 @@ where
                 registrations: server.registrations,
                 configure_initialize: server.configure_initialize,
                 on_initialize: server.on_initialize,
+                layers: server.layers,
+                concurrency_limit: server.concurrency_limit,
             })),
             inbound: InboundRegistry::default(),
             tasks: TaskGroup::new(runtime),
@@ -339,42 +344,36 @@ where
                     inbound.complete(out_tx, id, encode_body(&serde_json::Value::Null));
                     *phase = Lifecycle::ShuttingDown;
                 }
-                other => {
+                _other => {
                     // Precedence guarantees the connection is running here.
-                    let router = match phase {
-                        Lifecycle::Running(router) => Arc::clone(router),
+                    let service = match phase {
+                        Lifecycle::Running(service) => Arc::clone(service),
                         _ => {
                             inbound.complete(out_tx, id, Err(LspError::ServerNotInitialized));
                             return Flow::Continue;
                         }
                     };
-                    // Commands dispatch beneath `workspace/executeCommand`; an
-                    // explicit request handler for that method is a build-time
-                    // conflict, so the two never coexist.
-                    if (other == "workspace/executeCommand" && router.has_commands())
-                        || router.request(other).is_some()
-                    {
-                        spawn_router_request(
-                            tasks,
-                            Arc::clone(state),
-                            router,
-                            documents.clone(),
-                            workspace.clone(),
-                            out_tx.clone(),
-                            inbound.clone(),
-                            span,
-                            id,
-                            method.into_owned(),
-                            params,
-                            cancellation.expect("non-initialize requests are cancellable"),
-                        );
-                    } else {
-                        inbound.complete(
-                            out_tx,
-                            id,
-                            Err(LspError::MethodNotFound(other.to_string())),
-                        );
-                    }
+                    let params = match decode_value(&params) {
+                        Ok(params) => params,
+                        Err(error) => {
+                            inbound.complete(out_tx, id, Err(error));
+                            return Flow::Continue;
+                        }
+                    };
+                    spawn_service_request(
+                        tasks,
+                        Arc::clone(state),
+                        service,
+                        documents.clone(),
+                        workspace.clone(),
+                        out_tx.clone(),
+                        inbound.clone(),
+                        span,
+                        id,
+                        method.into_owned(),
+                        params,
+                        cancellation.expect("non-initialize requests are cancellable"),
+                    );
                 }
             }
         }
@@ -394,22 +393,29 @@ where
                 // `exit` handled above. A registered custom notification then
                 // dispatches with no response; an unregistered one is ignored.
                 match phase {
-                    Lifecycle::Running(router) => {
-                        if let Some(handler) = router.notification(other) {
-                            let span = info_span!("notification", method = %other);
-                            let ctx = attach_workspace(
-                                Context::for_notification(
-                                    span.clone(),
-                                    out_tx.clone(),
-                                    documents.clone(),
-                                ),
-                                workspace,
-                            );
-                            handler(Arc::clone(state), ctx, params)
-                                .instrument(span)
-                                .await;
-                        } else {
-                            debug!(method = other, "notification ignored");
+                    Lifecycle::Running(service) => {
+                        let params = match decode_value(&params) {
+                            Ok(params) => params,
+                            Err(error) => {
+                                debug!(method = other, %error, "notification params ignored");
+                                return Flow::Continue;
+                            }
+                        };
+                        let span = info_span!("notification", method = %other);
+                        let ctx = attach_workspace(
+                            Context::for_notification(span, out_tx.clone(), documents.clone()),
+                            workspace,
+                        );
+                        let result = service
+                            .call(IncomingCall::notification(
+                                method.into_owned(),
+                                params,
+                                ctx,
+                                Arc::clone(state),
+                            ))
+                            .await;
+                        if !matches!(result, ServiceResult::NoResponse) {
+                            warn!("notification service attempted to produce a response");
                         }
                     }
                     _ => debug!(method = other, "notification before running state ignored"),
@@ -426,10 +432,10 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-fn spawn_router_request<S, R>(
+fn spawn_service_request<S, R>(
     tasks: &mut TaskGroup<R>,
     state: Arc<S>,
-    router: Arc<Router<S>>,
+    service: UserService<S>,
     documents: Documents,
     workspace: Option<Workspace>,
     out_tx: UnboundedSender<RawMessage>,
@@ -437,63 +443,38 @@ fn spawn_router_request<S, R>(
     span: Span,
     id: RequestId,
     method: String,
-    params: Bytes,
+    params: serde_json::Value,
     cancellation: CancellationToken,
 ) where
     S: Send + Sync + 'static,
     R: Runtime,
 {
     let task_span = span.clone();
-    tasks.spawn(
-        async move {
-            let ctx = attach_workspace(
-                Context::for_request(id.clone(), task_span.clone(), out_tx.clone(), documents),
-                &workspace,
-            );
-            let cancellation_for_handler = cancellation.clone();
-            let handler = async {
-                if method == "workspace/executeCommand" && router.has_commands() {
-                    execute_command(&state, &router, ctx, params, cancellation_for_handler).await
-                } else {
-                    router
-                        .request(&method)
-                        .expect("registered request remains in frozen Router")(
-                        state,
-                        ctx,
-                        params,
-                        cancellation_for_handler,
-                    )
-                    .await
-                }
-            };
-            let result = match select(Box::pin(handler), Box::pin(cancellation.cancelled())).await {
-                Either::Left((result, _)) => result,
-                Either::Right(((), _)) => Err(LspError::RequestCancelled),
-            };
-            inbound.complete(&out_tx, id, result);
-        }
-        .instrument(span),
-    );
-}
-
-async fn execute_command<S>(
-    state: &Arc<S>,
-    router: &Router<S>,
-    ctx: Context,
-    params: Bytes,
-    cancellation: CancellationToken,
-) -> std::result::Result<Bytes, LspError>
-where
-    S: Send + Sync + 'static,
-{
-    let params: lsp_types::ExecuteCommandParams = decode_params(&params)?;
-    match router.command(&params.command) {
-        Some(handler) => handler(Arc::clone(state), ctx, params.arguments, cancellation).await,
-        None => Err(LspError::invalid_params(format!(
-            "unknown command: {}",
-            params.command
-        ))),
-    }
+    tasks.spawn(async move {
+        let ctx = attach_workspace(
+            Context::for_request(id.clone(), task_span.clone(), out_tx.clone(), documents),
+            &workspace,
+        )
+        .with_cancellation(cancellation.clone());
+        let call = IncomingCall::request(method, id.clone(), params, ctx, state);
+        let result = match select(
+            Box::pin(service.call(call)),
+            Box::pin(cancellation.cancelled()),
+        )
+        .await
+        {
+            Either::Left((result, _)) => result,
+            Either::Right(((), _)) => ServiceResult::Error(LspError::RequestCancelled),
+        };
+        let result = match result {
+            ServiceResult::Response(value) => encode_body(&value),
+            ServiceResult::Error(error) => Err(error),
+            ServiceResult::NoResponse => {
+                Err(LspError::internal("request service returned no response"))
+            }
+        };
+        inbound.complete(&out_tx, id, result);
+    });
 }
 
 /// Run the one `initialize` transaction (ADR 0017, ADR 0018).
@@ -555,6 +536,8 @@ where
         registrations,
         configure_initialize,
         on_initialize,
+        layers,
+        concurrency_limit,
     } = pending;
 
     // Run the conditional registration transaction against a registrar seeded
@@ -624,7 +607,7 @@ where
             server_info,
         }),
     );
-    *phase = Lifecycle::Running(router);
+    *phase = Lifecycle::Running(build_service_stack(router, layers, concurrency_limit));
     Flow::Continue
 }
 
@@ -637,8 +620,8 @@ fn attach_workspace(ctx: Context, workspace: &Option<Workspace>) -> Context {
     }
 }
 
-/// Enqueue a success response from an already-encoded result (as produced by
-/// an erased custom handler), or the mapped wire error.
+/// Enqueue a success response after the protocol engine's final wire encoding,
+/// or enqueue the mapped wire error.
 fn enqueue_encoded(
     out_tx: &UnboundedSender<RawMessage>,
     id: RequestId,
