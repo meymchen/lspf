@@ -24,6 +24,7 @@ use tracing::{Instrument, Span, debug, info_span, warn};
 use crate::builder::{
     ConfigureInitialize, InitializeRegistrar, OnInitialize, Registrations, Server,
 };
+use crate::client::Client;
 use crate::codec::{decode_params, decode_value, encode_body};
 use crate::context::Context;
 use crate::documents::Documents;
@@ -48,9 +49,10 @@ where
 {
     let (mut reader, writer) = transport.split();
     let (out_tx, out_rx) = mpsc::unbounded_channel::<RawMessage>();
+    let client = Client::new(out_tx.clone());
     let runtime = default_runtime();
-    let send_handle = runtime.spawn(send_loop(writer, out_rx));
-    let mut engine = ProtocolEngine::new(server, runtime, out_tx);
+    let send_handle = runtime.spawn(send_loop(writer, out_rx, client.clone()));
+    let mut engine = ProtocolEngine::new(server, runtime, out_tx, client);
 
     let outcome = loop {
         engine.tasks.reap_finished().await;
@@ -184,10 +186,34 @@ struct CancelParams {
     id: RequestId,
 }
 
-async fn send_loop<W: TransportWriter>(mut writer: W, mut out_rx: UnboundedReceiver<RawMessage>) {
-    while let Some(msg) = out_rx.recv().await {
+async fn send_loop<W: TransportWriter>(
+    mut writer: W,
+    mut out_rx: UnboundedReceiver<RawMessage>,
+    client: Client,
+) {
+    let outbound_closing = client.outbound_closing();
+    loop {
+        let msg = tokio::select! {
+            biased;
+            msg = out_rx.recv() => msg,
+            () = outbound_closing.cancelled() => {
+                out_rx.close();
+                break;
+            }
+        };
+        let Some(msg) = msg else {
+            client.close_outbound();
+            break;
+        };
         if let Err(e) = writer.send(msg).await {
             warn!(error = %e, "send_loop: transport write failed");
+            client.close_outbound();
+            return;
+        }
+    }
+    while let Some(msg) = out_rx.recv().await {
+        if let Err(e) = writer.send(msg).await {
+            warn!(error = %e, "send_loop: transport write failed while draining");
             return;
         }
     }
@@ -231,6 +257,7 @@ struct ProtocolEngine<S, R> {
     inbound: InboundRegistry,
     tasks: TaskGroup<R>,
     out_tx: UnboundedSender<RawMessage>,
+    client: Client,
 }
 
 impl<S, R> ProtocolEngine<S, R>
@@ -238,7 +265,12 @@ where
     S: Send + Sync + 'static,
     R: Runtime,
 {
-    fn new(server: Server<S>, runtime: R, out_tx: UnboundedSender<RawMessage>) -> Self {
+    fn new(
+        server: Server<S>,
+        runtime: R,
+        out_tx: UnboundedSender<RawMessage>,
+        client: Client,
+    ) -> Self {
         Self {
             state: server.state,
             documents: Documents::new(),
@@ -253,6 +285,7 @@ where
             inbound: InboundRegistry::default(),
             tasks: TaskGroup::new(runtime),
             out_tx,
+            client,
         }
     }
 
@@ -262,6 +295,7 @@ where
             &self.documents,
             &mut self.workspace,
             &self.out_tx,
+            &self.client,
             &mut self.lifecycle,
             &self.inbound,
             &mut self.tasks,
@@ -275,8 +309,10 @@ where
             return;
         }
         self.lifecycle = Lifecycle::Exited;
+        self.client.close_connection();
         self.inbound.cancel_all();
         self.tasks.abort_and_join().await;
+        self.client.close_outbound();
     }
 }
 
@@ -289,11 +325,13 @@ enum Flow {
     Close,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn dispatch<S>(
     state: &Arc<S>,
     documents: &Documents,
     workspace: &mut Option<Workspace>,
     out_tx: &UnboundedSender<RawMessage>,
+    client: &Client,
     phase: &mut Lifecycle<S>,
     inbound: &InboundRegistry,
     tasks: &mut TaskGroup<impl Runtime>,
@@ -336,7 +374,8 @@ where
             match method.as_ref() {
                 "initialize" => {
                     return initialize(
-                        state, documents, workspace, out_tx, phase, inbound, &span, id, params,
+                        state, documents, workspace, out_tx, client, phase, inbound, &span, id,
+                        params,
                     )
                     .await;
                 }
@@ -367,6 +406,7 @@ where
                         documents.clone(),
                         workspace.clone(),
                         out_tx.clone(),
+                        client.clone(),
                         inbound.clone(),
                         span,
                         id,
@@ -403,7 +443,7 @@ where
                         };
                         let span = info_span!("notification", method = %other);
                         let ctx = attach_workspace(
-                            Context::for_notification(span, out_tx.clone(), documents.clone()),
+                            Context::for_notification(span, client.clone(), documents.clone()),
                             workspace,
                         );
                         let result = service
@@ -439,6 +479,7 @@ fn spawn_service_request<S, R>(
     documents: Documents,
     workspace: Option<Workspace>,
     out_tx: UnboundedSender<RawMessage>,
+    client: Client,
     inbound: InboundRegistry,
     span: Span,
     id: RequestId,
@@ -452,7 +493,7 @@ fn spawn_service_request<S, R>(
     let task_span = span.clone();
     tasks.spawn(async move {
         let ctx = attach_workspace(
-            Context::for_request(id.clone(), task_span.clone(), out_tx.clone(), documents),
+            Context::for_request(id.clone(), task_span.clone(), client, documents),
             &workspace,
         )
         .with_cancellation(cancellation.clone());
@@ -492,6 +533,7 @@ async fn initialize<S>(
     documents: &Documents,
     workspace: &mut Option<Workspace>,
     out_tx: &UnboundedSender<RawMessage>,
+    client: &Client,
     phase: &mut Lifecycle<S>,
     inbound: &InboundRegistry,
     span: &tracing::Span,
@@ -580,7 +622,7 @@ where
     let server_info = match on_initialize {
         Some(hook) => {
             let ctx =
-                Context::for_request(id.clone(), span.clone(), out_tx.clone(), documents.clone())
+                Context::for_request(id.clone(), span.clone(), client.clone(), documents.clone())
                     .with_workspace(established);
             match hook(Arc::clone(state), ctx, params, CancellationToken::new())
                 .instrument(span.clone())
