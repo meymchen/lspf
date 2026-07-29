@@ -200,6 +200,47 @@ async fn receive_for(
     .expect("server response before watchdog timeout")
 }
 
+fn start<S: Send + Sync + 'static>(
+    server: Server<S>,
+) -> (
+    mpsc::UnboundedSender<RawMessage>,
+    mpsc::UnboundedReceiver<RawMessage>,
+    tokio::task::JoinHandle<lspf::Result<()>>,
+) {
+    let (incoming_tx, incoming_rx) = mpsc::unbounded_channel();
+    let (outgoing_tx, outgoing_rx) = mpsc::unbounded_channel();
+    let serve = tokio::spawn(server.serve(ChannelTransport {
+        incoming: incoming_rx,
+        outgoing: outgoing_tx,
+    }));
+    (incoming_tx, outgoing_rx, serve)
+}
+
+async fn initialize_connection(
+    incoming: &mpsc::UnboundedSender<RawMessage>,
+    outgoing: &mut mpsc::UnboundedReceiver<RawMessage>,
+) {
+    incoming
+        .send(request(
+            1,
+            "initialize",
+            json!({ "processId": null, "rootUri": null, "capabilities": {} }),
+        ))
+        .unwrap();
+    let _ = receive_for(outgoing, 1).await;
+}
+
+async fn stop(
+    incoming: mpsc::UnboundedSender<RawMessage>,
+    serve: tokio::task::JoinHandle<lspf::Result<()>>,
+) {
+    incoming.send(notification("exit")).unwrap();
+    serve
+        .await
+        .expect("serve task did not panic")
+        .expect("serve ended cleanly");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn incoming_call_and_last_registered_outermost_order_are_preserved() {
     let events = Arc::new(Mutex::new(Vec::new()));
@@ -220,21 +261,8 @@ async fn incoming_call_and_last_registered_outermost_order_are_preserved() {
     })
     .build()
     .expect("server builds");
-    let (incoming_tx, incoming_rx) = mpsc::unbounded_channel();
-    let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel();
-    let serve = tokio::spawn(server.serve(ChannelTransport {
-        incoming: incoming_rx,
-        outgoing: outgoing_tx,
-    }));
-
-    incoming_tx
-        .send(request(
-            1,
-            "initialize",
-            json!({ "processId": null, "rootUri": null, "capabilities": {} }),
-        ))
-        .unwrap();
-    let _ = receive_for(&mut outgoing_rx, 1).await;
+    let (incoming_tx, mut outgoing_rx, serve) = start(server);
+    initialize_connection(&incoming_tx, &mut outgoing_rx).await;
     incoming_tx
         .send(request(2, Echo::METHOD, json!("hello")))
         .unwrap();
@@ -251,11 +279,7 @@ async fn incoming_call_and_last_registered_outermost_order_are_preserved() {
         ["second in", "first in", "router", "first out", "second out"]
     );
 
-    incoming_tx.send(notification("exit")).unwrap();
-    serve
-        .await
-        .expect("serve task did not panic")
-        .expect("serve ended cleanly");
+    stop(incoming_tx, serve).await;
 }
 
 fn error_code(message: &RawMessage) -> Option<i32> {
@@ -280,21 +304,8 @@ async fn panics_are_isolated_and_the_connection_processes_later_calls() {
     .layer(PanickingLayer)
     .build()
     .expect("server builds");
-    let (incoming_tx, incoming_rx) = mpsc::unbounded_channel();
-    let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel();
-    let serve = tokio::spawn(server.serve(ChannelTransport {
-        incoming: incoming_rx,
-        outgoing: outgoing_tx,
-    }));
-
-    incoming_tx
-        .send(request(
-            1,
-            "initialize",
-            json!({ "processId": null, "rootUri": null, "capabilities": {} }),
-        ))
-        .unwrap();
-    let _ = receive_for(&mut outgoing_rx, 1).await;
+    let (incoming_tx, mut outgoing_rx, serve) = start(server);
+    initialize_connection(&incoming_tx, &mut outgoing_rx).await;
 
     incoming_tx
         .send(request(2, Echo::METHOD, json!("handler panic")))
@@ -345,11 +356,7 @@ async fn panics_are_isolated_and_the_connection_processes_later_calls() {
         "notifications must not emit responses"
     );
 
-    incoming_tx.send(notification("exit")).unwrap();
-    serve
-        .await
-        .expect("serve task did not panic")
-        .expect("serve ended cleanly");
+    stop(incoming_tx, serve).await;
 }
 
 enum Slow {}
@@ -438,21 +445,8 @@ async fn concurrency_limit_covers_the_complete_user_layer_chain() {
         .concurrency_limit(1)
         .build()
         .expect("server builds");
-    let (incoming_tx, incoming_rx) = mpsc::unbounded_channel();
-    let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel();
-    let serve = tokio::spawn(server.serve(ChannelTransport {
-        incoming: incoming_rx,
-        outgoing: outgoing_tx,
-    }));
-
-    incoming_tx
-        .send(request(
-            1,
-            "initialize",
-            json!({ "processId": null, "rootUri": null, "capabilities": {} }),
-        ))
-        .unwrap();
-    let _ = receive_for(&mut outgoing_rx, 1).await;
+    let (incoming_tx, mut outgoing_rx, serve) = start(server);
+    initialize_connection(&incoming_tx, &mut outgoing_rx).await;
     incoming_tx
         .send(request(2, Slow::METHOD, json!(1)))
         .unwrap();
@@ -487,11 +481,7 @@ async fn concurrency_limit_covers_the_complete_user_layer_chain() {
         "the acquire span must include permit queue time; longest was {max_queue:?}"
     );
 
-    incoming_tx.send(notification("exit")).unwrap();
-    serve
-        .await
-        .expect("serve task did not panic")
-        .expect("serve ended cleanly");
+    stop(incoming_tx, serve).await;
 }
 
 static PARAM_DECODES: AtomicUsize = AtomicUsize::new(0);
@@ -586,21 +576,8 @@ async fn values_cross_layers_with_one_typed_decode_and_encode() {
         .layer(PassThroughLayer)
         .build()
         .expect("server builds");
-    let (incoming_tx, incoming_rx) = mpsc::unbounded_channel();
-    let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel();
-    let serve = tokio::spawn(server.serve(ChannelTransport {
-        incoming: incoming_rx,
-        outgoing: outgoing_tx,
-    }));
-
-    incoming_tx
-        .send(request(
-            1,
-            "initialize",
-            json!({ "processId": null, "rootUri": null, "capabilities": {} }),
-        ))
-        .unwrap();
-    let _ = receive_for(&mut outgoing_rx, 1).await;
+    let (incoming_tx, mut outgoing_rx, serve) = start(server);
+    initialize_connection(&incoming_tx, &mut outgoing_rx).await;
     incoming_tx
         .send(request(2, Counted::METHOD, json!("value")))
         .unwrap();
@@ -612,9 +589,5 @@ async fn values_cross_layers_with_one_typed_decode_and_encode() {
     assert_eq!(PARAM_DECODES.load(Ordering::SeqCst), 1);
     assert_eq!(RESULT_ENCODES.load(Ordering::SeqCst), 1);
 
-    incoming_tx.send(notification("exit")).unwrap();
-    serve
-        .await
-        .expect("serve task did not panic")
-        .expect("serve ended cleanly");
+    stop(incoming_tx, serve).await;
 }
