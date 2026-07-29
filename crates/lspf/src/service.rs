@@ -8,7 +8,6 @@ use std::sync::Arc;
 use futures_util::FutureExt;
 use serde_json::Value;
 use tokio::sync::Semaphore;
-use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, error, info_span};
 
 use crate::builder::Router;
@@ -36,7 +35,6 @@ pub struct IncomingCall<S> {
     params: Value,
     context: Context,
     state: Arc<S>,
-    cancellation: Option<CancellationToken>,
 }
 
 impl<S> IncomingCall<S> {
@@ -46,7 +44,6 @@ impl<S> IncomingCall<S> {
         params: Value,
         context: Context,
         state: Arc<S>,
-        cancellation: CancellationToken,
     ) -> Self {
         Self {
             kind: CallKind::Request,
@@ -55,7 +52,6 @@ impl<S> IncomingCall<S> {
             params,
             context,
             state,
-            cancellation: Some(cancellation),
         }
     }
 
@@ -72,7 +68,6 @@ impl<S> IncomingCall<S> {
             params,
             context,
             state,
-            cancellation: None,
         }
     }
 
@@ -102,10 +97,6 @@ impl<S> IncomingCall<S> {
 
     pub fn state(&self) -> &Arc<S> {
         &self.state
-    }
-
-    pub fn cancellation(&self) -> Option<&CancellationToken> {
-        self.cancellation.as_ref()
     }
 }
 
@@ -180,7 +171,11 @@ impl<S: Send + Sync + 'static> Service<S> for RouterService<S> {
         Box::pin(async move {
             match call.kind {
                 CallKind::Request => {
-                    let cancellation = call.cancellation.expect("request calls carry cancellation");
+                    let cancellation = call
+                        .context
+                        .cancellation()
+                        .cloned()
+                        .expect("request contexts carry cancellation");
                     let result = if call.method == "workspace/executeCommand"
                         && router.has_commands()
                     {

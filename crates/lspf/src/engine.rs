@@ -24,7 +24,7 @@ use tracing::{Instrument, Span, debug, info_span, warn};
 use crate::builder::{
     ConfigureInitialize, InitializeRegistrar, OnInitialize, Registrations, Server,
 };
-use crate::codec::{decode_params, encode_body};
+use crate::codec::{decode_params, decode_value, encode_body};
 use crate::context::Context;
 use crate::documents::Documents;
 use crate::error::Error;
@@ -454,9 +454,9 @@ fn spawn_service_request<S, R>(
         let ctx = attach_workspace(
             Context::for_request(id.clone(), task_span.clone(), out_tx.clone(), documents),
             &workspace,
-        );
-        let call =
-            IncomingCall::request(method, id.clone(), params, ctx, state, cancellation.clone());
+        )
+        .with_cancellation(cancellation.clone());
+        let call = IncomingCall::request(method, id.clone(), params, ctx, state);
         let result = match select(
             Box::pin(service.call(call)),
             Box::pin(cancellation.cancelled()),
@@ -609,11 +609,6 @@ where
     );
     *phase = Lifecycle::Running(build_service_stack(router, layers, concurrency_limit));
     Flow::Continue
-}
-
-fn decode_value(params: &Bytes) -> std::result::Result<serde_json::Value, LspError> {
-    let bytes: &[u8] = if params.is_empty() { b"{}" } else { params };
-    serde_json::from_slice(bytes).map_err(LspError::invalid_params)
 }
 
 /// Attach the established [`Workspace`] to a handler `Context`, if one exists.

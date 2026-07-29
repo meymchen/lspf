@@ -29,6 +29,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::capability::CapabilityBuilder;
+use crate::codec::erase_value;
 use crate::context::Context;
 use crate::error::{BuildError, LspError};
 use crate::features::FeatureSpec;
@@ -124,8 +125,7 @@ where
             let parsed: R::Params =
                 serde_json::from_value(params).map_err(LspError::invalid_params)?;
             let result = handler(state, ctx, parsed, ct).await?;
-            serde_json::to_value(result)
-                .map_err(|error| LspError::internal(format!("serialization failed: {error}")))
+            erase_value(result)
         })
     })
 }
@@ -262,8 +262,7 @@ impl<S: Send + Sync + 'static> Registrations<S> {
                 let args: Args = serde_json::from_value(Value::Array(arguments))
                     .map_err(LspError::invalid_params)?;
                 let result = handler(state, ctx, args, ct).await?;
-                serde_json::to_value(result)
-                    .map_err(|error| LspError::internal(format!("serialization failed: {error}")))
+                erase_value(result)
             })
         });
         if self.commands.insert(name.clone(), erased).is_some() {
