@@ -15,6 +15,7 @@ pub mod features;
 mod raw;
 mod runtime;
 mod server;
+mod service;
 mod transport;
 mod workspace;
 
@@ -30,6 +31,7 @@ pub use error::{BuildError, Error, LspError, Result};
 pub use features::FeatureSpec;
 pub use raw::{JsonRpcError, RawMessage, RequestId};
 pub use server::LanguageServer;
+pub use service::{CallKind, IncomingCall, Layer, Next, ServiceFuture, ServiceResult};
 #[cfg(not(target_arch = "wasm32"))]
 pub use transport::{StdioBuilder, StdioReader, StdioTransport, StdioWriter, stdio};
 pub use transport::{Transport, TransportError, TransportReader, TransportWriter};
