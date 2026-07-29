@@ -1,10 +1,10 @@
 //! The single JSON-RPC params/result codec (ADR 0017's "exactly one decode
 //! per dispatched method and exactly one result encode per request" rule).
 //!
-//! Both the erased custom-request handler and the protocol engine's own
-//! lifecycle replies go through these two functions, so decode/encode
-//! semantics — including how malformed input maps to a wire error — live in
-//! one place.
+//! The protocol engine uses these functions at its wire boundary. Normalized
+//! user calls cross the Service stack as `serde_json::Value`, and typed erased
+//! handlers convert between that decoded representation and native Rust values
+//! without introducing another byte or string boundary.
 
 use bytes::Bytes;
 use serde::Serialize;
