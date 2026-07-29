@@ -662,10 +662,10 @@ impl<S: Send + Sync + 'static> InitializeRegistrar<S> {
         &mut self,
         op: impl FnOnce(&mut Registrations<S>) -> Result<(), BuildError>,
     ) -> &mut Self {
-        if self.error.is_none() {
-            if let Err(err) = op(&mut self.registrations) {
-                self.error = Some(err);
-            }
+        if self.error.is_none()
+            && let Err(err) = op(&mut self.registrations)
+        {
+            self.error = Some(err);
         }
         self
     }

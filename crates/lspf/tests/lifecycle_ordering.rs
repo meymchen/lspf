@@ -229,8 +229,7 @@ async fn drive_uninitialized(msg: RawMessage) -> Vec<RawMessage> {
         .expect("serve returned within 2s")
         .expect("server task did not panic");
 
-    let v = outbox.lock().unwrap().clone();
-    v
+    outbox.lock().unwrap().clone()
 }
 
 /// A server whose `didOpen` sleeps a long time before publishing, so a
