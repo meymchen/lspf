@@ -77,6 +77,7 @@ where
                 client.close_connection();
                 tasks.abort_and_join().await;
                 client.close_outbound();
+                send_handle.abort();
                 send_handle.join().await;
                 return Err(Error::Transport(e));
             }
@@ -92,6 +93,7 @@ where
                 client.close_connection();
                 tasks.abort_and_join().await;
                 client.close_outbound();
+                send_handle.abort();
                 send_handle.join().await;
                 return Err(error);
             }
