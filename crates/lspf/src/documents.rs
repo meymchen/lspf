@@ -11,19 +11,15 @@ use ropey::Rope;
 ///
 /// LSP defaults to UTF-16; lspf prefers UTF-8 when the client offers it.
 /// The store's current value governs every `position ↔ offset` conversion.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PositionEncoding {
     /// `Position.character` is a UTF-8 byte offset within the line.
     Utf8,
     /// `Position.character` is a UTF-16 code-unit offset within the line.
+    ///
+    /// LSP-mandatory default until UTF-8 negotiation (issue #10) overwrites it.
+    #[default]
     Utf16,
-}
-
-impl Default for PositionEncoding {
-    fn default() -> Self {
-        // LSP-mandatory default until UTF-8 negotiation (issue #10) overwrites it.
-        Self::Utf16
-    }
 }
 
 /// A single tracked text document (ADR 0005).
