@@ -15,6 +15,22 @@ pub enum Error {
     Transport(#[from] TransportError),
 }
 
+/// A failure to enqueue a typed server-to-client operation.
+#[derive(Debug, Error)]
+pub enum ClientError {
+    /// The typed parameters could not be encoded as JSON.
+    #[error("failed to serialize client parameters: {0}")]
+    Serialize(#[source] serde_json::Error),
+
+    /// The connection began closing before the operation could be enqueued.
+    #[error("client connection is closed")]
+    ConnectionClosed,
+
+    /// The engine-owned outbound queue is closed.
+    #[error("client outbound queue is closed")]
+    OutboundClosed,
+}
+
 /// A configuration error surfaced by [`ServerBuilder::build`](crate::ServerBuilder::build).
 ///
 /// `BuildError` is deliberately distinct from [`LspError`]: it names a static
