@@ -66,6 +66,10 @@ pub enum BuildError {
     /// hook has at most one registration (ADR 0018).
     #[error("lifecycle hook `{0}` may only be supplied once")]
     DuplicateLifecycleHook(&'static str),
+
+    /// A zero concurrency limit could never admit a user call.
+    #[error("concurrency limit must be greater than zero")]
+    InvalidConcurrencyLimit,
 }
 
 #[derive(Debug, Error)]

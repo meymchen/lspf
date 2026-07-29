@@ -3,6 +3,7 @@ use std::borrow::Cow;
 use bytes::Bytes;
 use lsp_types::PublishDiagnosticsParams;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio_util::sync::CancellationToken;
 use tracing::{Span, warn};
 
 use crate::documents::Documents;
@@ -28,6 +29,7 @@ pub struct Context {
     /// always observes `Some`; it is `None` only in the pre-init lifecycle
     /// hooks and legacy dispatch paths that predate workspace establishment.
     pub(crate) workspace: Option<Workspace>,
+    pub(crate) cancellation: Option<CancellationToken>,
 }
 
 impl Context {
@@ -43,6 +45,7 @@ impl Context {
             outgoing,
             documents,
             workspace: None,
+            cancellation: None,
         }
     }
 
@@ -57,6 +60,7 @@ impl Context {
             outgoing,
             documents,
             workspace: None,
+            cancellation: None,
         }
     }
 
@@ -67,6 +71,15 @@ impl Context {
     pub(crate) fn with_workspace(mut self, workspace: Workspace) -> Self {
         self.workspace = Some(workspace);
         self
+    }
+
+    pub(crate) fn with_cancellation(mut self, cancellation: CancellationToken) -> Self {
+        self.cancellation = Some(cancellation);
+        self
+    }
+
+    pub(crate) fn cancellation(&self) -> Option<&CancellationToken> {
+        self.cancellation.as_ref()
     }
 
     pub fn request_id(&self) -> Option<&RequestId> {
@@ -104,6 +117,7 @@ impl Context {
             outgoing,
             documents,
             workspace: None,
+            cancellation: None,
         }
     }
 
