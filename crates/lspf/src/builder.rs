@@ -19,7 +19,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use bytes::Bytes;
 use lsp_types::notification::Notification;
 use lsp_types::request::Request;
 use lsp_types::{InitializeParams, ServerCapabilities, ServerInfo};
@@ -30,10 +29,11 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::capability::CapabilityBuilder;
-use crate::codec::{decode_params, encode_body};
+use crate::codec::erase_value;
 use crate::context::Context;
 use crate::error::{BuildError, LspError};
 use crate::features::FeatureSpec;
+use crate::service::{Layer, UserLayer};
 
 /// Method names owned by the framework's lifecycle; a custom request or
 /// notification may not shadow one of them.
@@ -49,10 +49,9 @@ const RESERVED_METHODS: &[&str] = &[
 /// explicit request handler for this method cannot coexist.
 const EXECUTE_COMMAND_METHOD: &str = "workspace/executeCommand";
 
-/// The future produced by an erased request or command handler: its
-/// already-encoded result bytes or the wire error to report. Encoding happens
-/// exactly once, inside the erased handler, so the engine only moves the bytes.
-type HandlerFuture = Pin<Box<dyn Future<Output = Result<Bytes, LspError>> + Send>>;
+/// The future produced by an erased request or command handler: its decoded,
+/// method-erased result or the error to report.
+type HandlerFuture = Pin<Box<dyn Future<Output = Result<Value, LspError>> + Send>>;
 
 /// The future produced by an erased notification handler. A notification has no
 /// response, so it resolves to `()`; when decoding fails the future logs the
@@ -66,7 +65,7 @@ type NotificationFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 /// the success value once. Malformed parameters become
 /// [`LspError::InvalidParams`] without ever calling the typed handler.
 pub(crate) type ErasedRequestHandler<S> =
-    Box<dyn Fn(Arc<S>, Context, Bytes, CancellationToken) -> HandlerFuture + Send + Sync>;
+    Box<dyn Fn(Arc<S>, Context, Value, CancellationToken) -> HandlerFuture + Send + Sync>;
 
 /// A type-erased notification handler stored in the frozen [`Router`].
 ///
@@ -74,7 +73,7 @@ pub(crate) type ErasedRequestHandler<S> =
 /// it encodes nothing: notifications have no response. Malformed parameters are
 /// logged and dropped without ever calling the typed handler.
 pub(crate) type ErasedNotificationHandler<S> =
-    Box<dyn Fn(Arc<S>, Context, Bytes) -> NotificationFuture + Send + Sync>;
+    Box<dyn Fn(Arc<S>, Context, Value) -> NotificationFuture + Send + Sync>;
 
 /// A type-erased command handler stored in the frozen [`Router`].
 ///
@@ -123,9 +122,10 @@ where
     Box::new(move |state, ctx, params, ct| {
         let handler = Arc::clone(&handler);
         Box::pin(async move {
-            let parsed: R::Params = decode_params(&params)?;
+            let parsed: R::Params =
+                serde_json::from_value(params).map_err(LspError::invalid_params)?;
             let result = handler(state, ctx, parsed, ct).await?;
-            encode_body(&result)
+            erase_value(result)
         })
     })
 }
@@ -213,15 +213,15 @@ impl<S: Send + Sync + 'static> Registrations<S> {
         let erased: ErasedNotificationHandler<S> = Box::new(move |state, ctx, params| {
             let handler = Arc::clone(&handler);
             Box::pin(async move {
-                let parsed: N::Params = match decode_params(&params) {
+                let parsed: N::Params = match serde_json::from_value(params) {
                     Ok(parsed) => parsed,
-                    Err(err) => {
+                    Err(error) => {
                         // A notification has no reply, so a decode failure is
                         // reported through tracing and dropped; later messages
                         // are unaffected (ADR 0017).
                         warn!(
                             method = N::METHOD,
-                            error = %err,
+                            %error,
                             "dropping notification with malformed params"
                         );
                         return;
@@ -262,7 +262,7 @@ impl<S: Send + Sync + 'static> Registrations<S> {
                 let args: Args = serde_json::from_value(Value::Array(arguments))
                     .map_err(LspError::invalid_params)?;
                 let result = handler(state, ctx, args, ct).await?;
-                encode_body(&result)
+                erase_value(result)
             })
         });
         if self.commands.insert(name.clone(), erased).is_some() {
@@ -349,6 +349,8 @@ pub struct ServerBuilder<S> {
     registrations: Registrations<S>,
     configure_initialize: Option<ConfigureInitialize<S>>,
     on_initialize: Option<OnInitialize<S>>,
+    layers: Vec<UserLayer<S>>,
+    concurrency_limit: usize,
     /// First registration error seen, if any. Reported by `build`.
     error: Option<BuildError>,
 }
@@ -360,6 +362,8 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
             registrations: Registrations::new(),
             configure_initialize: None,
             on_initialize: None,
+            layers: Vec::new(),
+            concurrency_limit: crate::DEFAULT_CONCURRENCY_LIMIT,
             error: None,
         }
     }
@@ -524,6 +528,29 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
         self
     }
 
+    /// Register a user Layer around normalized user dispatch.
+    ///
+    /// The last registered Layer is outermost among user Layers. Framework
+    /// panic isolation, tracing, and concurrency limiting remain outside it.
+    pub fn layer<L>(mut self, layer: L) -> Self
+    where
+        L: Layer<S>,
+    {
+        self.layers.push(Arc::new(layer));
+        self
+    }
+
+    /// Set the maximum number of calls executing inside the complete user
+    /// Layer chain. Zero is rejected by [`build`](Self::build).
+    pub fn concurrency_limit(mut self, limit: usize) -> Self {
+        if limit == 0 {
+            self.record(BuildError::InvalidConcurrencyLimit);
+        } else {
+            self.concurrency_limit = limit;
+        }
+        self
+    }
+
     /// Validate the complete static registration set and return the [`Server`].
     ///
     /// Performs no I/O and does not run `configure_initialize`; the Router is
@@ -541,6 +568,8 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
             registrations: self.registrations,
             configure_initialize: self.configure_initialize,
             on_initialize: self.on_initialize,
+            layers: self.layers,
+            concurrency_limit: self.concurrency_limit,
         })
     }
 
@@ -663,6 +692,8 @@ pub struct Server<S> {
     pub(crate) registrations: Registrations<S>,
     pub(crate) configure_initialize: Option<ConfigureInitialize<S>>,
     pub(crate) on_initialize: Option<OnInitialize<S>>,
+    pub(crate) layers: Vec<UserLayer<S>>,
+    pub(crate) concurrency_limit: usize,
 }
 
 impl<S: Send + Sync + 'static> Server<S> {
