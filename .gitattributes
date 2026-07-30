@@ -1,0 +1,18 @@
+# Normalize text files to LF across all supported platforms.
+* text=auto eol=lf
+
+# Preserve CRLF for native Windows command scripts.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Keep common binary formats out of text normalization and diffs.
+*.gif binary
+*.gz binary
+*.ico binary
+*.jpeg binary
+*.jpg binary
+*.pdf binary
+*.png binary
+*.woff binary
+*.woff2 binary
+*.zip binary
