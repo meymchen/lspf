@@ -549,8 +549,7 @@ mod tests {
 
         // Spawn the request future, then immediately drop the JoinHandle
         // which cancels the task before the response arrives.
-        let handle =
-            tokio::spawn(async move { client2.request::<PingRequest>(json!({})).await });
+        let handle = tokio::spawn(async move { client2.request::<PingRequest>(json!({})).await });
 
         // Pull the request off the wire so we know insert() ran.
         let msg = receiver.recv().await.unwrap();
