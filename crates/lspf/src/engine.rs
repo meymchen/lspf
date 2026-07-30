@@ -24,7 +24,7 @@ use tracing::{Instrument, Span, debug, info_span, warn};
 use crate::builder::{
     ConfigureInitialize, InitializeRegistrar, OnInitialize, Registrations, Server,
 };
-use crate::client::Client;
+use crate::client::{Client, OutboundRegistry};
 use crate::codec::{decode_params, decode_value, encode_body};
 use crate::context::Context;
 use crate::documents::Documents;
@@ -49,7 +49,8 @@ where
 {
     let (mut reader, writer) = transport.split();
     let (out_tx, out_rx) = mpsc::unbounded_channel::<RawMessage>();
-    let client = Client::new(out_tx.clone());
+    let outbound = OutboundRegistry::default();
+    let client = Client::new(out_tx.clone(), outbound);
     let runtime = default_runtime();
     let send_handle = runtime.spawn(send_loop(writer, out_rx, client.clone()));
     let mut engine = ProtocolEngine::new(server, runtime, out_tx, client);
@@ -310,6 +311,10 @@ where
         }
         self.lifecycle = Lifecycle::Exited;
         self.client.close_connection();
+        // Complete all pending outbound requests before cancelling inbound tasks,
+        // so handler futures awaiting a client response see the session-closed
+        // error, allowing them to unblock and exit cleanly.
+        self.client.outbound_registry().close_all();
         self.inbound.cancel_all();
         self.tasks.abort_and_join().await;
         self.client.close_outbound();
@@ -462,7 +467,17 @@ where
                 }
             }
         },
-        RawMessage::Response { .. } => warn!("ignoring unexpected response"),
+        RawMessage::Response { id, result } => {
+            // Only numeric IDs are allocated by `OutboundRegistry`.
+            let id_num = match &id {
+                RequestId::Number(n) => Some(*n as u32),
+                RequestId::String(_) => None,
+            };
+            let delivered = id_num.is_some_and(|n| client.outbound_registry().complete(n, result));
+            if !delivered {
+                debug!(?id, "ignoring response with unknown or non-numeric id");
+            }
+        }
         RawMessage::ProtocolError { error } => {
             let _ = out_tx.send(RawMessage::ProtocolError { error });
         }
