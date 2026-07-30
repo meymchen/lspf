@@ -41,6 +41,27 @@ impl Default for OutboundInner {
     }
 }
 
+/// RAII guard that removes a pending outbound-request entry from the registry
+/// when dropped. Guards against cancelled or failed `request()` futures that
+/// would otherwise leak entries in the pending map indefinitely.
+struct PendingGuard {
+    registry: OutboundRegistry,
+    id: u32,
+}
+
+impl PendingGuard {
+    fn new(registry: OutboundRegistry, id: u32) -> Self {
+        Self { registry, id }
+    }
+}
+
+impl Drop for PendingGuard {
+    fn drop(&mut self) {
+        // Silently no-ops if the entry was already removed by `complete()`.
+        self.registry.remove(self.id);
+    }
+}
+
 impl OutboundRegistry {
     /// Allocate the next available outbound request ID (starting at 1,
     /// wrapping around while scanning for an unused slot) and store the
@@ -208,6 +229,9 @@ impl Client {
 
         // 3. Allocate an ID and insert the pending entry.
         let (id, rx) = self.outbound.insert();
+        // Guard ensures the pending entry is removed if this future is dropped
+        // before a response arrives (e.g. due to caller cancellation).
+        let _guard = PendingGuard::new(self.outbound.clone(), id);
         let request_id = RequestId::Number(id as i32);
 
         // 4. Enqueue.  On any failure remove and complete the pending entry.
@@ -507,5 +531,48 @@ mod tests {
 
         let err = handle.await.unwrap().unwrap_err();
         assert!(matches!(err, ClientError::Remote { code: -32000, .. }));
+    }
+
+    #[tokio::test]
+    async fn dropping_request_future_removes_pending_entry() {
+        use lsp_types::request::Request as LspRequest;
+
+        enum PingRequest {}
+        impl LspRequest for PingRequest {
+            type Params = serde_json::Value;
+            type Result = String;
+            const METHOD: &'static str = "test/ping";
+        }
+
+        let (client, mut receiver) = make_client();
+        let client2 = client.clone();
+
+        // Spawn the request future, then immediately drop the JoinHandle
+        // which cancels the task before the response arrives.
+        let handle =
+            tokio::spawn(async move { client2.request::<PingRequest>(json!({})).await });
+
+        // Pull the request off the wire so we know insert() ran.
+        let msg = receiver.recv().await.unwrap();
+        let id_num = match msg {
+            RawMessage::Request {
+                id: NumberOrString::Number(n),
+                ..
+            } => n as u32,
+            _ => panic!("expected numeric request"),
+        };
+
+        // Abort the task (simulates caller cancellation).
+        handle.abort();
+        let _ = handle.await; // wait for abort to complete
+
+        // The pending entry must have been removed by PendingGuard.
+        // complete() should return false because the entry is gone.
+        assert!(
+            !client
+                .outbound_registry()
+                .complete(id_num, Ok(Bytes::from_static(b"\"pong\""))),
+            "pending entry was not cleaned up after future was dropped"
+        );
     }
 }
