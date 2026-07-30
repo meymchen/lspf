@@ -468,10 +468,10 @@ where
             }
         },
         RawMessage::Response { id, result } => {
-            // Only numeric IDs are allocated by `OutboundRegistry`.
+            // Only positive numeric IDs are allocated by `OutboundRegistry`.
             let id_num = match &id {
-                RequestId::Number(n) => Some(*n as u32),
-                RequestId::String(_) => None,
+                RequestId::Number(n) if *n > 0 => Some(*n as u32),
+                _ => None,
             };
             let delivered = id_num.is_some_and(|n| client.outbound_registry().complete(n, result));
             if !delivered {
