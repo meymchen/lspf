@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `ClientError::Cancelled` and `ClientError::IdExhausted` variants.
+
+### Changed
+
+- Outbound request IDs are now allocated from a monotonic, never-reused
+  sequence instead of wrapping around, so a late response for an abandoned
+  request can never complete a later request.
+- Abandoning an enqueued outbound request now emits one typed
+  `$/cancelRequest` notification for the request's ID; requests dropped before
+  enqueue emit nothing.
+- Session close now completes every pending outbound request with
+  `ClientError::Cancelled` instead of a generic session-closed error.
+
 ## [0.1.2] - 2026-06-22
 
 ### Fixed

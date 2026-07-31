@@ -312,8 +312,8 @@ where
         self.lifecycle = Lifecycle::Exited;
         self.client.close_connection();
         // Complete all pending outbound requests before cancelling inbound tasks,
-        // so handler futures awaiting a client response see the session-closed
-        // error, allowing them to unblock and exit cleanly.
+        // so handler futures awaiting a client response observe
+        // `ClientError::Cancelled`, allowing them to unblock and exit cleanly.
         self.client.outbound_registry().close_all();
         self.inbound.cancel_all();
         self.tasks.abort_and_join().await;
