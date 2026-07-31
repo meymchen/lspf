@@ -68,6 +68,18 @@ where
                 // already queued, and return. Unlike `exit`, we let
                 // outstanding handlers finish rather than abort them, so
                 // the connection stays open until they do.
+                //
+                // `close_all()` also permanently closes the outbound
+                // registry to new entries (see `OutboundRegistry::close_all`),
+                // so any handler that starts a *new* outbound request while
+                // `join_all()` is still draining fails fast with
+                // `ClientError::ConnectionClosed` instead of enqueuing a
+                // request that could never receive a response — which would
+                // otherwise hang `join_all()` again. We deliberately do NOT
+                // call `client.close_connection()` before `join_all()`: that
+                // would also make `notify()` fail for in-flight handlers that
+                // only send notifications (e.g. `publishDiagnostics`), which
+                // must still be able to deliver them while draining.
                 warn!("transport closed by peer before exit notification");
                 client.outbound_registry().close_all();
                 tasks.join_all().await;
