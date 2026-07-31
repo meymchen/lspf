@@ -3,7 +3,7 @@ use lsp_types::notification::PublishDiagnostics;
 use tokio_util::sync::CancellationToken;
 use tracing::{Span, warn};
 
-use crate::client::Client;
+use crate::client::{Client, OutboundRegistry};
 use crate::documents::Documents;
 use crate::raw::RequestId;
 use crate::workspace::Workspace;
@@ -110,7 +110,7 @@ impl Context {
         Self {
             request_id: None,
             span: Span::current(),
-            client: Client::new(outgoing),
+            client: Client::new(outgoing, OutboundRegistry::default()),
             documents,
             workspace: None,
             cancellation: None,
