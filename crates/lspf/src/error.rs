@@ -30,6 +30,15 @@ pub enum ClientError {
     #[error("client outbound queue is closed")]
     OutboundClosed,
 
+    /// The session was cancelled before the peer answered the request.
+    #[error("client request was cancelled")]
+    Cancelled,
+
+    /// The connection exhausted the positive outbound request-ID space; no
+    /// further server-to-client requests can be allocated on this connection.
+    #[error("outbound request ID space exhausted")]
+    IdExhausted,
+
     /// The remote peer returned a JSON-RPC error response.
     #[error("remote error (code {code}): {message}")]
     Remote { code: i32, message: String },

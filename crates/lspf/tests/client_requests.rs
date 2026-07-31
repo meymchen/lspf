@@ -368,8 +368,8 @@ async fn remote_error_response_becomes_client_error_remote() {
     );
 }
 
-/// Session close completes all pending outbound requests so the server
-/// does not hang indefinitely.
+/// Session close completes all pending outbound requests with
+/// `ClientError::Cancelled` so the server does not hang indefinitely.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn session_close_does_not_hang_with_pending_client_request() {
     let (in_tx, in_rx) = mpsc::unbounded_channel();
@@ -389,16 +389,23 @@ async fn session_close_does_not_hang_with_pending_client_request() {
         const METHOD: &'static str = "client/never-responds";
     }
 
+    // The handler records the outcome on a detached task (not tracked by the
+    // engine's task group), so it survives `abort_and_join()` when the session
+    // closes and observes the pending request complete with `Cancelled`.
+    let outcome: Arc<Mutex<Option<Result<serde_json::Value, ClientError>>>> =
+        Arc::new(Mutex::new(None));
+    let captured = Arc::clone(&outcome);
+
     let server = Server::builder(())
         .request::<TriggerCloseRequest, _, _>(
-            |_state: Arc<()>, ctx: Context, _params: serde_json::Value, _ct| {
+            move |_state: Arc<()>, ctx: Context, _params: serde_json::Value, _ct| {
+                let captured = Arc::clone(&captured);
                 async move {
-                    // This will be completed (with an error) by close_all() when
-                    // the session closes, so this task will eventually unblock.
-                    let _ = ctx
-                        .client()
-                        .request::<NeverRespondsRequest>(json!({}))
-                        .await;
+                    let client = ctx.client();
+                    tokio::spawn(async move {
+                        let result = client.request::<NeverRespondsRequest>(json!({})).await;
+                        *captured.lock().unwrap() = Some(result);
+                    });
                     Ok(json!(null))
                 }
             },
@@ -424,11 +431,21 @@ async fn session_close_does_not_hang_with_pending_client_request() {
         .send(inbound_request(2, "test/trigger-close", json!(null)))
         .unwrap();
 
-    // Consume the outbound client request (never responded to).
-    recv(&mut out_rx).await;
+    // Consume outbound messages until the client request appears. The trigger
+    // response may or may not precede it, so skip anything else.
+    loop {
+        match recv(&mut out_rx).await {
+            RawMessage::Request {
+                id: RequestId::Number(_),
+                method,
+                ..
+            } if &*method == "client/never-responds" => break,
+            _ => {}
+        }
+    }
 
     // Close the transport without sending the response.
-    // The server must not hang: close_all() will complete the pending request.
+    // The server must not hang: close_all() completes the pending request.
     drop(in_tx);
 
     // The serve future must return within the timeout (not hang forever).
@@ -437,4 +454,204 @@ async fn session_close_does_not_hang_with_pending_client_request() {
         .expect("serve returned within timeout — not hanging on pending outbound request")
         .expect("serve task did not panic")
         .expect("serve ended cleanly");
+
+    // The detached task observes the pending request complete with Cancelled.
+    let result = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            if let Some(result) = outcome.lock().unwrap().take() {
+                return result;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("cancellation outcome recorded");
+    assert!(
+        matches!(result, Err(ClientError::Cancelled)),
+        "expected ClientError::Cancelled, got {result:?}"
+    );
+}
+
+/// Abandoning an enqueued client request emits one typed `$/cancelRequest`
+/// notification carrying the abandoned request's ID.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn abandoned_client_request_sends_cancel_notification() {
+    let (in_tx, in_rx) = mpsc::unbounded_channel();
+    let (out_tx, mut out_rx) = mpsc::unbounded_channel();
+
+    enum AbandonRequest {}
+    impl Request for AbandonRequest {
+        type Params = serde_json::Value;
+        type Result = serde_json::Value;
+        const METHOD: &'static str = "test/abandon";
+    }
+
+    let server = Server::builder(())
+        .request::<AbandonRequest, _, _>(
+            |_state: Arc<()>, ctx: Context, _params: serde_json::Value, _ct| {
+                async move {
+                    let client = ctx.client();
+                    // Enqueue a client request, then abandon it before any
+                    // response arrives. Dropping the future must emit a typed
+                    // `$/cancelRequest` for the request's ID.
+                    let fut = client.request::<EchoRequest>(json!(null));
+                    tokio::select! {
+                        _ = fut => {}
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}
+                    }
+                    Ok(json!(null))
+                }
+            },
+        )
+        .build()
+        .expect("server builds");
+
+    let serve = tokio::spawn(server.serve(ChannelTransport {
+        incoming: in_rx,
+        outgoing: out_tx,
+    }));
+
+    in_tx
+        .send(inbound_request(
+            1,
+            "initialize",
+            json!({ "processId": null, "rootUri": null, "capabilities": {} }),
+        ))
+        .unwrap();
+    recv(&mut out_rx).await;
+
+    in_tx
+        .send(inbound_request(2, "test/abandon", json!(null)))
+        .unwrap();
+
+    // The outbound client request, then the cancellation notification.
+    let req = recv(&mut out_rx).await;
+    let req_id = match req.id() {
+        Some(RequestId::Number(n)) => *n,
+        _ => panic!("expected numeric client request id"),
+    };
+
+    let cancel = recv(&mut out_rx).await;
+    match cancel {
+        RawMessage::Notification { method, params } => {
+            assert_eq!(&*method, "$/cancelRequest");
+            let params: serde_json::Value = serde_json::from_slice(&params).unwrap();
+            assert_eq!(params["id"], serde_json::json!(req_id));
+        }
+        _ => panic!("expected a $/cancelRequest notification"),
+    }
+
+    // The handler returns Ok; the trigger response follows.
+    let trigger_resp = recv(&mut out_rx).await;
+    assert_eq!(trigger_resp.id(), Some(&RequestId::Number(2)));
+
+    in_tx.send(exit()).unwrap();
+    serve
+        .await
+        .expect("serve did not panic")
+        .expect("serve ended cleanly");
+}
+
+/// A stale response for an abandoned request cannot complete a later request:
+/// outbound IDs are never reused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn late_response_after_cleanup_cannot_complete_another_request() {
+    let (in_tx, in_rx) = mpsc::unbounded_channel();
+    let (out_tx, mut out_rx) = mpsc::unbounded_channel();
+
+    let captured: Arc<Mutex<Option<Result<EchoResult, ClientError>>>> = Arc::new(Mutex::new(None));
+    let captured_for_handler = Arc::clone(&captured);
+
+    enum StaleRequest {}
+    impl Request for StaleRequest {
+        type Params = serde_json::Value;
+        type Result = serde_json::Value;
+        const METHOD: &'static str = "test/stale";
+    }
+
+    let server = Server::builder(())
+        .request::<StaleRequest, _, _>(
+            move |_state: Arc<()>, ctx: Context, _params: serde_json::Value, _ct| {
+                let captured = Arc::clone(&captured_for_handler);
+                async move {
+                    let client = ctx.client();
+                    // Request A is enqueued and then abandoned.
+                    let fut_a = client.request::<EchoRequest>(json!(null));
+                    tokio::select! {
+                        _ = fut_a => {}
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}
+                    }
+                    // Request B follows; it must not reuse A's ID.
+                    let result_b = client.request::<EchoRequest>(json!(null)).await;
+                    *captured.lock().unwrap() = Some(result_b);
+                    Ok(json!(null))
+                }
+            },
+        )
+        .build()
+        .expect("server builds");
+
+    let serve = tokio::spawn(server.serve(ChannelTransport {
+        incoming: in_rx,
+        outgoing: out_tx,
+    }));
+
+    in_tx
+        .send(inbound_request(
+            1,
+            "initialize",
+            json!({ "processId": null, "rootUri": null, "capabilities": {} }),
+        ))
+        .unwrap();
+    recv(&mut out_rx).await;
+
+    in_tx
+        .send(inbound_request(2, "test/stale", json!(null)))
+        .unwrap();
+
+    // Wire order: request A, its cancellation, then request B.
+    let msg_a = recv(&mut out_rx).await;
+    let id_a = match msg_a.id() {
+        Some(RequestId::Number(n)) => *n,
+        _ => panic!("expected numeric id for request A"),
+    };
+    let cancel = recv(&mut out_rx).await;
+    match cancel {
+        RawMessage::Notification { method, params } => {
+            assert_eq!(&*method, "$/cancelRequest");
+            let params: serde_json::Value = serde_json::from_slice(&params).unwrap();
+            assert_eq!(params["id"], serde_json::json!(id_a));
+        }
+        _ => panic!("expected a $/cancelRequest notification"),
+    }
+    let msg_b = recv(&mut out_rx).await;
+    let id_b = match msg_b.id() {
+        Some(RequestId::Number(n)) => *n,
+        _ => panic!("expected numeric id for request B"),
+    };
+    assert_ne!(id_a, id_b, "abandoned request's ID must never be reused");
+
+    // Deliver a stale response for the abandoned request A. Its entry is gone,
+    // so this must be ignored and cannot complete request B.
+    in_tx
+        .send(inbound_response(id_a, json!({ "echoed": 999 })))
+        .unwrap();
+
+    // Then deliver the real response for request B.
+    in_tx
+        .send(inbound_response(id_b, json!({ "echoed": 42 })))
+        .unwrap();
+
+    // The handler completes with B's own result.
+    let trigger_resp = recv(&mut out_rx).await;
+    assert_eq!(trigger_resp.id(), Some(&RequestId::Number(2)));
+
+    in_tx.send(exit()).unwrap();
+    serve
+        .await
+        .expect("serve did not panic")
+        .expect("serve ended cleanly");
+
+    let result_b = captured.lock().unwrap().take().expect("handler captured B");
+    assert_eq!(result_b.unwrap(), EchoResult { echoed: 42 });
 }
