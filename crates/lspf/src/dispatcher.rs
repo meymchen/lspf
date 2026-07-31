@@ -61,11 +61,15 @@ where
         let msg = match reader.recv().await {
             Ok(msg) => msg,
             Err(TransportError::Closed) => {
-                // Peer disconnected before `exit`. Drain whatever
-                // in-flight handlers have already queued, then return;
-                // unlike `exit`, we let outstanding handlers finish
-                // rather than abort them.
+                // Peer disconnected before `exit`. Complete any pending
+                // outbound requests with `ClientError::Cancelled` so
+                // in-flight handlers that await a client response can
+                // finish; then drain whatever in-flight handlers have
+                // already queued, and return. Unlike `exit`, we let
+                // outstanding handlers finish rather than abort them, so
+                // the connection stays open until they do.
                 warn!("transport closed by peer before exit notification");
+                client.outbound_registry().close_all();
                 tasks.join_all().await;
                 client.close_connection();
                 client.close_outbound();
@@ -75,6 +79,7 @@ where
             }
             Err(e) => {
                 client.close_connection();
+                client.outbound_registry().close_all();
                 tasks.abort_and_join().await;
                 client.close_outbound();
                 send_handle.abort();
@@ -91,6 +96,7 @@ where
             Ok(flow) => flow,
             Err(error) => {
                 client.close_connection();
+                client.outbound_registry().close_all();
                 tasks.abort_and_join().await;
                 client.close_outbound();
                 send_handle.abort();
@@ -107,6 +113,7 @@ where
             // which decides whether to terminate the process (binary) or
             // simply return (library / tests).
             client.close_connection();
+            client.outbound_registry().close_all();
             tasks.abort_and_join().await;
             client.close_outbound();
             drop(out_tx);
