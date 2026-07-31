@@ -29,6 +29,15 @@ pub enum ClientError {
     /// The engine-owned outbound queue is closed.
     #[error("client outbound queue is closed")]
     OutboundClosed,
+
+    /// The remote peer returned a JSON-RPC error response.
+    #[error("remote error (code {code}): {message}")]
+    Remote { code: i32, message: String },
+
+    /// The remote peer returned a success result that could not be decoded
+    /// into the expected type.
+    #[error("failed to deserialize client response: {0}")]
+    Deserialize(#[source] serde_json::Error),
 }
 
 /// A configuration error surfaced by [`ServerBuilder::build`](crate::ServerBuilder::build).
