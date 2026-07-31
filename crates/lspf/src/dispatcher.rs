@@ -8,7 +8,7 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Span, debug, info_span, warn};
 
-use crate::client::Client;
+use crate::client::{Client, OutboundRegistry};
 use crate::context::Context;
 use crate::documents::Documents;
 use crate::error::Error;
@@ -41,7 +41,7 @@ where
     let (mut reader, writer) = transport.split();
     let server = Arc::new(server);
     let (out_tx, out_rx) = mpsc::unbounded_channel::<RawMessage>();
-    let client = Client::new(out_tx.clone());
+    let client = Client::new(out_tx.clone(), OutboundRegistry::default());
     let runtime = default_runtime();
     let send_handle = runtime.spawn(send_loop(writer, out_rx, client.clone()));
 
