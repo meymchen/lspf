@@ -38,6 +38,11 @@ struct OutboundInner {
     pending: HashMap<u32, oneshot::Sender<PendingOutcome>>,
     /// Monotonically increasing counter; the next ID to try allocating.
     next_id: u32,
+    /// Set by `close_all()`. Once set, `insert()` refuses to create new
+    /// pending entries: any handler that starts a new outbound request after
+    /// the registry has been drained fails fast instead of enqueuing an entry
+    /// that would never be completed.
+    closed: bool,
 }
 
 impl Default for OutboundInner {
@@ -45,8 +50,21 @@ impl Default for OutboundInner {
         Self {
             pending: HashMap::new(),
             next_id: 1,
+            closed: false,
         }
     }
+}
+
+/// Outcome of allocating a new pending outbound-request entry.
+pub(crate) enum InsertOutcome {
+    /// The entry was created; the caller should enqueue the request and await
+    /// the receiver.
+    Inserted(u32, oneshot::Receiver<PendingOutcome>),
+    /// The registry has been closed (see [`OutboundRegistry::close_all`]) and
+    /// no longer accepts new pending entries.
+    Closed,
+    /// The positive `i32` ID space is exhausted.
+    Exhausted,
 }
 
 /// RAII guard that removes a pending outbound-request entry from the registry
@@ -94,19 +112,27 @@ impl OutboundRegistry {
     ///
     /// IDs are allocated monotonically and never reused, so a response for an
     /// abandoned request can never complete a later request. Once the positive
-    /// `i32` ID space is exhausted, returns `None`.
+    /// `i32` ID space is exhausted, returns [`InsertOutcome::Exhausted`]. Once
+    /// [`OutboundRegistry::close_all`] has run, returns
+    /// [`InsertOutcome::Closed`] instead of creating an entry that could never
+    /// be completed — the closed check and the drain in `close_all` share the
+    /// same lock, so there is no window where a new entry is silently created
+    /// after the registry has been drained.
     ///
     /// Returns the allocated ID and the receiver the caller should await.
-    pub(crate) fn insert(&self) -> Option<(u32, oneshot::Receiver<PendingOutcome>)> {
-        let (tx, rx) = oneshot::channel();
+    pub(crate) fn insert(&self) -> InsertOutcome {
         let mut inner = self.inner.lock().unwrap();
+        if inner.closed {
+            return InsertOutcome::Closed;
+        }
         let id = inner.next_id;
         if id > i32::MAX as u32 {
-            return None;
+            return InsertOutcome::Exhausted;
         }
         inner.next_id = id + 1;
+        let (tx, rx) = oneshot::channel();
         inner.pending.insert(id, tx);
-        Some((id, rx))
+        InsertOutcome::Inserted(id, rx)
     }
 
     /// Remove and complete the pending entry for `id` with `result`.
@@ -133,11 +159,20 @@ impl OutboundRegistry {
     }
 
     /// Complete every remaining pending entry with [`PendingOutcome::Cancelled`],
-    /// then clear the registry. Awaiting `request()` futures observe
-    /// [`ClientError::Cancelled`].
+    /// clear the registry, and permanently close it to new entries.
+    ///
+    /// After this call, [`OutboundRegistry::insert`] returns
+    /// [`InsertOutcome::Closed`] instead of creating new pending entries, so a
+    /// handler that starts a new outbound request after the drain fails fast
+    /// with `ClientError::ConnectionClosed` rather than enqueuing a request
+    /// that would never receive a response. Awaiting `request()` futures that
+    /// were already pending observe [`ClientError::Cancelled`].
     pub(crate) fn close_all(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.closed = true;
         let entries: HashMap<u32, oneshot::Sender<PendingOutcome>> =
-            std::mem::take(&mut self.inner.lock().unwrap().pending);
+            std::mem::take(&mut inner.pending);
+        drop(inner);
         for tx in entries.into_values() {
             let _ = tx.send(PendingOutcome::Cancelled);
         }
@@ -240,7 +275,9 @@ impl Client {
     /// # Errors
     ///
     /// - [`ClientError::ConnectionClosed`] or [`ClientError::OutboundClosed`]
-    ///   if the session is already closing.
+    ///   if the session is already closing, or if the outbound registry has
+    ///   already been drained by [`OutboundRegistry::close_all`] (e.g. this
+    ///   request started after the connection began closing).
     /// - [`ClientError::IdExhausted`] if the outbound ID space is exhausted.
     /// - [`ClientError::Serialize`] if the params cannot be encoded.
     /// - [`ClientError::Cancelled`] if the session closes before the peer
@@ -261,10 +298,15 @@ impl Client {
         //    on encode failure before insert).
         let params_bytes = serde_json::to_vec(&params).map_err(ClientError::Serialize)?;
 
-        // 3. Allocate a never-reused ID and insert the pending entry.
+        // 3. Allocate a never-reused ID and insert the pending entry. If the
+        //    registry was already closed by `close_all()` (e.g. because a
+        //    prior in-flight handler is still draining while a new one
+        //    starts), fail fast instead of enqueuing a request that would
+        //    never receive a response.
         let (id, rx) = match self.outbound.insert() {
-            Some(entry) => entry,
-            None => return Err(ClientError::IdExhausted),
+            InsertOutcome::Inserted(id, rx) => (id, rx),
+            InsertOutcome::Closed => return Err(ClientError::ConnectionClosed),
+            InsertOutcome::Exhausted => return Err(ClientError::IdExhausted),
         };
         // The guard removes the pending entry if this future is dropped before
         // a response arrives (e.g. due to caller cancellation), and tells the
@@ -453,9 +495,9 @@ mod tests {
     #[test]
     fn outbound_ids_are_monotonic_and_never_reused() {
         let registry = OutboundRegistry::default();
-        let (id1, _rx1) = registry.insert().unwrap();
-        let (id2, _rx2) = registry.insert().unwrap();
-        let (id3, _rx3) = registry.insert().unwrap();
+        let (id1, _rx1) = insert_ok(&registry);
+        let (id2, _rx2) = insert_ok(&registry);
+        let (id3, _rx3) = insert_ok(&registry);
         assert_eq!(id1, 1);
         assert_eq!(id2, 2);
         assert_eq!(id3, 3);
@@ -463,14 +505,14 @@ mod tests {
         // Completing an earlier request does not free its ID for reuse: the
         // allocator only ever moves forward.
         registry.complete(id1, Ok(Bytes::from_static(b"null")));
-        let (id4, _rx4) = registry.insert().unwrap();
+        let (id4, _rx4) = insert_ok(&registry);
         assert_eq!(id4, 4);
     }
 
     #[test]
     fn complete_returns_true_for_known_id_and_false_for_unknown() {
         let registry = OutboundRegistry::default();
-        let (id, mut rx) = registry.insert().unwrap();
+        let (id, mut rx) = insert_ok(&registry);
         assert!(registry.complete(id, Ok(Bytes::from_static(b"null"))));
         // Now gone — second call returns false.
         assert!(!registry.complete(id, Ok(Bytes::from_static(b"null"))));
@@ -483,8 +525,8 @@ mod tests {
     #[test]
     fn close_all_completes_pending_with_cancelled() {
         let registry = OutboundRegistry::default();
-        let (_id1, mut rx1) = registry.insert().unwrap();
-        let (_id2, mut rx2) = registry.insert().unwrap();
+        let (_id1, mut rx1) = insert_ok(&registry);
+        let (_id2, mut rx2) = insert_ok(&registry);
         registry.close_all();
         assert!(matches!(rx1.try_recv().unwrap(), PendingOutcome::Cancelled));
         assert!(matches!(rx2.try_recv().unwrap(), PendingOutcome::Cancelled));
@@ -497,10 +539,29 @@ mod tests {
         let registry = OutboundRegistry::default();
         // Force the allocator to the last usable positive ID.
         registry.set_next_id(i32::MAX as u32);
-        let (id, _rx) = registry.insert().unwrap();
+        let (id, _rx) = insert_ok(&registry);
         assert_eq!(id, i32::MAX as u32);
         // The next allocation is refused: the positive ID space is exhausted.
-        assert!(registry.insert().is_none());
+        assert!(matches!(registry.insert(), InsertOutcome::Exhausted));
+    }
+
+    #[test]
+    fn insert_after_close_all_is_refused() {
+        let registry = OutboundRegistry::default();
+        registry.close_all();
+        // A handler that starts a new outbound request after the registry has
+        // already been drained must fail fast instead of enqueuing a request
+        // that would never be completed.
+        assert!(matches!(registry.insert(), InsertOutcome::Closed));
+    }
+
+    /// Test helper: unwrap an `InsertOutcome::Inserted`, panicking otherwise.
+    fn insert_ok(registry: &OutboundRegistry) -> (u32, oneshot::Receiver<PendingOutcome>) {
+        match registry.insert() {
+            InsertOutcome::Inserted(id, rx) => (id, rx),
+            InsertOutcome::Closed => panic!("registry unexpectedly closed"),
+            InsertOutcome::Exhausted => panic!("registry unexpectedly exhausted"),
+        }
     }
 
     #[tokio::test]
