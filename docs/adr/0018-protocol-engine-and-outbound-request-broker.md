@@ -180,7 +180,11 @@ cancellation, closes the outbound queue, completes every outbound pending
 request with `ClientError::Cancelled`, cancels every remaining task in the
 engine-owned task group, and then joins every task. This cancel-then-join
 policy is identical for every close cause; no task is detached. No pending
-`Client` future remains unresolved after close.
+`Client` future remains unresolved after close. The legacy concurrent
+dispatcher (the `lspf::serve` / `serve_with_limit` entry points) honours the
+same guarantee: on transport close it completes every pending outbound
+request with `ClientError::Cancelled` *before* joining in-flight handlers,
+so a handler awaiting a client response is never left hanging.
 
 The Writer reports its terminal failure through the engine-owned Writer
 failure signal. It does not clear registries or independently cancel tasks.
