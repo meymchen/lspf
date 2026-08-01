@@ -210,7 +210,14 @@ impl<S: Send + Sync + 'static> Service<S> for RouterService<S> {
                     }
                 }
                 CallKind::Notification => {
-                    if let Some(handler) = router.notification(&call.method) {
+                    // A built-in document notification reaches the stack only
+                    // once the engine has decoded and mutated, and its hook
+                    // lives in its own table, so a route can never shadow the
+                    // built-in (ADR 0018).
+                    let handler = router
+                        .notification(&call.method)
+                        .or_else(|| router.document_hook(&call.method));
+                    if let Some(handler) = handler {
                         handler(call.state, call.context, call.params).await;
                     }
                     ServiceResult::NoResponse

@@ -24,13 +24,17 @@ use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
 use futures_util::future::{Either, select};
-use lsp_types::{InitializeParams, InitializeResult};
+use lsp_types::{
+    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+    InitializeParams, InitializeResult,
+};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Span, debug, info_span, warn};
 
 use crate::builder::{
-    ConfigureInitialize, InitializeRegistrar, OnInitialize, Registrations, Server,
+    ConfigureInitialize, DID_CHANGE_METHOD, DID_CLOSE_METHOD, DID_OPEN_METHOD, InitializeRegistrar,
+    OnInitialize, Registrations, Server,
 };
 use crate::client::{Client, OutboundRegistry};
 use crate::codec::{decode_params, decode_value, encode_body};
@@ -634,6 +638,9 @@ where
                         }
                     }
                 }
+                document_method @ (DID_OPEN_METHOD | DID_CHANGE_METHOD | DID_CLOSE_METHOD) => {
+                    self.document_sync(document_method, params).await;
+                }
                 other => {
                     // Outside the running state only the completion and exit
                     // notifications handled above are processed: before
@@ -694,6 +701,109 @@ where
         }
 
         Flow::Continue
+    }
+
+    /// Handle one built-in document-sync notification (ADR 0018).
+    ///
+    /// The order is fixed and serial: decode the typed parameters, run the
+    /// built-in mutation, then let the user's registered post-mutation hook
+    /// enter the Service stack. All three happen on the read-loop before the
+    /// next envelope is read, so the hook — and every later message — observes
+    /// the mutated store, and no hook can suppress, reorder, or roll back the
+    /// mutation.
+    ///
+    /// A decode or built-in validation failure reports the notification error
+    /// and skips the hook. Either way the connection goes on to the next
+    /// message: a notification has no response, so a bad one is logged, never
+    /// answered.
+    // Takes `&mut self` like the rest of dispatch: the read-loop holds the
+    // engine exclusively across this await, which is what makes the decode,
+    // the mutation, and the hook one serial step.
+    async fn document_sync(&mut self, method: &str, raw_params: Bytes) {
+        // Before `initialize` there is no Router to hold a hook and no
+        // negotiated encoding to mutate under; after `shutdown` the connection
+        // accepts no further user work.
+        let Lifecycle::Running(service) = &self.lifecycle else {
+            debug!(
+                method,
+                "document notification outside running state ignored"
+            );
+            return;
+        };
+        let service = Arc::clone(service);
+
+        // One decode produces the method-erased value the hook receives; the
+        // built-in mutates from its own typed decode of the same bytes. Either
+        // failing leaves the store untouched from this notification on.
+        let params = match decode_value(&raw_params).and_then(|params| {
+            self.apply_document_mutation(method, &raw_params)
+                .map(|()| params)
+        }) {
+            Ok(params) => params,
+            Err(error) => {
+                warn!(method, %error, "document notification skipped its hook");
+                return;
+            }
+        };
+
+        let span = info_span!("notification", method = %method);
+        let ctx = attach_workspace(
+            Context::for_notification(span, self.client.clone(), self.documents.clone()),
+            &self.workspace,
+        );
+        let result = service
+            .call(IncomingCall::notification(
+                method.to_string(),
+                params,
+                ctx,
+                Arc::clone(&self.state),
+            ))
+            .await;
+        if !matches!(result, ServiceResult::NoResponse) {
+            warn!("notification service attempted to produce a response");
+        }
+    }
+
+    /// Decode and apply the built-in mutation behind one document-sync
+    /// notification.
+    ///
+    /// Built-in validation is what the store itself can establish: a change or
+    /// a close names a document that must already be open, and every change
+    /// range must be applicable under the negotiated encoding. Returning `Err`
+    /// is what skips the notification's hook.
+    fn apply_document_mutation(
+        &self,
+        method: &str,
+        raw_params: &Bytes,
+    ) -> std::result::Result<(), LspError> {
+        match method {
+            DID_OPEN_METHOD => {
+                let params: DidOpenTextDocumentParams = decode_params(raw_params)?;
+                self.documents.open(params.text_document);
+            }
+            DID_CHANGE_METHOD => {
+                let params: DidChangeTextDocumentParams = decode_params(raw_params)?;
+                let uri = params.text_document.uri;
+                let version = params.text_document.version;
+                // Stop at the first rejected edit: every later range in the
+                // batch is expressed against a document state that the
+                // rejection means never existed.
+                for change in params.content_changes {
+                    self.documents
+                        .apply_incremental_change(&uri, version, change)?;
+                }
+            }
+            DID_CLOSE_METHOD => {
+                let params: DidCloseTextDocumentParams = decode_params(raw_params)?;
+                self.documents
+                    .close(&params.text_document.uri)
+                    .ok_or_else(|| LspError::invalid_params("document is not open"))?;
+            }
+            other => {
+                unreachable!("only document-sync methods reach the built-in mutation: {other}")
+            }
+        }
+        Ok(())
     }
 
     /// Run the one `initialize` transaction (ADR 0017, ADR 0018).
