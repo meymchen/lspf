@@ -205,7 +205,7 @@ fn start<S: Send + Sync + 'static>(
 ) -> (
     mpsc::UnboundedSender<RawMessage>,
     mpsc::UnboundedReceiver<RawMessage>,
-    tokio::task::JoinHandle<lspf::Result<()>>,
+    tokio::task::JoinHandle<lspf::Result<lspf::Outcome>>,
 ) {
     let (incoming_tx, incoming_rx) = mpsc::unbounded_channel();
     let (outgoing_tx, outgoing_rx) = mpsc::unbounded_channel();
@@ -232,7 +232,7 @@ async fn initialize_connection(
 
 async fn stop(
     incoming: mpsc::UnboundedSender<RawMessage>,
-    serve: tokio::task::JoinHandle<lspf::Result<()>>,
+    serve: tokio::task::JoinHandle<lspf::Result<lspf::Outcome>>,
 ) {
     incoming.send(notification("exit")).unwrap();
     serve
