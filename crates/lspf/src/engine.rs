@@ -226,39 +226,93 @@ impl<R: Runtime> TaskGroup<R> {
     }
 }
 
+/// One accepted inbound request: its wire ID plus the generation that claimed
+/// that ID.
+///
+/// A peer may legitimately reuse a request ID once the previous request with
+/// that ID has been answered, so the ID alone does not identify a request for
+/// the lifetime of its task. The generation makes the completion gate
+/// identity-scoped: a task whose result arrives after its own entry was claimed
+/// — by `$/cancelRequest`, by `shutdown`, or by session close — cannot then
+/// claim the entry a later request has since reserved under the same ID.
+#[derive(Clone)]
+struct Reservation {
+    id: RequestId,
+    generation: u64,
+}
+
+struct InboundEntry {
+    generation: u64,
+    /// `None` for `initialize`, the one request that is not cancellable.
+    cancellation: Option<CancellationToken>,
+}
+
+#[derive(Default)]
+struct InboundInner {
+    entries: HashMap<RequestId, InboundEntry>,
+    next_generation: u64,
+}
+
 #[derive(Clone, Default)]
 struct InboundRegistry {
-    entries: Arc<Mutex<HashMap<RequestId, Option<CancellationToken>>>>,
+    inner: Arc<Mutex<InboundInner>>,
 }
 
 impl InboundRegistry {
-    fn reserve(&self, id: RequestId, cancellation: Option<CancellationToken>) -> bool {
-        let mut entries = self.entries.lock().unwrap();
-        if entries.contains_key(&id) {
-            return false;
+    /// Reserve `id` for a new request, or return `None` if it is already in
+    /// flight — a duplicate never replaces or cancels the original (ADR 0018).
+    fn reserve(
+        &self,
+        id: RequestId,
+        cancellation: Option<CancellationToken>,
+    ) -> Option<Reservation> {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.entries.contains_key(&id) {
+            return None;
         }
-        entries.insert(id, cancellation);
-        true
+        let generation = inner.next_generation;
+        inner.next_generation += 1;
+        inner.entries.insert(
+            id.clone(),
+            InboundEntry {
+                generation,
+                cancellation,
+            },
+        );
+        Some(Reservation { id, generation })
     }
 
+    /// Claim the completion gate for `reservation` and enqueue its one response.
+    /// Does nothing if some other path already claimed that entry.
     fn complete(
         &self,
         out_tx: &UnboundedSender<RawMessage>,
-        id: RequestId,
+        reservation: Reservation,
         result: std::result::Result<Bytes, LspError>,
     ) {
-        if self.entries.lock().unwrap().remove(&id).is_some() {
-            enqueue_encoded(out_tx, id, result);
+        let claimed = {
+            let mut inner = self.inner.lock().unwrap();
+            match inner.entries.get(&reservation.id) {
+                Some(entry) if entry.generation == reservation.generation => {
+                    inner.entries.remove(&reservation.id).is_some()
+                }
+                _ => false,
+            }
+        };
+        if claimed {
+            enqueue_encoded(out_tx, reservation.id, result);
         }
     }
 
     fn complete_cancellation(&self, out_tx: &UnboundedSender<RawMessage>, id: &RequestId) {
         let token = {
-            let mut entries = self.entries.lock().unwrap();
-            if entries.get(id).is_some_and(Option::is_some) {
-                entries.remove(id).flatten()
-            } else {
-                None
+            let mut inner = self.inner.lock().unwrap();
+            match inner.entries.get(id) {
+                Some(entry) if entry.cancellation.is_some() => inner
+                    .entries
+                    .remove(id)
+                    .and_then(|entry| entry.cancellation),
+                _ => None,
             }
         };
         if let Some(token) = token {
@@ -274,9 +328,9 @@ impl InboundRegistry {
     /// completion gate, so the handler's own late result is dropped and every
     /// cancelled request still receives exactly one response.
     fn cancel_all_with_response(&self, out_tx: &UnboundedSender<RawMessage>) {
-        let entries = std::mem::take(&mut *self.entries.lock().unwrap());
-        for (id, cancellation) in entries {
-            if let Some(cancellation) = cancellation {
+        let entries = std::mem::take(&mut self.inner.lock().unwrap().entries);
+        for (id, entry) in entries {
+            if let Some(cancellation) = entry.cancellation {
                 cancellation.cancel();
             }
             enqueue_encoded(out_tx, id, Err(LspError::RequestCancelled));
@@ -291,8 +345,8 @@ impl InboundRegistry {
     /// one ending that still answers, through
     /// [`cancel_all_with_response`](Self::cancel_all_with_response).
     fn close_all(&self) {
-        let entries = std::mem::take(&mut *self.entries.lock().unwrap());
-        for cancellation in entries.into_values().flatten() {
+        let entries = std::mem::take(&mut self.inner.lock().unwrap().entries);
+        for cancellation in entries.into_values().filter_map(|entry| entry.cancellation) {
             cancellation.cancel();
         }
     }
@@ -480,14 +534,15 @@ where
                 // session cancels in-flight user work even after the completion
                 // gate has claimed its registry entry.
                 let cancellation = (method != "initialize").then(|| self.session.child_token());
-                if !self.inbound.reserve(id.clone(), cancellation.clone()) {
+                let Some(reservation) = self.inbound.reserve(id.clone(), cancellation.clone())
+                else {
                     enqueue_error(
                         &self.out_tx,
                         id,
                         LspError::invalid_request("duplicate request id"),
                     );
                     return Flow::Continue;
-                }
+                };
 
                 // Initialize precedence: until `initialize` completes, refuse
                 // every other request with `ServerNotInitialized`.
@@ -497,22 +552,25 @@ where
                         Lifecycle::Uninitialized(_) | Lifecycle::Initializing
                     )
                 {
-                    self.inbound
-                        .complete(&self.out_tx, id, Err(LspError::ServerNotInitialized));
+                    self.inbound.complete(
+                        &self.out_tx,
+                        reservation,
+                        Err(LspError::ServerNotInitialized),
+                    );
                     return Flow::Continue;
                 }
                 // After `shutdown`, every request is invalid until `exit`.
                 if matches!(self.lifecycle, Lifecycle::ShuttingDown | Lifecycle::Exited) {
                     self.inbound.complete(
                         &self.out_tx,
-                        id,
+                        reservation,
                         Err(LspError::invalid_request("invalid request")),
                     );
                     return Flow::Continue;
                 }
 
                 match method.as_ref() {
-                    "initialize" => return self.initialize(&span, id, params).await,
+                    "initialize" => return self.initialize(&span, reservation, params).await,
                     "shutdown" => {
                         // The shutdown request answers itself first, so its own
                         // entry is gone before the sweep below; only then does a
@@ -520,7 +578,7 @@ where
                         // work and enter `ShuttingDown`.
                         self.inbound.complete(
                             &self.out_tx,
-                            id,
+                            reservation,
                             encode_body(&serde_json::Value::Null),
                         );
                         self.inbound.cancel_all_with_response(&self.out_tx);
@@ -533,7 +591,7 @@ where
                             _ => {
                                 self.inbound.complete(
                                     &self.out_tx,
-                                    id,
+                                    reservation,
                                     Err(LspError::ServerNotInitialized),
                                 );
                                 return Flow::Continue;
@@ -542,14 +600,14 @@ where
                         let params = match decode_value(&params) {
                             Ok(params) => params,
                             Err(error) => {
-                                self.inbound.complete(&self.out_tx, id, Err(error));
+                                self.inbound.complete(&self.out_tx, reservation, Err(error));
                                 return Flow::Continue;
                             }
                         };
                         self.spawn_service_request(
                             service,
                             span,
-                            id,
+                            reservation,
                             method.into_owned(),
                             params,
                             cancellation.expect("non-initialize requests are cancellable"),
@@ -648,12 +706,12 @@ where
     /// configuration, validation, or `on_initialize` failure enqueues the fixed
     /// error and requests the terminal close rather than returning to
     /// uninitialized.
-    async fn initialize(&mut self, span: &Span, id: RequestId, params: Bytes) -> Flow {
+    async fn initialize(&mut self, span: &Span, reservation: Reservation, params: Bytes) -> Flow {
         // A second `initialize` after the transaction has run is invalid.
         if !matches!(self.lifecycle, Lifecycle::Uninitialized(_)) {
             self.inbound.complete(
                 &self.out_tx,
-                id,
+                reservation,
                 Err(LspError::ServerError {
                     code: -32600,
                     message: "server already initialized".into(),
@@ -668,7 +726,7 @@ where
         let params = match decode_params::<InitializeParams>(&params) {
             Ok(params) => params,
             Err(err) => {
-                self.inbound.complete(&self.out_tx, id, Err(err));
+                self.inbound.complete(&self.out_tx, reservation, Err(err));
                 return Flow::Continue;
             }
         };
@@ -707,7 +765,7 @@ where
                 // failure reports InternalError and enters the close path.
                 self.inbound.complete(
                     &self.out_tx,
-                    id,
+                    reservation,
                     Err(LspError::internal("initialization failed")),
                 );
                 return Flow::Close(CloseCause::InitializeFailed);
@@ -735,7 +793,7 @@ where
         let server_info = match on_initialize {
             Some(hook) => {
                 let ctx = Context::for_request(
-                    id.clone(),
+                    reservation.id.clone(),
                     span.clone(),
                     self.client.clone(),
                     self.documents.clone(),
@@ -756,7 +814,7 @@ where
                         // enters the close path; the frozen Router and
                         // established Workspace are never exposed to later
                         // dispatch.
-                        self.inbound.complete(&self.out_tx, id, Err(err));
+                        self.inbound.complete(&self.out_tx, reservation, Err(err));
                         return Flow::Close(CloseCause::InitializeFailed);
                     }
                 }
@@ -766,7 +824,7 @@ where
 
         self.inbound.complete(
             &self.out_tx,
-            id,
+            reservation,
             encode_body(&InitializeResult {
                 capabilities,
                 server_info,
@@ -784,7 +842,7 @@ where
         &mut self,
         service: UserService<S>,
         span: Span,
-        id: RequestId,
+        reservation: Reservation,
         method: String,
         params: serde_json::Value,
         cancellation: CancellationToken,
@@ -796,12 +854,13 @@ where
         let client = self.client.clone();
         let inbound = self.inbound.clone();
         self.tasks.spawn(async move {
+            let id = reservation.id.clone();
             let ctx = attach_workspace(
                 Context::for_request(id.clone(), span, client, documents),
                 &workspace,
             )
             .with_cancellation(cancellation.clone());
-            let call = IncomingCall::request(method, id.clone(), params, ctx, state);
+            let call = IncomingCall::request(method, id, params, ctx, state);
             let result = match select(
                 Box::pin(service.call(call)),
                 Box::pin(cancellation.cancelled()),
@@ -818,7 +877,7 @@ where
                     Err(LspError::internal("request service returned no response"))
                 }
             };
-            inbound.complete(&out_tx, id, result);
+            inbound.complete(&out_tx, reservation, result);
         });
     }
 
@@ -965,6 +1024,59 @@ mod tests {
             CloseCause::ReaderFailed(TransportError::Malformed("bad".into())).into_result(),
             Err(Error::Transport(_))
         ));
+    }
+
+    /// A peer may reuse a request ID once the previous request under it has
+    /// been answered. The completion gate is scoped to the reservation, not the
+    /// ID, so the first request's task cannot answer the second request when it
+    /// finishes after its own entry was claimed.
+    #[test]
+    fn a_stale_reservation_cannot_claim_a_reused_request_id() {
+        let (out_tx, mut out_rx) = mpsc::unbounded_channel();
+        let registry = InboundRegistry::default();
+        let id = RequestId::Number(2);
+
+        let first = registry
+            .reserve(id.clone(), Some(CancellationToken::new()))
+            .expect("the id is free");
+        assert!(
+            registry
+                .reserve(id.clone(), Some(CancellationToken::new()))
+                .is_none(),
+            "an in-flight id is not reserved twice"
+        );
+
+        // `$/cancelRequest` claims the gate and answers the first request.
+        registry.complete_cancellation(&out_tx, &id);
+        // The peer then reuses the id for a new request.
+        let second = registry
+            .reserve(id.clone(), Some(CancellationToken::new()))
+            .expect("the id is free once the first request is answered");
+
+        // The first request's task only now produces a result.
+        registry.complete(&out_tx, first, encode_body(&"race"));
+        registry.complete(&out_tx, second, encode_body(&"reused"));
+
+        assert_eq!(
+            out_rx.try_recv().unwrap().id(),
+            Some(&id),
+            "the cancellation answers the first request"
+        );
+        let answer = out_rx.try_recv().expect("the second request is answered");
+        match answer {
+            RawMessage::Response {
+                result: Ok(body), ..
+            } => assert_eq!(
+                serde_json::from_slice::<String>(&body).unwrap(),
+                "reused",
+                "the second request gets its own result, not the stale one"
+            ),
+            other => panic!("expected a success response, got {other:?}"),
+        }
+        assert!(
+            out_rx.try_recv().is_err(),
+            "the stale reservation enqueued nothing"
+        );
     }
 
     #[test]
