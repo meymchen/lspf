@@ -1,5 +1,7 @@
 # AGENTS.md
 
+Scratch files are stored in `.scratch/`, do not delete anything within it without permission.
+
 ## Agent skills
 
 ### Issue tracker
