@@ -49,6 +49,41 @@ const RESERVED_METHODS: &[&str] = &[
 /// explicit request handler for this method cannot coexist.
 const EXECUTE_COMMAND_METHOD: &str = "workspace/executeCommand";
 
+/// A document-sync notification the protocol engine decodes and mutates itself
+/// (ADR 0018).
+///
+/// A `notification` registration for one of these methods records the
+/// connection's single post-mutation hook rather than a Router route, so a user
+/// handler observes the mutation instead of replacing it. This enum is the one
+/// place that says which methods those are: the builder asks it where a
+/// registration belongs, and the engine asks it which mutation to run.
+///
+/// `textDocument/didSave` is deliberately not a variant: it carries no
+/// framework mutation in 0.2, so it stays an ordinary typed notification route.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DocumentSync {
+    Open,
+    Change,
+    Close,
+}
+
+impl DocumentSync {
+    const OPEN_METHOD: &'static str = "textDocument/didOpen";
+    const CHANGE_METHOD: &'static str = "textDocument/didChange";
+    const CLOSE_METHOD: &'static str = "textDocument/didClose";
+
+    /// The built-in this wire method names, or `None` when the method is an
+    /// ordinary route.
+    pub(crate) fn from_method(method: &str) -> Option<Self> {
+        match method {
+            Self::OPEN_METHOD => Some(Self::Open),
+            Self::CHANGE_METHOD => Some(Self::Change),
+            Self::CLOSE_METHOD => Some(Self::Close),
+            _ => None,
+        }
+    }
+}
+
 /// The future produced by an erased request or command handler: its decoded,
 /// method-erased result or the error to report.
 type HandlerFuture = Pin<Box<dyn Future<Output = Result<Value, LspError>> + Send>>;
@@ -141,6 +176,9 @@ where
 pub(crate) struct Registrations<S> {
     requests: HashMap<String, ErasedRequestHandler<S>>,
     notifications: HashMap<String, ErasedNotificationHandler<S>>,
+    /// Post-mutation hooks for the [`DOCUMENT_SYNC_METHODS`], kept apart from
+    /// `notifications` so no ordinary route can ever shadow a built-in.
+    document_hooks: HashMap<String, ErasedNotificationHandler<S>>,
     commands: HashMap<String, ErasedCommandHandler<S>>,
     capabilities: CapabilityBuilder,
 }
@@ -150,6 +188,7 @@ impl<S: Send + Sync + 'static> Registrations<S> {
         Self {
             requests: HashMap::new(),
             notifications: HashMap::new(),
+            document_hooks: HashMap::new(),
             commands: HashMap::new(),
             capabilities: CapabilityBuilder::default(),
         }
@@ -234,7 +273,14 @@ impl<S: Send + Sync + 'static> Registrations<S> {
         if RESERVED_METHODS.contains(&method.as_str()) {
             return Err(BuildError::ReservedMethod(method));
         }
-        if self.notifications.insert(method.clone(), erased).is_some() {
+        // A built-in document-sync method records the connection's one
+        // post-mutation hook; every other method becomes a Router route.
+        let table = if DocumentSync::from_method(&method).is_some() {
+            &mut self.document_hooks
+        } else {
+            &mut self.notifications
+        };
+        if table.insert(method.clone(), erased).is_some() {
             return Err(BuildError::DuplicateMethod(method));
         }
         Ok(())
@@ -291,6 +337,7 @@ impl<S: Send + Sync + 'static> Registrations<S> {
         Router {
             requests: self.requests,
             notifications: self.notifications,
+            document_hooks: self.document_hooks,
             commands: self.commands,
             capabilities: self.capabilities.finish(),
         }
@@ -303,6 +350,7 @@ impl<S: Send + Sync + 'static> Registrations<S> {
 pub(crate) struct Router<S> {
     requests: HashMap<String, ErasedRequestHandler<S>>,
     notifications: HashMap<String, ErasedNotificationHandler<S>>,
+    document_hooks: HashMap<String, ErasedNotificationHandler<S>>,
     commands: HashMap<String, ErasedCommandHandler<S>>,
     /// Capabilities implied by the frozen registrations, computed once at
     /// freeze time from the same registrations used for dispatch.
@@ -318,6 +366,14 @@ impl<S> Router<S> {
     /// The erased notification handler registered for `method`, if any.
     pub(crate) fn notification(&self, method: &str) -> Option<&ErasedNotificationHandler<S>> {
         self.notifications.get(method)
+    }
+
+    /// The erased post-mutation hook registered for a built-in document-sync
+    /// `method`, if any (ADR 0018). The protocol engine has already decoded and
+    /// mutated by the time this hook is reached, so it observes — and cannot
+    /// replace — the built-in.
+    pub(crate) fn document_hook(&self, method: &str) -> Option<&ErasedNotificationHandler<S>> {
+        self.document_hooks.get(method)
     }
 
     /// The erased command handler registered under `name`, if any.
@@ -858,6 +914,74 @@ mod tests {
                 .is_some()
         );
         assert_eq!(router.capabilities(), ServerCapabilities::default());
+    }
+
+    #[test]
+    fn a_document_sync_registration_records_a_hook_not_a_route() {
+        let server = Server::builder(DummyState)
+            .notification::<lsp_types::notification::DidOpenTextDocument, _, _>(
+                |_s, _c, _p: lsp_types::DidOpenTextDocumentParams| async {},
+            )
+            .notification::<lsp_types::notification::DidSaveTextDocument, _, _>(
+                |_s, _c, _p: lsp_types::DidSaveTextDocumentParams| async {},
+            )
+            .build()
+            .expect("one hook and one ordinary notification build");
+        let router = server.into_router();
+
+        assert!(
+            router.document_hook("textDocument/didOpen").is_some(),
+            "a built-in document notification records a post-mutation hook"
+        );
+        assert!(
+            router.notification("textDocument/didOpen").is_none(),
+            "the hook is not a Router route, so it cannot shadow the built-in"
+        );
+        // didSave has no framework mutation in 0.2, so it stays a plain route.
+        assert!(router.notification("textDocument/didSave").is_some());
+        assert!(router.document_hook("textDocument/didSave").is_none());
+    }
+
+    #[test]
+    fn a_duplicate_document_hook_is_a_build_error() {
+        let err = Server::builder(DummyState)
+            .notification::<lsp_types::notification::DidChangeTextDocument, _, _>(
+                |_s, _c, _p: lsp_types::DidChangeTextDocumentParams| async {},
+            )
+            .notification::<lsp_types::notification::DidChangeTextDocument, _, _>(
+                |_s, _c, _p: lsp_types::DidChangeTextDocumentParams| async {},
+            )
+            .build()
+            .err()
+            .expect("a built-in notification takes at most one hook");
+        assert_eq!(
+            err,
+            BuildError::DuplicateMethod("textDocument/didChange".to_string())
+        );
+    }
+
+    #[test]
+    fn document_hooks_contribute_no_capabilities() {
+        let without_hook = Server::builder(DummyState)
+            .build()
+            .expect("an empty server builds")
+            .into_router()
+            .capabilities();
+        let with_hook = Server::builder(DummyState)
+            .notification::<lsp_types::notification::DidCloseTextDocument, _, _>(
+                |_s, _c, _p: lsp_types::DidCloseTextDocumentParams| async {},
+            )
+            .build()
+            .expect("a lone document hook builds")
+            .into_router()
+            .capabilities();
+        // Compared against a hookless build rather than asserting an absolute
+        // set: what a built-in itself advertises is the built-in's business,
+        // and observing one must not change it either way.
+        assert_eq!(
+            with_hook, without_hook,
+            "observing a built-in advertises nothing the built-in did not"
+        );
     }
 
     #[test]
