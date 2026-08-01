@@ -149,8 +149,18 @@ For a typed request, `ProtocolEngine` performs these steps in order:
 
 The pending entry exists before enqueue, so a fast response cannot outrun
 registration. If encoding or enqueue fails, the engine removes and completes
-that entry with the same failure. Request IDs are unique among pending
-requests and are not reused while pending.
+that entry with the same failure and emits no cancellation notification, since
+the request never reached the wire. Request IDs are allocated from a
+monotonic, never-reused sequence: an ID is never handed out twice within a
+connection, even after its request completes or is abandoned. The positive
+`i32` ID space bounds the sequence; if it were ever exhausted, a new outbound
+request fails with `ClientError::IdExhausted`.
+
+When a pending request is abandoned — the awaiting `Client` future is dropped
+without a response — the engine removes the pending entry and, if the request
+had been enqueued, emits exactly one typed `$/cancelRequest` notification
+carrying the abandoned request's ID. Requests dropped before enqueue emit
+nothing.
 
 When an outbound response arrives, `ProtocolEngine` removes the matching
 pending entry and completes it with the decoded result or `LspError`.
@@ -167,10 +177,14 @@ same operation and do not repeat cleanup.
 
 The close operation stops new outbound requests, triggers session
 cancellation, closes the outbound queue, completes every outbound pending
-request with a framework-owned session-closed `LspError`, cancels every
-remaining task in the engine-owned task group, and then joins every task.
-This cancel-then-join policy is identical for every close cause; no task is
-detached. No pending `Client` future remains unresolved after close.
+request with `ClientError::Cancelled`, cancels every remaining task in the
+engine-owned task group, and then joins every task. This cancel-then-join
+policy is identical for every close cause; no task is detached. No pending
+`Client` future remains unresolved after close. The legacy concurrent
+dispatcher (the `lspf::serve` / `serve_with_limit` entry points) honours the
+same guarantee: on transport close it completes every pending outbound
+request with `ClientError::Cancelled` *before* joining in-flight handlers,
+so a handler awaiting a client response is never left hanging.
 
 The Writer reports its terminal failure through the engine-owned Writer
 failure signal. It does not clear registries or independently cancel tasks.
@@ -341,8 +355,12 @@ public-interface or protocol-boundary tests proving:
   when responses arrive in reverse and mixed order;
 - unknown, duplicate, and late outbound response IDs do not complete another
   request;
+- outbound request IDs are never reused within a connection, even after a
+  request completes or is abandoned;
+- abandoning an enqueued outbound request emits exactly one `$/cancelRequest`
+  for its ID and removes its pending entry;
 - enqueue and encoding failure remove and complete their pending outbound
-  entries;
+  entries without emitting a cancellation notification;
 - session close completes all pending outbound requests and rejects new ones;
 - simultaneous Writer failure and reader EOF execute one close path, report
   one close cause, and perform cleanup once;
