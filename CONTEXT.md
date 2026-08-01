@@ -79,7 +79,9 @@ _Avoid_: Project, root (the LSP `rootUri` is only an input to it).
 The cloneable typed handle for server-to-client requests and notifications,
 exposed through [[Context]] (`ctx.client()`). A typed notification is
 encoded and enqueued without allocating an ID; a typed request reserves a
-connection-local ID and awaits its correlated response (ADR 0018).
+connection-local, never-reused ID and awaits its correlated response
+(ADR 0018). Abandoning a pending request emits one `$/cancelRequest` for its
+ID; session close resolves every pending request with `ClientError::Cancelled`.
 `Client` is only a handle — the outbound queue, ID allocator, and pending
 registry are owned by the connection's protocol engine.
 _Avoid_: Connection (that is the transport level), sender.
