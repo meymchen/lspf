@@ -29,6 +29,7 @@ pub use builder::{InitializeRegistrar, Server, ServerBuilder};
 pub use client::Client;
 pub use context::Context;
 pub use documents::{Document, Documents, PositionEncoding};
+pub use engine::Outcome;
 pub use error::{BuildError, ClientError, Error, LspError, Result};
 pub use features::FeatureSpec;
 pub use raw::{JsonRpcError, RawMessage, RequestId};
