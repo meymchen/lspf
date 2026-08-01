@@ -713,9 +713,14 @@ impl<S: Send + Sync + 'static> Server<S> {
 
     /// Drive this server to completion over a custom [`Transport`](crate::Transport).
     ///
-    /// Returns when the peer sends `exit`, closes the transport, or a
-    /// transport error ends the connection.
-    pub async fn serve<T>(self, transport: T) -> crate::Result<()>
+    /// Returns when the peer sends `exit`, the transport closes, the writer
+    /// fails, or a failed initialize transaction terminates the connection —
+    /// every one of which runs the engine's single close operation first. The
+    /// returned [`Outcome`](crate::Outcome) names that ending and carries the
+    /// LSP exit code; serving never terminates the process, so the caller
+    /// decides what the outcome means. A reader transport error is returned as
+    /// [`Error::Transport`](crate::Error::Transport) instead.
+    pub async fn serve<T>(self, transport: T) -> crate::Result<crate::Outcome>
     where
         T: crate::Transport,
     {
