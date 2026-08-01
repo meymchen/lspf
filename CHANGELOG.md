@@ -10,9 +10,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `ClientError::Cancelled` and `ClientError::IdExhausted` variants.
+- `DocumentsView`, the read-only document handle a handler reaches through
+  `Context::documents()`: retained document lookup, position conversion under
+  the negotiated encoding, and no mutation operation.
+- Post-mutation document hooks. Registering `textDocument/didOpen`,
+  `didChange`, or `didClose` with `.notification::<N>(handler)` records the
+  connection's one hook for that built-in instead of a Router route: the
+  protocol engine decodes and mutates first, then the hook observes the result.
+  A second hook for the same method is a `BuildError::DuplicateMethod`, and a
+  decode or built-in validation failure skips the hook without ending the
+  connection. `textDocument/didSave` has no framework mutation in 0.2 and stays
+  an ordinary typed notification route.
 
 ### Changed
 
+- `Context::documents()` now returns `&DocumentsView` rather than `&Documents`,
+  so handlers can read the connection's documents but never mutate them.
+- A `didChange` notification's content changes now apply all-or-nothing: a
+  rejected change leaves the document at the revision the last accepted
+  notification produced, rather than at a half-applied one.
 - Outbound request IDs are now allocated from a monotonic, never-reused
   sequence instead of wrapping around, so a late response for an abandoned
   request can never complete a later request.
