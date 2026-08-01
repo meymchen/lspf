@@ -134,6 +134,42 @@ impl Document {
             }
         }
     }
+
+    /// Apply one content change to this document's text, interpreting `range`
+    /// under `encoding`. An absent range replaces the whole document.
+    ///
+    /// Leaves the text untouched when the change is rejected, so a caller
+    /// applying a batch can abandon a working copy without having corrupted
+    /// anything.
+    fn apply_change(
+        &mut self,
+        encoding: PositionEncoding,
+        change: TextDocumentContentChangeEvent,
+    ) -> std::result::Result<(), crate::LspError> {
+        let Some(range) = change.range else {
+            self.text = Rope::from_str(&change.text);
+            return Ok(());
+        };
+        let start_offset = self
+            .position_to_offset(encoding, range.start)
+            .ok_or_else(|| crate::LspError::invalid_request("invalid start position"))?;
+        let end_offset = self
+            .position_to_offset(encoding, range.end)
+            .ok_or_else(|| crate::LspError::invalid_request("invalid end position"))?;
+        // A reversed range (end before start) would panic `Rope::remove`
+        // while the write lock is held, poisoning the store for every
+        // later access. Reject it as an invalid request instead.
+        if start_offset > end_offset {
+            return Err(crate::LspError::invalid_request(
+                "range end precedes range start",
+            ));
+        }
+        let start_char = self.text.byte_to_char(start_offset);
+        let end_char = self.text.byte_to_char(end_offset);
+        self.text.remove(start_char..end_char);
+        self.text.insert(start_char, &change.text);
+        Ok(())
+    }
 }
 
 #[derive(Debug, Default)]
@@ -204,6 +240,24 @@ impl Documents {
         version: i32,
         change: TextDocumentContentChangeEvent,
     ) -> crate::Result<()> {
+        self.apply_changes(uri, version, [change])
+            .map_err(Into::into)
+    }
+
+    /// Apply one `didChange` notification's content changes in order,
+    /// advancing the document to `version` (ADR 0018).
+    ///
+    /// The batch is all-or-nothing: the changes compose against a working copy,
+    /// and the document — text and version alike — is replaced only once every
+    /// change has applied. A rejected change therefore leaves the document
+    /// exactly as the last accepted notification left it, never at a
+    /// half-applied revision no reader asked for.
+    pub(crate) fn apply_changes(
+        &self,
+        uri: &Uri,
+        version: i32,
+        changes: impl IntoIterator<Item = TextDocumentContentChangeEvent>,
+    ) -> std::result::Result<(), crate::LspError> {
         let mut inner = self.inner.write().unwrap();
         let encoding = inner.encoding;
         let doc = inner
@@ -211,29 +265,14 @@ impl Documents {
             .get_mut(uri)
             .ok_or_else(|| crate::LspError::invalid_request("document not found"))?;
 
-        if let Some(range) = change.range {
-            let start_offset = doc
-                .position_to_offset(encoding, range.start)
-                .ok_or_else(|| crate::LspError::invalid_request("invalid start position"))?;
-            let end_offset = doc
-                .position_to_offset(encoding, range.end)
-                .ok_or_else(|| crate::LspError::invalid_request("invalid end position"))?;
-            // A reversed range (end before start) would panic `Rope::remove`
-            // while the write lock is held, poisoning the store for every
-            // later access. Reject it as an invalid request instead.
-            if start_offset > end_offset {
-                return Err(
-                    crate::LspError::invalid_request("range end precedes range start").into(),
-                );
-            }
-            let start_char = doc.text.byte_to_char(start_offset);
-            let end_char = doc.text.byte_to_char(end_offset);
-            doc.text.remove(start_char..end_char);
-            doc.text.insert(start_char, &change.text);
-        } else {
-            doc.text = Rope::from_str(&change.text);
+        // `Rope` clones share their nodes, so the working copy costs little
+        // more than the edits it actually makes.
+        let mut updated = doc.clone();
+        for change in changes {
+            updated.apply_change(encoding, change)?;
         }
-        doc.version = version;
+        updated.version = version;
+        *doc = updated;
         Ok(())
     }
 
@@ -264,6 +303,13 @@ impl Documents {
     /// handshake; everything else reads it.
     pub fn set_position_encoding(&self, encoding: PositionEncoding) {
         self.inner.write().unwrap().encoding = encoding;
+    }
+
+    /// A read-only view of these documents, for handing to user code.
+    pub(crate) fn view(&self) -> DocumentsView {
+        DocumentsView {
+            documents: self.clone(),
+        }
     }
 
     /// Negotiate the position encoding from `InitializeParams`, store it, and
@@ -298,5 +344,48 @@ impl Documents {
             PositionEncoding::Utf16
         });
         chosen
+    }
+}
+
+/// The read-only view of the connection's [`Documents`] that
+/// [`Context::documents`](crate::Context::documents) hands to user code
+/// (ADR 0018).
+///
+/// It carries the retained [`Document`] lookup and the position-conversion
+/// behavior, and deliberately nothing else: there is no `open`, `close`, or
+/// change operation to call. Documents change only through the protocol
+/// engine's built-in `didOpen`, `didChange`, and `didClose` handling, and a
+/// registered post-mutation hook observes the result.
+///
+/// Cheap to clone — every copy reads the documents the connection owns.
+#[derive(Debug, Clone)]
+pub struct DocumentsView {
+    documents: Documents,
+}
+
+impl DocumentsView {
+    /// Read a snapshot of a document by URI, or `None` if it is not open.
+    pub fn get(&self, uri: &Uri) -> Option<Document> {
+        self.documents.get(uri)
+    }
+
+    /// Convert a position in `uri` to a byte offset using the connection's
+    /// negotiated encoding. `None` if the document is not open or the position
+    /// is out of range.
+    pub fn position_to_offset(&self, uri: &Uri, position: Position) -> Option<usize> {
+        self.documents.position_to_offset(uri, position)
+    }
+
+    /// Convert a byte offset in `uri` to a position using the connection's
+    /// negotiated encoding. `None` if the document is not open or the offset is
+    /// out of range.
+    pub fn offset_to_position(&self, uri: &Uri, offset: usize) -> Option<Position> {
+        self.documents.offset_to_position(uri, offset)
+    }
+
+    /// The encoding `Position.character` is measured in for this connection,
+    /// negotiated during initialization (ADR 0016).
+    pub fn position_encoding(&self) -> PositionEncoding {
+        self.documents.position_encoding()
     }
 }

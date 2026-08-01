@@ -4,21 +4,21 @@ use tokio_util::sync::CancellationToken;
 use tracing::{Span, warn};
 
 use crate::client::{Client, OutboundRegistry};
-use crate::documents::Documents;
+use crate::documents::{Documents, DocumentsView};
 use crate::raw::RequestId;
 use crate::workspace::Workspace;
 
 /// Per-request handle to framework state (see ADR 0009).
 ///
-/// The handle exposes connection-scoped capabilities such as [`Client`],
-/// [`Documents`], and [`Workspace`] without exposing protocol-owned queues or
-/// registries.
+/// The handle exposes connection-scoped capabilities such as [`Client`], the
+/// read-only [`DocumentsView`], and [`Workspace`] without exposing
+/// protocol-owned queues or registries.
 #[derive(Debug, Clone)]
 pub struct Context {
     pub(crate) request_id: Option<RequestId>,
     pub(crate) span: Span,
     pub(crate) client: Client,
-    pub(crate) documents: Documents,
+    pub(crate) documents: DocumentsView,
     /// The connection's established [`Workspace`], present once the initialize
     /// transaction has run. Handlers only run after that point, so a handler
     /// always observes `Some`; it is `None` only in the pre-init lifecycle
@@ -38,7 +38,7 @@ impl Context {
             request_id: Some(id),
             span,
             client,
-            documents,
+            documents: documents.view(),
             workspace: None,
             cancellation: None,
         }
@@ -49,7 +49,7 @@ impl Context {
             request_id: None,
             span,
             client,
-            documents,
+            documents: documents.view(),
             workspace: None,
             cancellation: None,
         }
@@ -81,8 +81,13 @@ impl Context {
         &self.span
     }
 
-    /// The framework document store.
-    pub fn documents(&self) -> &Documents {
+    /// The connection's documents, as a read-only [`DocumentsView`].
+    ///
+    /// The framework owns and mutates the documents; a handler reads the retained
+    /// documents and converts positions through this view, and a registered
+    /// document hook sees it already carrying the built-in mutation
+    /// (ADR 0018).
+    pub fn documents(&self) -> &DocumentsView {
         &self.documents
     }
 
@@ -111,7 +116,7 @@ impl Context {
             request_id: None,
             span: Span::current(),
             client: Client::new(outgoing, OutboundRegistry::default()),
-            documents,
+            documents: documents.view(),
             workspace: None,
             cancellation: None,
         }

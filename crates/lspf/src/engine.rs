@@ -24,13 +24,16 @@ use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
 use futures_util::future::{Either, select};
-use lsp_types::{InitializeParams, InitializeResult};
+use lsp_types::{
+    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+    InitializeParams, InitializeResult,
+};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Span, debug, info_span, warn};
 
 use crate::builder::{
-    ConfigureInitialize, InitializeRegistrar, OnInitialize, Registrations, Server,
+    ConfigureInitialize, DocumentSync, InitializeRegistrar, OnInitialize, Registrations, Server,
 };
 use crate::client::{Client, OutboundRegistry};
 use crate::codec::{decode_params, decode_value, encode_body};
@@ -638,42 +641,41 @@ where
                     // Outside the running state only the completion and exit
                     // notifications handled above are processed: before
                     // `initialize` there is no Router, and after `shutdown` the
-                    // connection accepts no further user work. While running, a
-                    // registered custom notification dispatches with no
-                    // response; an unregistered one is ignored.
-                    match &self.lifecycle {
-                        Lifecycle::Running(service) => {
-                            let service = Arc::clone(service);
-                            let params = match decode_value(&params) {
-                                Ok(params) => params,
-                                Err(error) => {
-                                    debug!(method = other, %error, "notification params ignored");
-                                    return Flow::Continue;
-                                }
-                            };
-                            let span = info_span!("notification", method = %other);
-                            let ctx = attach_workspace(
-                                Context::for_notification(
-                                    span,
-                                    self.client.clone(),
-                                    self.documents.clone(),
-                                ),
-                                &self.workspace,
-                            );
-                            let result = service
-                                .call(IncomingCall::notification(
-                                    method.into_owned(),
-                                    params,
-                                    ctx,
-                                    Arc::clone(&self.state),
-                                ))
-                                .await;
-                            if !matches!(result, ServiceResult::NoResponse) {
-                                warn!("notification service attempted to produce a response");
-                            }
-                        }
-                        _ => debug!(method = other, "notification outside running state ignored"),
+                    // connection accepts no further user work.
+                    let Lifecycle::Running(service) = &self.lifecycle else {
+                        debug!(method = other, "notification outside running state ignored");
+                        return Flow::Continue;
+                    };
+                    let service = Arc::clone(service);
+
+                    // A document-sync notification is a protocol built-in
+                    // (ADR 0018): its decode and mutation run here, on the
+                    // read-loop, before anything user-registered is reached, so
+                    // the hook below — and every later message — observes the
+                    // mutated documents. A failure reports the notification
+                    // error and skips the hook, leaving the connection to
+                    // process the next message.
+                    if let Some(built_in) = DocumentSync::from_method(other)
+                        && let Err(error) = self.apply_document_mutation(built_in, &params)
+                    {
+                        warn!(method = other, %error, "document notification skipped its hook");
+                        return Flow::Continue;
                     }
+
+                    // The same bytes decode again into the method-erased value
+                    // that crosses the Service stack. For a built-in this
+                    // cannot fail — its typed decode above already succeeded.
+                    let params = match decode_value(&params) {
+                        Ok(params) => params,
+                        Err(error) => {
+                            debug!(method = other, %error, "notification params ignored");
+                            return Flow::Continue;
+                        }
+                    };
+                    // A registered notification — a custom route or a built-in's
+                    // post-mutation hook — dispatches with no response; an
+                    // unregistered one is ignored.
+                    self.dispatch_notification(service, other, params).await;
                 }
             },
             RawMessage::Response { id, result } => {
@@ -694,6 +696,79 @@ where
         }
 
         Flow::Continue
+    }
+
+    /// Run one normalized user notification through the Service stack.
+    ///
+    /// Takes `&mut self` like the rest of dispatch: the read-loop holds the
+    /// engine exclusively across this await, which is what keeps a built-in's
+    /// mutation and its hook one serial step.
+    async fn dispatch_notification(
+        &mut self,
+        service: UserService<S>,
+        method: &str,
+        params: serde_json::Value,
+    ) {
+        let span = info_span!("notification", method = %method);
+        let ctx = attach_workspace(
+            Context::for_notification(span, self.client.clone(), self.documents.clone()),
+            &self.workspace,
+        );
+        let result = service
+            .call(IncomingCall::notification(
+                method.to_string(),
+                params,
+                ctx,
+                Arc::clone(&self.state),
+            ))
+            .await;
+        if !matches!(result, ServiceResult::NoResponse) {
+            warn!("notification service attempted to produce a response");
+        }
+    }
+
+    /// Decode and apply the built-in mutation behind one document-sync
+    /// notification (ADR 0018).
+    ///
+    /// Built-in validation is what the documents themselves can establish: a
+    /// change names a document that must already be open, and each of its
+    /// ranges must be applicable under the negotiated encoding. Returning `Err`
+    /// is what skips the notification's hook, so nothing partial is left for a
+    /// hook to observe: a rejected `didChange` batch leaves the document at the
+    /// revision the last accepted notification produced.
+    fn apply_document_mutation(
+        &self,
+        built_in: DocumentSync,
+        raw_params: &Bytes,
+    ) -> std::result::Result<(), LspError> {
+        match built_in {
+            DocumentSync::Open => {
+                let params: DidOpenTextDocumentParams = decode_params(raw_params)?;
+                self.documents.open(params.text_document);
+            }
+            DocumentSync::Change => {
+                let params: DidChangeTextDocumentParams = decode_params(raw_params)?;
+                self.documents.apply_changes(
+                    &params.text_document.uri,
+                    params.text_document.version,
+                    params.content_changes,
+                )?;
+            }
+            DocumentSync::Close => {
+                let params: DidCloseTextDocumentParams = decode_params(raw_params)?;
+                // Closing a document that was never opened breaks the LSP's
+                // ordering, but there is nothing to roll back and no response
+                // to carry a complaint. The hook still runs: it observes the
+                // same absence a real close would have left behind.
+                if self.documents.close(&params.text_document.uri).is_none() {
+                    debug!(
+                        uri = ?params.text_document.uri,
+                        "closing a document that was not open"
+                    );
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Run the one `initialize` transaction (ADR 0017, ADR 0018).
