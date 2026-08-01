@@ -1,7 +1,7 @@
 //! End-to-end coverage for post-mutation document hooks (issue #49).
 //!
 //! `textDocument/didOpen`, `didChange`, and `didClose` are protocol built-ins:
-//! the engine decodes and mutates the connection-owned [`Documents`] store
+//! the engine decodes and mutates the connection-owned [`Documents`]
 //! serially, and only then does the user's registered hook enter the Service
 //! stack. These tests drive a connection-owned [`Server`] over an in-memory
 //! transport and prove the hook observes post-mutation state through the
@@ -100,7 +100,7 @@ async fn on_did_save(state: Arc<AppState>, ctx: Context, params: DidSaveTextDocu
         .push(Seen::Save { still_present });
 }
 
-// --- A custom request that reads the store through the view ------------------
+// --- A custom request that reads the documents through the view --------------
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ProbeParams {
@@ -119,7 +119,7 @@ struct ProbeResult {
 }
 
 /// A custom request whose only job is to report what `ctx.documents()` sees, so
-/// a test can observe the store from a message that arrives *after* the
+/// a test can observe the documents from a message that arrives *after* the
 /// document notifications.
 enum Probe {}
 
@@ -354,7 +354,7 @@ fn probed(outbox: &[RawMessage], id: i32) -> ProbeResult {
 // --- Tests -------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn each_document_hook_observes_the_post_mutation_store() {
+async fn each_document_hook_observes_the_post_mutation_documents() {
     let seen: Log = Arc::default();
     drive(
         observing_server(&seen),
@@ -429,7 +429,7 @@ async fn the_built_in_mutation_runs_without_any_registered_hook() {
 
 /// A hook cannot suppress the built-in: it runs strictly after the mutation has
 /// landed, and even a panicking hook — isolated by the framework's outermost
-/// Layer — leaves the store mutated and the connection able to serve later
+/// Layer — leaves the documents mutated and the connection able to serve later
 /// messages.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_panicking_hook_cannot_suppress_or_roll_back_the_mutation() {
@@ -542,8 +542,115 @@ async fn an_invalid_change_skips_the_hook_and_leaves_the_document_intact() {
     );
 }
 
+/// A rejected change in the middle of a batch must not leave a half-applied
+/// revision behind: the whole notification is refused, so the document stays at
+/// the revision the last accepted notification produced.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn closing_a_document_that_was_never_opened_skips_the_hook() {
+async fn a_change_batch_applies_all_or_nothing() {
+    let seen: Log = Arc::default();
+    let outbox = drive(
+        observing_server(&seen),
+        vec![
+            initialize_request(1),
+            did_open("file:///batch.txt", "hello world"),
+            // The first edit is applicable on its own; the second is reversed.
+            notification(
+                "textDocument/didChange",
+                json!({
+                    "textDocument": { "uri": "file:///batch.txt", "version": 2 },
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": { "line": 0, "character": 6 },
+                                "end": { "line": 0, "character": 11 }
+                            },
+                            "text": "lspf"
+                        },
+                        {
+                            "range": {
+                                "start": { "line": 0, "character": 5 },
+                                "end": { "line": 0, "character": 0 }
+                            },
+                            "text": "!"
+                        }
+                    ]
+                }),
+            ),
+            probe_request(2, "file:///batch.txt"),
+        ],
+    )
+    .await;
+
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec![Seen::Open {
+            text: Some("hello world".to_string()),
+            version: Some(1),
+        }],
+        "a rejected batch skips the change hook"
+    );
+    let probed = probed(&outbox, 2);
+    assert_eq!(
+        probed.text.as_deref(),
+        Some("hello world"),
+        "the batch's first edit is rolled back with the rest of it"
+    );
+    assert_eq!(
+        probed.version,
+        Some(1),
+        "a rejected batch does not advance the version"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_change_batch_composes_its_edits_in_order() {
+    let seen: Log = Arc::default();
+    drive(
+        observing_server(&seen),
+        vec![
+            initialize_request(1),
+            did_open("file:///compose.txt", "hello world"),
+            notification(
+                "textDocument/didChange",
+                json!({
+                    "textDocument": { "uri": "file:///compose.txt", "version": 2 },
+                    "contentChanges": [
+                        // "hello world" -> "hello lspf"
+                        {
+                            "range": {
+                                "start": { "line": 0, "character": 6 },
+                                "end": { "line": 0, "character": 11 }
+                            },
+                            "text": "lspf"
+                        },
+                        // "hello lspf" -> "hi lspf", ranged against the result
+                        // of the edit before it.
+                        {
+                            "range": {
+                                "start": { "line": 0, "character": 0 },
+                                "end": { "line": 0, "character": 5 }
+                            },
+                            "text": "hi"
+                        }
+                    ]
+                }),
+            ),
+        ],
+    )
+    .await;
+
+    assert_eq!(
+        seen.lock().unwrap()[1],
+        Seen::Change {
+            text: Some("hi lspf".to_string()),
+            version: Some(2),
+        },
+        "the hook observes the whole batch applied in receipt order, once"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn closing_a_document_that_was_never_opened_still_runs_the_hook() {
     let seen: Log = Arc::default();
     drive(
         observing_server(&seen),
@@ -559,6 +666,11 @@ async fn closing_a_document_that_was_never_opened_skips_the_hook() {
     assert_eq!(
         *seen.lock().unwrap(),
         vec![
+            // Nothing was there to remove, so the hook observes the same
+            // absence a real close would have left behind.
+            Seen::Close {
+                still_present: false
+            },
             Seen::Open {
                 text: Some("x".to_string()),
                 version: Some(1),
@@ -567,7 +679,7 @@ async fn closing_a_document_that_was_never_opened_skips_the_hook() {
                 still_present: false
             },
         ],
-        "a close for an unopened document fails built-in validation and skips the hook"
+        "a close with nothing to remove is not a validation failure"
     );
 }
 

@@ -33,8 +33,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Span, debug, info_span, warn};
 
 use crate::builder::{
-    ConfigureInitialize, DID_CHANGE_METHOD, DID_CLOSE_METHOD, DID_OPEN_METHOD, InitializeRegistrar,
-    OnInitialize, Registrations, Server,
+    ConfigureInitialize, DocumentSync, InitializeRegistrar, OnInitialize, Registrations, Server,
 };
 use crate::client::{Client, OutboundRegistry};
 use crate::codec::{decode_params, decode_value, encode_body};
@@ -638,49 +637,45 @@ where
                         }
                     }
                 }
-                document_method @ (DID_OPEN_METHOD | DID_CHANGE_METHOD | DID_CLOSE_METHOD) => {
-                    self.document_sync(document_method, params).await;
-                }
                 other => {
                     // Outside the running state only the completion and exit
                     // notifications handled above are processed: before
                     // `initialize` there is no Router, and after `shutdown` the
-                    // connection accepts no further user work. While running, a
-                    // registered custom notification dispatches with no
-                    // response; an unregistered one is ignored.
-                    match &self.lifecycle {
-                        Lifecycle::Running(service) => {
-                            let service = Arc::clone(service);
-                            let params = match decode_value(&params) {
-                                Ok(params) => params,
-                                Err(error) => {
-                                    debug!(method = other, %error, "notification params ignored");
-                                    return Flow::Continue;
-                                }
-                            };
-                            let span = info_span!("notification", method = %other);
-                            let ctx = attach_workspace(
-                                Context::for_notification(
-                                    span,
-                                    self.client.clone(),
-                                    self.documents.clone(),
-                                ),
-                                &self.workspace,
-                            );
-                            let result = service
-                                .call(IncomingCall::notification(
-                                    method.into_owned(),
-                                    params,
-                                    ctx,
-                                    Arc::clone(&self.state),
-                                ))
-                                .await;
-                            if !matches!(result, ServiceResult::NoResponse) {
-                                warn!("notification service attempted to produce a response");
-                            }
-                        }
-                        _ => debug!(method = other, "notification outside running state ignored"),
+                    // connection accepts no further user work.
+                    let Lifecycle::Running(service) = &self.lifecycle else {
+                        debug!(method = other, "notification outside running state ignored");
+                        return Flow::Continue;
+                    };
+                    let service = Arc::clone(service);
+
+                    // A document-sync notification is a protocol built-in
+                    // (ADR 0018): its decode and mutation run here, on the
+                    // read-loop, before anything user-registered is reached, so
+                    // the hook below — and every later message — observes the
+                    // mutated documents. A failure reports the notification
+                    // error and skips the hook, leaving the connection to
+                    // process the next message.
+                    if let Some(built_in) = DocumentSync::from_method(other)
+                        && let Err(error) = self.apply_document_mutation(built_in, &params)
+                    {
+                        warn!(method = other, %error, "document notification skipped its hook");
+                        return Flow::Continue;
                     }
+
+                    // The same bytes decode again into the method-erased value
+                    // that crosses the Service stack. For a built-in this
+                    // cannot fail — its typed decode above already succeeded.
+                    let params = match decode_value(&params) {
+                        Ok(params) => params,
+                        Err(error) => {
+                            debug!(method = other, %error, "notification params ignored");
+                            return Flow::Continue;
+                        }
+                    };
+                    // A registered notification — a custom route or a built-in's
+                    // post-mutation hook — dispatches with no response; an
+                    // unregistered one is ignored.
+                    self.dispatch_notification(service, other, params).await;
                 }
             },
             RawMessage::Response { id, result } => {
@@ -703,49 +698,17 @@ where
         Flow::Continue
     }
 
-    /// Handle one built-in document-sync notification (ADR 0018).
+    /// Run one normalized user notification through the Service stack.
     ///
-    /// The order is fixed and serial: decode the typed parameters, run the
-    /// built-in mutation, then let the user's registered post-mutation hook
-    /// enter the Service stack. All three happen on the read-loop before the
-    /// next envelope is read, so the hook — and every later message — observes
-    /// the mutated store, and no hook can suppress, reorder, or roll back the
-    /// mutation.
-    ///
-    /// A decode or built-in validation failure reports the notification error
-    /// and skips the hook. Either way the connection goes on to the next
-    /// message: a notification has no response, so a bad one is logged, never
-    /// answered.
-    // Takes `&mut self` like the rest of dispatch: the read-loop holds the
-    // engine exclusively across this await, which is what makes the decode,
-    // the mutation, and the hook one serial step.
-    async fn document_sync(&mut self, method: &str, raw_params: Bytes) {
-        // Before `initialize` there is no Router to hold a hook and no
-        // negotiated encoding to mutate under; after `shutdown` the connection
-        // accepts no further user work.
-        let Lifecycle::Running(service) = &self.lifecycle else {
-            debug!(
-                method,
-                "document notification outside running state ignored"
-            );
-            return;
-        };
-        let service = Arc::clone(service);
-
-        // One decode produces the method-erased value the hook receives; the
-        // built-in mutates from its own typed decode of the same bytes. Either
-        // failing leaves the store untouched from this notification on.
-        let params = match decode_value(&raw_params).and_then(|params| {
-            self.apply_document_mutation(method, &raw_params)
-                .map(|()| params)
-        }) {
-            Ok(params) => params,
-            Err(error) => {
-                warn!(method, %error, "document notification skipped its hook");
-                return;
-            }
-        };
-
+    /// Takes `&mut self` like the rest of dispatch: the read-loop holds the
+    /// engine exclusively across this await, which is what keeps a built-in's
+    /// mutation and its hook one serial step.
+    async fn dispatch_notification(
+        &mut self,
+        service: UserService<S>,
+        method: &str,
+        params: serde_json::Value,
+    ) {
         let span = info_span!("notification", method = %method);
         let ctx = attach_workspace(
             Context::for_notification(span, self.client.clone(), self.documents.clone()),
@@ -765,42 +728,44 @@ where
     }
 
     /// Decode and apply the built-in mutation behind one document-sync
-    /// notification.
+    /// notification (ADR 0018).
     ///
-    /// Built-in validation is what the store itself can establish: a change or
-    /// a close names a document that must already be open, and every change
-    /// range must be applicable under the negotiated encoding. Returning `Err`
-    /// is what skips the notification's hook.
+    /// Built-in validation is what the documents themselves can establish: a
+    /// change names a document that must already be open, and each of its
+    /// ranges must be applicable under the negotiated encoding. Returning `Err`
+    /// is what skips the notification's hook, so nothing partial is left for a
+    /// hook to observe: a rejected `didChange` batch leaves the document at the
+    /// revision the last accepted notification produced.
     fn apply_document_mutation(
         &self,
-        method: &str,
+        built_in: DocumentSync,
         raw_params: &Bytes,
     ) -> std::result::Result<(), LspError> {
-        match method {
-            DID_OPEN_METHOD => {
+        match built_in {
+            DocumentSync::Open => {
                 let params: DidOpenTextDocumentParams = decode_params(raw_params)?;
                 self.documents.open(params.text_document);
             }
-            DID_CHANGE_METHOD => {
+            DocumentSync::Change => {
                 let params: DidChangeTextDocumentParams = decode_params(raw_params)?;
-                let uri = params.text_document.uri;
-                let version = params.text_document.version;
-                // Stop at the first rejected edit: every later range in the
-                // batch is expressed against a document state that the
-                // rejection means never existed.
-                for change in params.content_changes {
-                    self.documents
-                        .apply_incremental_change(&uri, version, change)?;
-                }
+                self.documents.apply_changes(
+                    &params.text_document.uri,
+                    params.text_document.version,
+                    params.content_changes,
+                )?;
             }
-            DID_CLOSE_METHOD => {
+            DocumentSync::Close => {
                 let params: DidCloseTextDocumentParams = decode_params(raw_params)?;
-                self.documents
-                    .close(&params.text_document.uri)
-                    .ok_or_else(|| LspError::invalid_params("document is not open"))?;
-            }
-            other => {
-                unreachable!("only document-sync methods reach the built-in mutation: {other}")
+                // Closing a document that was never opened breaks the LSP's
+                // ordering, but there is nothing to roll back and no response
+                // to carry a complaint. The hook still runs: it observes the
+                // same absence a real close would have left behind.
+                if self.documents.close(&params.text_document.uri).is_none() {
+                    debug!(
+                        uri = ?params.text_document.uri,
+                        "closing a document that was not open"
+                    );
+                }
             }
         }
         Ok(())

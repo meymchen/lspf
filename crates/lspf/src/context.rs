@@ -83,7 +83,7 @@ impl Context {
 
     /// The connection's documents, as a read-only [`DocumentsView`].
     ///
-    /// The framework owns and mutates the store; a handler reads the retained
+    /// The framework owns and mutates the documents; a handler reads the retained
     /// documents and converts positions through this view, and a registered
     /// document hook sees it already carrying the built-in mutation
     /// (ADR 0018).

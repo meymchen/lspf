@@ -26,9 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `Context::documents()` now returns `&DocumentsView` rather than `&Documents`,
   so handlers can read the connection's documents but never mutate them.
-- `Documents::apply_incremental_change` now returns `Result<(), LspError>`
-  instead of `lspf::Result<()>`; the failure was always an `LspError`.
-
+- A `didChange` notification's content changes now apply all-or-nothing: a
+  rejected change leaves the document at the revision the last accepted
+  notification produced, rather than at a half-applied one.
 - Outbound request IDs are now allocated from a monotonic, never-reused
   sequence instead of wrapping around, so a late response for an abandoned
   request can never complete a later request.

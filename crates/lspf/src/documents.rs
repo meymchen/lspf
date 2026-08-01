@@ -134,6 +134,42 @@ impl Document {
             }
         }
     }
+
+    /// Apply one content change to this document's text, interpreting `range`
+    /// under `encoding`. An absent range replaces the whole document.
+    ///
+    /// Leaves the text untouched when the change is rejected, so a caller
+    /// applying a batch can abandon a working copy without having corrupted
+    /// anything.
+    fn apply_change(
+        &mut self,
+        encoding: PositionEncoding,
+        change: TextDocumentContentChangeEvent,
+    ) -> std::result::Result<(), crate::LspError> {
+        let Some(range) = change.range else {
+            self.text = Rope::from_str(&change.text);
+            return Ok(());
+        };
+        let start_offset = self
+            .position_to_offset(encoding, range.start)
+            .ok_or_else(|| crate::LspError::invalid_request("invalid start position"))?;
+        let end_offset = self
+            .position_to_offset(encoding, range.end)
+            .ok_or_else(|| crate::LspError::invalid_request("invalid end position"))?;
+        // A reversed range (end before start) would panic `Rope::remove`
+        // while the write lock is held, poisoning the store for every
+        // later access. Reject it as an invalid request instead.
+        if start_offset > end_offset {
+            return Err(crate::LspError::invalid_request(
+                "range end precedes range start",
+            ));
+        }
+        let start_char = self.text.byte_to_char(start_offset);
+        let end_char = self.text.byte_to_char(end_offset);
+        self.text.remove(start_char..end_char);
+        self.text.insert(start_char, &change.text);
+        Ok(())
+    }
 }
 
 #[derive(Debug, Default)]
@@ -203,6 +239,24 @@ impl Documents {
         uri: &Uri,
         version: i32,
         change: TextDocumentContentChangeEvent,
+    ) -> crate::Result<()> {
+        self.apply_changes(uri, version, [change])
+            .map_err(Into::into)
+    }
+
+    /// Apply one `didChange` notification's content changes in order,
+    /// advancing the document to `version` (ADR 0018).
+    ///
+    /// The batch is all-or-nothing: the changes compose against a working copy,
+    /// and the document — text and version alike — is replaced only once every
+    /// change has applied. A rejected change therefore leaves the document
+    /// exactly as the last accepted notification left it, never at a
+    /// half-applied revision no reader asked for.
+    pub(crate) fn apply_changes(
+        &self,
+        uri: &Uri,
+        version: i32,
+        changes: impl IntoIterator<Item = TextDocumentContentChangeEvent>,
     ) -> std::result::Result<(), crate::LspError> {
         let mut inner = self.inner.write().unwrap();
         let encoding = inner.encoding;
@@ -211,29 +265,14 @@ impl Documents {
             .get_mut(uri)
             .ok_or_else(|| crate::LspError::invalid_request("document not found"))?;
 
-        if let Some(range) = change.range {
-            let start_offset = doc
-                .position_to_offset(encoding, range.start)
-                .ok_or_else(|| crate::LspError::invalid_request("invalid start position"))?;
-            let end_offset = doc
-                .position_to_offset(encoding, range.end)
-                .ok_or_else(|| crate::LspError::invalid_request("invalid end position"))?;
-            // A reversed range (end before start) would panic `Rope::remove`
-            // while the write lock is held, poisoning the store for every
-            // later access. Reject it as an invalid request instead.
-            if start_offset > end_offset {
-                return Err(crate::LspError::invalid_request(
-                    "range end precedes range start",
-                ));
-            }
-            let start_char = doc.text.byte_to_char(start_offset);
-            let end_char = doc.text.byte_to_char(end_offset);
-            doc.text.remove(start_char..end_char);
-            doc.text.insert(start_char, &change.text);
-        } else {
-            doc.text = Rope::from_str(&change.text);
+        // `Rope` clones share their nodes, so the working copy costs little
+        // more than the edits it actually makes.
+        let mut updated = doc.clone();
+        for change in changes {
+            updated.apply_change(encoding, change)?;
         }
-        doc.version = version;
+        updated.version = version;
+        *doc = updated;
         Ok(())
     }
 
@@ -266,7 +305,7 @@ impl Documents {
         self.inner.write().unwrap().encoding = encoding;
     }
 
-    /// A read-only view of this store, for handing to user code.
+    /// A read-only view of these documents, for handing to user code.
     pub(crate) fn view(&self) -> DocumentsView {
         DocumentsView {
             documents: self.clone(),
@@ -318,7 +357,7 @@ impl Documents {
 /// engine's built-in `didOpen`, `didChange`, and `didClose` handling, and a
 /// registered post-mutation hook observes the result.
 ///
-/// Cheap to clone — every copy reads the one store the connection owns.
+/// Cheap to clone — every copy reads the documents the connection owns.
 #[derive(Debug, Clone)]
 pub struct DocumentsView {
     documents: Documents,

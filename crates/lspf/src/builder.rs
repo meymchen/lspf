@@ -49,18 +49,40 @@ const RESERVED_METHODS: &[&str] = &[
 /// explicit request handler for this method cannot coexist.
 const EXECUTE_COMMAND_METHOD: &str = "workspace/executeCommand";
 
-pub(crate) const DID_OPEN_METHOD: &str = "textDocument/didOpen";
-pub(crate) const DID_CHANGE_METHOD: &str = "textDocument/didChange";
-pub(crate) const DID_CLOSE_METHOD: &str = "textDocument/didClose";
-
-/// The document-sync notifications the protocol engine decodes and mutates
-/// itself (ADR 0018). A `notification` registration for one of these records
-/// the connection's single post-mutation hook rather than a Router route, so a
-/// user handler observes the mutation instead of replacing it.
+/// A document-sync notification the protocol engine decodes and mutates itself
+/// (ADR 0018).
 ///
-/// `textDocument/didSave` is deliberately absent: it carries no framework
-/// mutation in 0.2, so it stays an ordinary typed notification route.
-const DOCUMENT_SYNC_METHODS: &[&str] = &[DID_OPEN_METHOD, DID_CHANGE_METHOD, DID_CLOSE_METHOD];
+/// A `notification` registration for one of these methods records the
+/// connection's single post-mutation hook rather than a Router route, so a user
+/// handler observes the mutation instead of replacing it. This enum is the one
+/// place that says which methods those are: the builder asks it where a
+/// registration belongs, and the engine asks it which mutation to run.
+///
+/// `textDocument/didSave` is deliberately not a variant: it carries no
+/// framework mutation in 0.2, so it stays an ordinary typed notification route.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DocumentSync {
+    Open,
+    Change,
+    Close,
+}
+
+impl DocumentSync {
+    const OPEN_METHOD: &'static str = "textDocument/didOpen";
+    const CHANGE_METHOD: &'static str = "textDocument/didChange";
+    const CLOSE_METHOD: &'static str = "textDocument/didClose";
+
+    /// The built-in this wire method names, or `None` when the method is an
+    /// ordinary route.
+    pub(crate) fn from_method(method: &str) -> Option<Self> {
+        match method {
+            Self::OPEN_METHOD => Some(Self::Open),
+            Self::CHANGE_METHOD => Some(Self::Change),
+            Self::CLOSE_METHOD => Some(Self::Close),
+            _ => None,
+        }
+    }
+}
 
 /// The future produced by an erased request or command handler: its decoded,
 /// method-erased result or the error to report.
@@ -253,7 +275,7 @@ impl<S: Send + Sync + 'static> Registrations<S> {
         }
         // A built-in document-sync method records the connection's one
         // post-mutation hook; every other method becomes a Router route.
-        let table = if DOCUMENT_SYNC_METHODS.contains(&method.as_str()) {
+        let table = if DocumentSync::from_method(&method).is_some() {
             &mut self.document_hooks
         } else {
             &mut self.notifications
@@ -940,15 +962,24 @@ mod tests {
 
     #[test]
     fn document_hooks_contribute_no_capabilities() {
-        let server = Server::builder(DummyState)
+        let without_hook = Server::builder(DummyState)
+            .build()
+            .expect("an empty server builds")
+            .into_router()
+            .capabilities();
+        let with_hook = Server::builder(DummyState)
             .notification::<lsp_types::notification::DidCloseTextDocument, _, _>(
                 |_s, _c, _p: lsp_types::DidCloseTextDocumentParams| async {},
             )
             .build()
-            .expect("a lone document hook builds");
+            .expect("a lone document hook builds")
+            .into_router()
+            .capabilities();
+        // Compared against a hookless build rather than asserting an absolute
+        // set: what a built-in itself advertises is the built-in's business,
+        // and observing one must not change it either way.
         assert_eq!(
-            server.into_router().capabilities(),
-            ServerCapabilities::default(),
+            with_hook, without_hook,
             "observing a built-in advertises nothing the built-in did not"
         );
     }

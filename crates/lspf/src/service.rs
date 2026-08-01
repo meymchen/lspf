@@ -211,9 +211,10 @@ impl<S: Send + Sync + 'static> Service<S> for RouterService<S> {
                 }
                 CallKind::Notification => {
                     // A built-in document notification reaches the stack only
-                    // once the engine has decoded and mutated, and its hook
-                    // lives in its own table, so a route can never shadow the
-                    // built-in (ADR 0018).
+                    // once the engine has decoded and mutated; its hook lives
+                    // in a table registration keeps disjoint from the routes
+                    // (ADR 0018), so at most one of these two lookups can ever
+                    // match and their order carries no meaning.
                     let handler = router
                         .notification(&call.method)
                         .or_else(|| router.document_hook(&call.method));
