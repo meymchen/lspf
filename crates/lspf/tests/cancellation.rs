@@ -262,3 +262,192 @@ async fn cancel_request_triggers_handler_token() {
     drop(in_tx);
     let _ = server_handle.await;
 }
+
+/// Find an outbound request message with the given method and return its
+/// numeric ID.
+fn find_request(outbox: &[RawMessage], method: &str) -> Option<i32> {
+    outbox.iter().find_map(|m| match m {
+        RawMessage::Request {
+            id: RequestId::Number(id),
+            method: m,
+            ..
+        } if m.as_ref() == method => Some(*id),
+        _ => None,
+    })
+}
+
+async fn poll_for_request(
+    outbox: &Arc<Mutex<Vec<RawMessage>>>,
+    method: &str,
+    deadline: Duration,
+) -> Option<i32> {
+    let start = Instant::now();
+    loop {
+        if let Some(id) = find_request(&outbox.lock().unwrap(), method) {
+            return Some(id);
+        }
+        if start.elapsed() > deadline {
+            return None;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+/// A one-off outbound request the handler never answers.
+struct PendingRequest;
+
+impl lspf::types::request::Request for PendingRequest {
+    type Params = ();
+    type Result = serde_json::Value;
+    const METHOD: &'static str = "test/pendingRequest";
+}
+
+/// A server whose `shutdown` enqueues an outbound client request and awaits
+/// the correlated response, reporting the outcome via a oneshot.
+struct RequestOnShutdown {
+    documents: lspf::Documents,
+    result: Mutex<Option<oneshot::Sender<Result<serde_json::Value, lspf::ClientError>>>>,
+}
+
+impl LanguageServer for RequestOnShutdown {
+    fn documents(&self) -> &lspf::Documents {
+        &self.documents
+    }
+
+    async fn shutdown(&self, ctx: &Context, _ct: CancellationToken) -> Result<(), LspError> {
+        let result = ctx.client().request::<PendingRequest>(()).await;
+        if let Some(tx) = self.result.lock().unwrap().take() {
+            let _ = tx.send(result);
+        }
+        Ok(())
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn transport_close_completes_pending_client_request_with_cancelled() {
+    let (in_tx, in_rx) = mpsc::unbounded_channel::<RawMessage>();
+    let outbox = Arc::new(Mutex::new(Vec::new()));
+    let (result_tx, result_rx) = oneshot::channel::<Result<serde_json::Value, lspf::ClientError>>();
+
+    let server = RequestOnShutdown {
+        documents: lspf::Documents::new(),
+        result: Mutex::new(Some(result_tx)),
+    };
+    let transport = ChannelTransport {
+        in_rx,
+        outbox: outbox.clone(),
+    };
+    let server_handle = tokio::spawn(async move {
+        let _ = lspf::serve(server, transport).await;
+    });
+
+    initialize(&in_tx, &outbox).await;
+
+    in_tx.send(shutdown_request(2)).unwrap();
+
+    // Wait until the handler has enqueued its outbound request and is
+    // awaiting the (never-arriving) response.
+    poll_for_request(&outbox, "test/pendingRequest", Duration::from_millis(500))
+        .await
+        .expect("handler did not enqueue its outbound request");
+
+    // Drop the peer side. The transport now reports `Closed`, so the
+    // dispatcher must complete the pending request with `Cancelled` —
+    // otherwise the handler, and thus `serve()`, hangs forever.
+    drop(in_tx);
+
+    let serve_returned = tokio::time::timeout(Duration::from_secs(2), server_handle).await;
+    assert!(
+        serve_returned.is_ok(),
+        "serve() did not return after transport close: pending client request was never cancelled"
+    );
+
+    let result = tokio::time::timeout(Duration::from_millis(500), result_rx)
+        .await
+        .expect("handler never reported its request outcome")
+        .expect("handler dropped the result sender");
+    assert!(
+        matches!(result, Err(lspf::ClientError::Cancelled)),
+        "expected ClientError::Cancelled, got {result:?}"
+    );
+}
+
+/// A server whose `shutdown` enqueues one outbound client request (never
+/// answered by the peer) and, once that request settles, immediately starts a
+/// *second* one — modelling a handler that keeps issuing outbound requests
+/// after the transport has already closed.
+struct RequestAfterCloseServer {
+    documents: lspf::Documents,
+    second_result: Mutex<Option<oneshot::Sender<Result<serde_json::Value, lspf::ClientError>>>>,
+}
+
+impl LanguageServer for RequestAfterCloseServer {
+    fn documents(&self) -> &lspf::Documents {
+        &self.documents
+    }
+
+    async fn shutdown(&self, ctx: &Context, _ct: CancellationToken) -> Result<(), LspError> {
+        // First request: in flight when the transport closes, so it must
+        // resolve to `Cancelled` (covered by the test above).
+        let _ = ctx.client().request::<PendingRequest>(()).await;
+        // Second request: started only after the first one has already been
+        // completed by `close_all()`, i.e. after the outbound registry has
+        // been drained. It must fail fast with `ConnectionClosed` instead of
+        // enqueuing a pending entry that would never be completed (which
+        // would make `join_all()` — and thus `serve()` — hang).
+        let second = ctx.client().request::<PendingRequest>(()).await;
+        if let Some(tx) = self.second_result.lock().unwrap().take() {
+            let _ = tx.send(second);
+        }
+        Ok(())
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn new_outbound_request_after_transport_close_fails_fast() {
+    let (in_tx, in_rx) = mpsc::unbounded_channel::<RawMessage>();
+    let outbox = Arc::new(Mutex::new(Vec::new()));
+    let (result_tx, result_rx) = oneshot::channel::<Result<serde_json::Value, lspf::ClientError>>();
+
+    let server = RequestAfterCloseServer {
+        documents: lspf::Documents::new(),
+        second_result: Mutex::new(Some(result_tx)),
+    };
+    let transport = ChannelTransport {
+        in_rx,
+        outbox: outbox.clone(),
+    };
+    let server_handle = tokio::spawn(async move {
+        let _ = lspf::serve(server, transport).await;
+    });
+
+    initialize(&in_tx, &outbox).await;
+
+    in_tx.send(shutdown_request(2)).unwrap();
+
+    // Wait until the handler has enqueued its first outbound request and is
+    // awaiting the (never-arriving) response.
+    poll_for_request(&outbox, "test/pendingRequest", Duration::from_millis(500))
+        .await
+        .expect("handler did not enqueue its outbound request");
+
+    // Drop the peer side. The dispatcher must drain the pending first
+    // request (completing it with `Cancelled`) and, from that point on,
+    // reject the handler's second `request()` call fast instead of hanging.
+    drop(in_tx);
+
+    let serve_returned = tokio::time::timeout(Duration::from_secs(2), server_handle).await;
+    assert!(
+        serve_returned.is_ok(),
+        "serve() did not return after transport close: a request started after close hung join_all()"
+    );
+
+    let second_result = tokio::time::timeout(Duration::from_millis(500), result_rx)
+        .await
+        .expect("handler never reported its second request outcome")
+        .expect("handler dropped the result sender");
+    assert!(
+        matches!(second_result, Err(lspf::ClientError::ConnectionClosed)),
+        "expected ClientError::ConnectionClosed for a request started after transport close, got {second_result:?}"
+    );
+}

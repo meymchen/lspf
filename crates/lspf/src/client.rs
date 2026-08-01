@@ -15,6 +15,14 @@ use crate::raw::{JsonRpcError, RawMessage, RequestId};
 /// A response completion value: either raw success bytes or a JSON-RPC error.
 type PendingResult = std::result::Result<Bytes, JsonRpcError>;
 
+/// What a pending outbound request eventually resolves to.
+pub(crate) enum PendingOutcome {
+    /// The peer answered, either with raw success bytes or a JSON-RPC error.
+    Response(PendingResult),
+    /// The session closed before the peer answered.
+    Cancelled,
+}
+
 /// The engine-owned outbound pending-request registry and ID allocator.
 ///
 /// Shared through an `Arc` between the `ProtocolEngine` (which inserts entries
@@ -27,9 +35,14 @@ pub(crate) struct OutboundRegistry {
 
 struct OutboundInner {
     /// Pending requests keyed by their outbound ID.
-    pending: HashMap<u32, oneshot::Sender<PendingResult>>,
+    pending: HashMap<u32, oneshot::Sender<PendingOutcome>>,
     /// Monotonically increasing counter; the next ID to try allocating.
     next_id: u32,
+    /// Set by `close_all()`. Once set, `insert()` refuses to create new
+    /// pending entries: any handler that starts a new outbound request after
+    /// the registry has been drained fails fast instead of enqueuing an entry
+    /// that would never be completed.
+    closed: bool,
 }
 
 impl Default for OutboundInner {
@@ -37,52 +50,89 @@ impl Default for OutboundInner {
         Self {
             pending: HashMap::new(),
             next_id: 1,
+            closed: false,
         }
     }
+}
+
+/// Outcome of allocating a new pending outbound-request entry.
+pub(crate) enum InsertOutcome {
+    /// The entry was created; the caller should enqueue the request and await
+    /// the receiver.
+    Inserted(u32, oneshot::Receiver<PendingOutcome>),
+    /// The registry has been closed (see [`OutboundRegistry::close_all`]) and
+    /// no longer accepts new pending entries.
+    Closed,
+    /// The positive `i32` ID space is exhausted.
+    Exhausted,
 }
 
 /// RAII guard that removes a pending outbound-request entry from the registry
 /// when dropped. Guards against cancelled or failed `request()` futures that
 /// would otherwise leak entries in the pending map indefinitely.
+///
+/// When the guarded request actually reached the wire (was enqueued), dropping
+/// the guard also tells the peer it was cancelled with a single typed
+/// `$/cancelRequest` notification. Requests that failed before enqueue never
+/// emit one.
 struct PendingGuard {
-    registry: OutboundRegistry,
+    client: Client,
     id: u32,
+    enqueued: bool,
 }
 
 impl PendingGuard {
-    fn new(registry: OutboundRegistry, id: u32) -> Self {
-        Self { registry, id }
+    fn new(client: Client, id: u32) -> Self {
+        Self {
+            client,
+            id,
+            enqueued: false,
+        }
     }
 }
 
 impl Drop for PendingGuard {
     fn drop(&mut self) {
-        // Silently no-ops if the entry was already removed by `complete()`.
-        self.registry.remove(self.id);
+        // Only a still-present entry means the request never completed. Remove
+        // it and, if it reached the wire, cancel it with the peer. Errors are
+        // ignored: the connection may already be closing.
+        if self.client.outbound.remove(self.id).is_some() && self.enqueued {
+            let _ =
+                self.client
+                    .notify::<lsp_types::notification::Cancel>(lsp_types::CancelParams {
+                        id: lsp_types::NumberOrString::Number(self.id as i32),
+                    });
+        }
     }
 }
 
 impl OutboundRegistry {
-    /// Allocate the next available outbound request ID (starting at 1,
-    /// wrapping around while scanning for an unused slot) and store the
+    /// Allocate the next outbound request ID (starting at 1) and store the
     /// completion sender.
     ///
+    /// IDs are allocated monotonically and never reused, so a response for an
+    /// abandoned request can never complete a later request. Once the positive
+    /// `i32` ID space is exhausted, returns [`InsertOutcome::Exhausted`]. Once
+    /// [`OutboundRegistry::close_all`] has run, returns
+    /// [`InsertOutcome::Closed`] instead of creating an entry that could never
+    /// be completed — the closed check and the drain in `close_all` share the
+    /// same lock, so there is no window where a new entry is silently created
+    /// after the registry has been drained.
+    ///
     /// Returns the allocated ID and the receiver the caller should await.
-    pub(crate) fn insert(&self) -> (u32, oneshot::Receiver<PendingResult>) {
-        let (tx, rx) = oneshot::channel();
+    pub(crate) fn insert(&self) -> InsertOutcome {
         let mut inner = self.inner.lock().unwrap();
-        // Scan from `next_id` upward (with wraparound at u32::MAX back to 1)
-        // until we find a slot that is not currently in use.
-        let id = loop {
-            let candidate = inner.next_id;
-            // Advance the counter; skip 0 so IDs stay positive.
-            inner.next_id = inner.next_id.wrapping_add(1).max(1);
-            if !inner.pending.contains_key(&candidate) {
-                break candidate;
-            }
-        };
+        if inner.closed {
+            return InsertOutcome::Closed;
+        }
+        let id = inner.next_id;
+        if id > i32::MAX as u32 {
+            return InsertOutcome::Exhausted;
+        }
+        inner.next_id = id + 1;
+        let (tx, rx) = oneshot::channel();
         inner.pending.insert(id, tx);
-        (id, rx)
+        InsertOutcome::Inserted(id, rx)
     }
 
     /// Remove and complete the pending entry for `id` with `result`.
@@ -93,7 +143,7 @@ impl OutboundRegistry {
         let tx = self.inner.lock().unwrap().pending.remove(&id);
         if let Some(tx) = tx {
             // Receiver may be gone if the caller was cancelled; ignore.
-            let _ = tx.send(result);
+            let _ = tx.send(PendingOutcome::Response(result));
             true
         } else {
             false
@@ -102,29 +152,42 @@ impl OutboundRegistry {
 
     /// Remove the pending entry for `id` without completing it.
     ///
-    /// Used when encoding or enqueue fails immediately after `insert`.
-    pub(crate) fn remove(&self, id: u32) -> Option<oneshot::Sender<PendingResult>> {
+    /// Used when encoding or enqueue fails immediately after `insert`, and by
+    /// the pending guard on abandonment.
+    pub(crate) fn remove(&self, id: u32) -> Option<oneshot::Sender<PendingOutcome>> {
         self.inner.lock().unwrap().pending.remove(&id)
     }
 
-    /// Complete every remaining pending entry with a session-closed error,
-    /// then clear the registry.
+    /// Complete every remaining pending entry with [`PendingOutcome::Cancelled`],
+    /// clear the registry, and permanently close it to new entries.
+    ///
+    /// After this call, [`OutboundRegistry::insert`] returns
+    /// [`InsertOutcome::Closed`] instead of creating new pending entries, so a
+    /// handler that starts a new outbound request after the drain fails fast
+    /// with `ClientError::ConnectionClosed` rather than enqueuing a request
+    /// that would never receive a response. Awaiting `request()` futures that
+    /// were already pending observe [`ClientError::Cancelled`].
     pub(crate) fn close_all(&self) {
-        let entries: HashMap<u32, oneshot::Sender<PendingResult>> =
-            std::mem::take(&mut self.inner.lock().unwrap().pending);
+        let mut inner = self.inner.lock().unwrap();
+        inner.closed = true;
+        let entries: HashMap<u32, oneshot::Sender<PendingOutcome>> =
+            std::mem::take(&mut inner.pending);
+        drop(inner);
         for tx in entries.into_values() {
-            let _ = tx.send(Err(JsonRpcError {
-                code: -32099,
-                message: "session closed".to_string(),
-                data: None,
-            }));
+            let _ = tx.send(PendingOutcome::Cancelled);
         }
     }
 
-    /// Override the next candidate ID (test-only, for wraparound coverage).
+    /// Override the next candidate ID (test-only, for exhaustion coverage).
     #[cfg(test)]
     pub(crate) fn set_next_id(&self, id: u32) {
         self.inner.lock().unwrap().next_id = id;
+    }
+
+    /// Number of entries currently pending (test-only, for leak assertions).
+    #[cfg(test)]
+    pub(crate) fn pending_len(&self) -> usize {
+        self.inner.lock().unwrap().pending.len()
     }
 }
 
@@ -202,15 +265,23 @@ impl Client {
     /// Encode and enqueue one typed server-to-client request, then await the
     /// correlated response.
     ///
-    /// The method allocates a unique outbound ID, inserts the pending decoder
-    /// before enqueue, and returns a `Future` that resolves once the engine
-    /// delivers the matching response. Responses may arrive in any order.
+    /// The method allocates a never-reused outbound ID, inserts the pending
+    /// decoder before enqueue, and returns a `Future` that resolves once the
+    /// engine delivers the matching response. Responses may arrive in any
+    /// order. If the future is dropped before the response arrives, the
+    /// pending entry is removed and the peer is told the request was cancelled
+    /// with a `$/cancelRequest` notification.
     ///
     /// # Errors
     ///
     /// - [`ClientError::ConnectionClosed`] or [`ClientError::OutboundClosed`]
-    ///   if the session is already closing.
+    ///   if the session is already closing, or if the outbound registry has
+    ///   already been drained by [`OutboundRegistry::close_all`] (e.g. this
+    ///   request started after the connection began closing).
+    /// - [`ClientError::IdExhausted`] if the outbound ID space is exhausted.
     /// - [`ClientError::Serialize`] if the params cannot be encoded.
+    /// - [`ClientError::Cancelled`] if the session closes before the peer
+    ///   answers.
     /// - [`ClientError::Remote`] if the peer replies with a JSON-RPC error.
     /// - [`ClientError::Deserialize`] if the success result cannot be decoded.
     pub async fn request<R>(&self, params: R::Params) -> Result<R::Result, ClientError>
@@ -227,16 +298,26 @@ impl Client {
         //    on encode failure before insert).
         let params_bytes = serde_json::to_vec(&params).map_err(ClientError::Serialize)?;
 
-        // 3. Allocate an ID and insert the pending entry.
-        let (id, rx) = self.outbound.insert();
-        // Guard ensures the pending entry is removed if this future is dropped
-        // before a response arrives (e.g. due to caller cancellation).
-        let _guard = PendingGuard::new(self.outbound.clone(), id);
-        let request_id = RequestId::Number(id as i32);
+        // 3. Allocate a never-reused ID and insert the pending entry. If the
+        //    registry was already closed by `close_all()` (e.g. because a
+        //    prior in-flight handler is still draining while a new one
+        //    starts), fail fast instead of enqueuing a request that would
+        //    never receive a response.
+        let (id, rx) = match self.outbound.insert() {
+            InsertOutcome::Inserted(id, rx) => (id, rx),
+            InsertOutcome::Closed => return Err(ClientError::ConnectionClosed),
+            InsertOutcome::Exhausted => return Err(ClientError::IdExhausted),
+        };
+        // The guard removes the pending entry if this future is dropped before
+        // a response arrives (e.g. due to caller cancellation), and tells the
+        // peer about the cancellation once the request reached the wire.
+        let mut guard = PendingGuard::new(self.clone(), id);
 
-        // 4. Enqueue.  On any failure remove and complete the pending entry.
+        // 4. Enqueue. On any failure remove the pending entry and report the
+        //    error; the request never reached the wire, so no cancellation
+        //    notification is sent.
         let message = RawMessage::Request {
-            id: request_id,
+            id: RequestId::Number(id as i32),
             method: Cow::Borrowed(R::METHOD),
             params: Bytes::from(params_bytes),
         };
@@ -266,18 +347,18 @@ impl Client {
             drop(self.outbound.remove(id));
             return Err(ClientError::OutboundClosed);
         }
+        guard.enqueued = true;
 
         // 5. Await the response.
-        let raw = rx.await.map_err(|_| ClientError::OutboundClosed)?;
-
-        match raw {
-            Ok(bytes) => {
+        match rx.await.map_err(|_| ClientError::OutboundClosed)? {
+            PendingOutcome::Response(Ok(bytes)) => {
                 serde_json::from_slice::<R::Result>(&bytes).map_err(ClientError::Deserialize)
             }
-            Err(e) => Err(ClientError::Remote {
+            PendingOutcome::Response(Err(e)) => Err(ClientError::Remote {
                 code: e.code,
                 message: e.message,
             }),
+            PendingOutcome::Cancelled => Err(ClientError::Cancelled),
         }
     }
 
@@ -412,20 +493,26 @@ mod tests {
     // --- OutboundRegistry unit tests -----------------------------------------
 
     #[test]
-    fn outbound_ids_start_at_1_and_increase_monotonically() {
+    fn outbound_ids_are_monotonic_and_never_reused() {
         let registry = OutboundRegistry::default();
-        let (id1, _rx1) = registry.insert();
-        let (id2, _rx2) = registry.insert();
-        let (id3, _rx3) = registry.insert();
+        let (id1, _rx1) = insert_ok(&registry);
+        let (id2, _rx2) = insert_ok(&registry);
+        let (id3, _rx3) = insert_ok(&registry);
         assert_eq!(id1, 1);
         assert_eq!(id2, 2);
         assert_eq!(id3, 3);
+
+        // Completing an earlier request does not free its ID for reuse: the
+        // allocator only ever moves forward.
+        registry.complete(id1, Ok(Bytes::from_static(b"null")));
+        let (id4, _rx4) = insert_ok(&registry);
+        assert_eq!(id4, 4);
     }
 
     #[test]
     fn complete_returns_true_for_known_id_and_false_for_unknown() {
         let registry = OutboundRegistry::default();
-        let (id, mut rx) = registry.insert();
+        let (id, mut rx) = insert_ok(&registry);
         assert!(registry.complete(id, Ok(Bytes::from_static(b"null"))));
         // Now gone — second call returns false.
         assert!(!registry.complete(id, Ok(Bytes::from_static(b"null"))));
@@ -436,27 +523,45 @@ mod tests {
     }
 
     #[test]
-    fn close_all_completes_pending_with_session_closed_error() {
+    fn close_all_completes_pending_with_cancelled() {
         let registry = OutboundRegistry::default();
-        let (_id1, mut rx1) = registry.insert();
-        let (_id2, mut rx2) = registry.insert();
+        let (_id1, mut rx1) = insert_ok(&registry);
+        let (_id2, mut rx2) = insert_ok(&registry);
         registry.close_all();
-        let r1 = rx1.try_recv().unwrap();
-        let r2 = rx2.try_recv().unwrap();
-        assert!(r1.is_err());
-        assert!(r2.is_err());
+        assert!(matches!(rx1.try_recv().unwrap(), PendingOutcome::Cancelled));
+        assert!(matches!(rx2.try_recv().unwrap(), PendingOutcome::Cancelled));
+        // Registry is drained; nothing leaks.
+        assert_eq!(registry.pending_len(), 0);
     }
 
     #[test]
-    fn allocator_wraparound_skips_in_use_ids() {
+    fn outbound_id_space_exhaustion_returns_none() {
         let registry = OutboundRegistry::default();
-        // Pre-populate id 1 with a pending entry by hand to simulate wraparound.
-        let (id1, _rx1) = registry.insert(); // id = 1
-        assert_eq!(id1, 1);
-        // Force next_id back to 1 to test wraparound scan.
-        registry.set_next_id(1);
-        let (id2, _rx2) = registry.insert(); // should skip 1, use 2
-        assert_eq!(id2, 2);
+        // Force the allocator to the last usable positive ID.
+        registry.set_next_id(i32::MAX as u32);
+        let (id, _rx) = insert_ok(&registry);
+        assert_eq!(id, i32::MAX as u32);
+        // The next allocation is refused: the positive ID space is exhausted.
+        assert!(matches!(registry.insert(), InsertOutcome::Exhausted));
+    }
+
+    #[test]
+    fn insert_after_close_all_is_refused() {
+        let registry = OutboundRegistry::default();
+        registry.close_all();
+        // A handler that starts a new outbound request after the registry has
+        // already been drained must fail fast instead of enqueuing a request
+        // that would never be completed.
+        assert!(matches!(registry.insert(), InsertOutcome::Closed));
+    }
+
+    /// Test helper: unwrap an `InsertOutcome::Inserted`, panicking otherwise.
+    fn insert_ok(registry: &OutboundRegistry) -> (u32, oneshot::Receiver<PendingOutcome>) {
+        match registry.insert() {
+            InsertOutcome::Inserted(id, rx) => (id, rx),
+            InsertOutcome::Closed => panic!("registry unexpectedly closed"),
+            InsertOutcome::Exhausted => panic!("registry unexpectedly exhausted"),
+        }
     }
 
     #[tokio::test]
@@ -573,5 +678,183 @@ mod tests {
                 .complete(id_num, Ok(Bytes::from_static(b"\"pong\""))),
             "pending entry was not cleaned up after future was dropped"
         );
+
+        // Dropping the future also emits one typed $/cancelRequest for the ID.
+        let cancel = receiver.recv().await.unwrap();
+        match cancel {
+            RawMessage::Notification { method, params } => {
+                assert_eq!(method, "$/cancelRequest");
+                let params: serde_json::Value = serde_json::from_slice(&params).unwrap();
+                assert_eq!(params["id"], serde_json::json!(id_num));
+            }
+            _ => panic!("expected a $/cancelRequest notification"),
+        }
+        // Exactly one cancellation notification; nothing else leaks.
+        assert!(receiver.try_recv().is_err());
+        assert_eq!(client.outbound_registry().pending_len(), 0);
+    }
+
+    #[tokio::test]
+    async fn abandoned_enqueued_request_emits_one_cancel_notification() {
+        use lsp_types::request::Request as LspRequest;
+
+        enum PingRequest {}
+        impl LspRequest for PingRequest {
+            type Params = serde_json::Value;
+            type Result = String;
+            const METHOD: &'static str = "test/ping";
+        }
+
+        let (client, mut receiver) = make_client();
+        let client2 = client.clone();
+
+        let handle = tokio::spawn(async move { client2.request::<PingRequest>(json!({})).await });
+
+        // Pull the request off the wire; its ID must be echoed back.
+        let msg = receiver.recv().await.unwrap();
+        let id_num = match msg {
+            RawMessage::Request {
+                id: NumberOrString::Number(n),
+                ..
+            } => n,
+            _ => panic!("expected numeric request"),
+        };
+
+        // Abort the caller; the guard drops and must emit a typed cancel.
+        handle.abort();
+        let _ = handle.await;
+
+        let cancel = receiver.recv().await.unwrap();
+        match cancel {
+            RawMessage::Notification { method, params } => {
+                assert_eq!(method, "$/cancelRequest");
+                let params: serde_json::Value = serde_json::from_slice(&params).unwrap();
+                assert_eq!(params["id"], serde_json::json!(id_num));
+            }
+            _ => panic!("expected a $/cancelRequest notification"),
+        }
+
+        // Exactly one notification; nothing else leaks.
+        assert!(receiver.try_recv().is_err());
+        assert_eq!(client.outbound_registry().pending_len(), 0);
+    }
+
+    #[tokio::test]
+    async fn close_all_yields_cancelled_error_from_request() {
+        use lsp_types::request::Request as LspRequest;
+
+        enum PingRequest {}
+        impl LspRequest for PingRequest {
+            type Params = serde_json::Value;
+            type Result = String;
+            const METHOD: &'static str = "test/ping";
+        }
+
+        let (client, mut receiver) = make_client();
+        let client2 = client.clone();
+
+        let handle = tokio::spawn(async move { client2.request::<PingRequest>(json!({})).await });
+
+        // Pull the request off the wire so we know it was enqueued.
+        let msg = receiver.recv().await.unwrap();
+        assert!(matches!(msg, RawMessage::Request { .. }));
+
+        // Session closes: every pending entry completes with Cancelled.
+        client.outbound_registry().close_all();
+
+        let err = handle.await.unwrap().unwrap_err();
+        assert!(
+            matches!(err, ClientError::Cancelled),
+            "expected Cancelled, got {err:?}"
+        );
+        assert_eq!(client.outbound_registry().pending_len(), 0);
+    }
+
+    #[tokio::test]
+    async fn stale_response_after_cleanup_cannot_complete_another_request() {
+        use lsp_types::request::Request as LspRequest;
+
+        enum PingRequest {}
+        impl LspRequest for PingRequest {
+            type Params = serde_json::Value;
+            type Result = String;
+            const METHOD: &'static str = "test/ping";
+        }
+
+        let (client, mut receiver) = make_client();
+        let client2 = client.clone();
+
+        let handle = tokio::spawn(async move { client2.request::<PingRequest>(json!({})).await });
+
+        // Pull request A off the wire.
+        let msg = receiver.recv().await.unwrap();
+        let id_a = match msg {
+            RawMessage::Request {
+                id: NumberOrString::Number(n),
+                ..
+            } => n as u32,
+            _ => panic!("expected numeric request"),
+        };
+
+        // Abandon request A: the guard removes its entry and emits a cancel.
+        handle.abort();
+        let _ = handle.await;
+        let cancel = receiver.recv().await.unwrap();
+        assert!(matches!(
+            cancel,
+            RawMessage::Notification { method, .. } if &*method == "$/cancelRequest"
+        ));
+
+        // Request B gets a fresh, never-reused ID.
+        let client3 = client.clone();
+        let handle_b = tokio::spawn(async move { client3.request::<PingRequest>(json!({})).await });
+        let msg = receiver.recv().await.unwrap();
+        let id_b = match msg {
+            RawMessage::Request {
+                id: NumberOrString::Number(n),
+                ..
+            } => n as u32,
+            _ => panic!("expected numeric request"),
+        };
+        assert_ne!(id_a, id_b, "abandoned ID must never be reused");
+
+        // A stale response for A cannot complete B.
+        client
+            .outbound_registry()
+            .complete(id_a, Ok(Bytes::from_static(b"\"stale\"")));
+        assert_eq!(client.outbound_registry().pending_len(), 1);
+
+        // The real response for B completes B with its own result.
+        client
+            .outbound_registry()
+            .complete(id_b, Ok(Bytes::from_static(b"\"pong\"")));
+        let result = handle_b.await.unwrap().unwrap();
+        assert_eq!(result, "pong");
+        assert_eq!(client.outbound_registry().pending_len(), 0);
+    }
+
+    #[tokio::test]
+    async fn enqueue_failure_emits_no_cancel_and_leaves_no_entry() {
+        use lsp_types::request::Request as LspRequest;
+
+        enum PingRequest {}
+        impl LspRequest for PingRequest {
+            type Params = serde_json::Value;
+            type Result = String;
+            const METHOD: &'static str = "test/ping";
+        }
+
+        // A client whose outbound queue is closed (receiver dropped, so all
+        // sends fail).
+        let (outgoing, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let client = Client::new(outgoing, OutboundRegistry::default());
+        drop(receiver);
+        let client2 = client.clone();
+
+        let result = client2.request::<PingRequest>(json!({})).await;
+        assert!(matches!(result, Err(ClientError::OutboundClosed)));
+
+        // Nothing was ever emitted, and the registry is empty.
+        assert_eq!(client.outbound_registry().pending_len(), 0);
     }
 }
