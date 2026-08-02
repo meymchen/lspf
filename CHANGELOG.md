@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-02
+
+`0.2.0` replaces the `LanguageServer` trait with the built `Server`, the typed
+`Router`, the `Service`/`Layer` stack, and the connection-owned protocol engine.
+It is a **breaking release with no adapter and no deprecation cycle**: the 0.1
+surface is removed rather than phased out, and no feature flag or runtime
+setting restores it. The
+[0.1-to-0.2 migration guide][migration-0.1-to-0.2] maps every 0.1 construct
+onto its 0.2 replacement, and each of its `0.2` examples is compiled as a
+doc-test against this release.
+
+[migration-0.1-to-0.2]: https://github.com/meymchen/lspf/blob/main/docs/migrations/0.1-to-0.2.md
+
+### Removed
+
+- The `LanguageServer` trait, together with its lifecycle and document methods
+  (`initialize`, `initialized`, `shutdown`, `exit`, `text_document_did_*`), its
+  `documents()` getter, its `server_capabilities()` override, and its
+  `TEXT_DOCUMENT_SYNC` capability constant. Registrations move to
+  `Server::builder`; capabilities are generated from those registrations.
+- The trait-based dispatcher behind that surface. `ProtocolEngine` — reached
+  through `Server::serve` and `lspf::stdio(server).serve()` — is the only
+  dispatch path, and it owns the routes and the protocol state outright.
+- `lspf::serve` and `lspf::serve_with_limit`. A built `Server` carries its own
+  concurrency policy and reports an `Outcome`, so `Server::serve(transport)`
+  replaces both. `DEFAULT_CONCURRENCY_LIMIT` remains as the `ServerBuilder`
+  default.
+- The public `Documents` handle and every escape hatch around it:
+  `Documents::new`, `open`, `close`, `save`, `apply_incremental_change`,
+  `get`, `set_position_encoding`, and the position-conversion methods. The
+  connection's protocol engine owns the store; handlers read it through the
+  read-only `DocumentsView` from `ctx.documents()`. `Document` and
+  `PositionEncoding` remain public.
+- `Context::for_test_notification`, the hidden constructor that let user code
+  build a `Context` outside a connection.
+
 ### Added
 
 - `ClientError::Cancelled` and `ClientError::IdExhausted` variants.
@@ -89,7 +125,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Toolchain pinning and lint configuration: `rust-toolchain.toml`,
   `rustfmt.toml`, `clippy.toml`.
 
-[Unreleased]: https://github.com/meymchen/lspf/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/meymchen/lspf/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/meymchen/lspf/releases/tag/v0.2.0
 [0.1.2]: https://github.com/meymchen/lspf/releases/tag/v0.1.2
 [0.1.1]: https://github.com/meymchen/lspf/releases/tag/v0.1.1
 [0.1.0-alpha.3]: https://github.com/meymchen/lspf/releases/tag/v0.1.0-alpha.3
