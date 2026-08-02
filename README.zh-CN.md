@@ -12,10 +12,11 @@
 你在 `Server` 上注册带类型的处理器，再把它交给传输层，协议本身由框架负责：生命周期、
 文档同步、取消、有界并发、`tracing` span，以及通过 `Client` 发出的带类型服务端消息。
 
-> **当前状态：** 仍处于早期阶段。本仓库跟踪的是开发中的 **0.2** 接口——构建出的
-> `Server`、带类型的 `Router`、变更后（post-mutation）文档钩子以及 `Client` 句柄，
-> 下面的示例均基于该接口。已发布的 `0.1.x` 仍使用 `LanguageServer` trait，迁移方式
-> 参见 [0.1 到 0.2 迁移指南](./docs/migrations/0.1-to-0.2.md)。标准功能目前实现了
+> **当前状态：** 仍处于早期阶段。当前接口为 **0.2**——构建出的 `Server`、带类型的
+> `Router`、变更后（post-mutation）文档钩子以及 `Client` 句柄，下面的示例均基于该
+> 接口。0.2 直接移除了 `0.1.x` 的 `LanguageServer` trait，既不提供适配层也没有弃用
+> 过渡期，两者的对应关系参见
+> [0.1 到 0.2 迁移指南](./docs/migrations/0.1-to-0.2.md)。标准功能目前实现了
 > hover、completion 和 Command；capability 目录的其余部分，以及内置 TCP、WebSocket
 > 和 WASM worker 传输仍在规划中，尚不可用。
 
@@ -85,17 +86,15 @@ async fn main() -> lspf::Result<()> {
 
 ## 安装依赖
 
-上面的快速开始使用尚未发布的 0.2 接口，因此在 0.2 发布之前请直接依赖仓库版本：
-
 ```toml
 [dependencies]
-lspf = { git = "https://github.com/meymchen/lspf" }
+lspf = "0.2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ```
 
-已发布的 `lspf = "0.1"` 仍是旧的 `LanguageServer` trait 接口，两者的对应关系
+`0.1.x` 是旧的 `LanguageServer` trait 接口，已被 0.2 移除，两者的对应关系
 参见[迁移指南](./docs/migrations/0.1-to-0.2.md)。
 
 `lspf` 的 `Cargo.toml` 已经引入 `lsp-types`、`tokio`、`tracing`、`serde`
@@ -179,7 +178,7 @@ cargo run -p lspf-hello
 
 本仓库是包含两个成员的 Cargo workspace：
 
-- [`crates/lspf`](./crates/lspf)：应用依赖的框架库（`lspf = "0.1"`）。
+- [`crates/lspf`](./crates/lspf)：应用依赖的框架库（`lspf = "0.2"`）。
 - [`crates/lspf-hello`](./crates/lspf-hello)：可安装的**模板服务器**。它生成通过
   stdio 使用 LSP 的 `lspf-hello` 二进制；每次收到 `textDocument/didOpen` 时，
   都会发布一条 “lspf saw this document open” 信息级诊断。你可以 fork 它作为自己

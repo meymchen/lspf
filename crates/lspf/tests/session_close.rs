@@ -394,6 +394,7 @@ async fn close_resolves_every_pending_client_request() {
     in_tx.send(request(2, "test/capture", json!(null))).unwrap();
     recv(&mut out_rx).await;
     let client = captured.lock().unwrap().take().expect("client captured");
+    let after_close = client.clone();
 
     let pending = tokio::spawn(async move { client.request::<NeverAnswered>(json!({})).await });
 
@@ -415,6 +416,21 @@ async fn close_resolves_every_pending_client_request() {
     assert!(
         matches!(error, ClientError::Cancelled),
         "expected the framework-owned session-closed error, got {error:?}"
+    );
+
+    // A request started *after* the close operation drained the registry must
+    // fail fast rather than register a pending entry no one is left to answer,
+    // which would hang its caller for the life of the process.
+    let error = after_close
+        .request::<NeverAnswered>(json!({}))
+        .await
+        .expect_err("the closed connection accepts no new outbound request");
+    assert!(
+        matches!(
+            error,
+            ClientError::ConnectionClosed | ClientError::OutboundClosed
+        ),
+        "expected a fail-fast closed-connection error, got {error:?}"
     );
 }
 
