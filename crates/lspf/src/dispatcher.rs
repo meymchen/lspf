@@ -121,16 +121,18 @@ where
             // wait for them to drop (which releases their clones of the
             // outgoing sender). Then drop our master sender so the
             // send-loop drains whatever was already queued and exits
-            // cleanly, and hand the exit code back to the entry point —
-            // which decides whether to terminate the process (binary) or
-            // simply return (library / tests).
+            // cleanly, and report the ending to the caller.
             client.close_connection();
             client.outbound_registry().close_all();
             tasks.abort_and_join().await;
             client.close_outbound();
             drop(out_tx);
             send_handle.join().await;
-            return Ok(Outcome::Exit(code));
+            // Both 0.1 entry points return `Ok(())` whichever code the
+            // lifecycle implies, so the code is traced rather than returned;
+            // the 0.2 engine reports it through `Outcome::code` instead.
+            debug!(code, "exit notification processed");
+            return Ok(Outcome::Exit);
         }
     }
 }
@@ -184,17 +186,16 @@ impl<R: Runtime> TaskGroup<R> {
     }
 }
 
-/// What ended the dispatcher's read-loop. The entry point maps this to a
-/// process exit for a real binary (`StdioBuilder::serve`) or simply
-/// returns it for the library escape hatch (`lspf::serve`), so the same
-/// dispatcher is testable in-process without a `process::exit` that would
-/// take the test runner down with it.
+/// What ended the dispatcher's read-loop. Both 0.1 entry points
+/// (`lspf::serve` and `lspf::serve_with_limit`) return `Ok(())` for either
+/// ending, so the dispatcher is testable in-process without a `process::exit`
+/// that would take the test runner down with it. The 0.2 engine reports its
+/// richer [`crate::Outcome`], exit code included.
 pub(crate) enum Outcome {
     /// The peer closed the transport before sending `exit`.
     TransportClosed,
-    /// An `exit` notification was processed; carries the LSP exit code
-    /// (0 if `shutdown` preceded it, else 1).
-    Exit(i32),
+    /// An `exit` notification was processed.
+    Exit,
 }
 
 async fn send_loop<W: TransportWriter>(

@@ -21,9 +21,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   decode or built-in validation failure skips the hook without ending the
   connection. `textDocument/didSave` has no framework mutation in 0.2 and stays
   an ordinary typed notification route.
+- `ServerCapabilities` now advertise `textDocumentSync` (incremental) as a
+  protocol-owned field, alongside the negotiated position encoding. Document
+  sync is an engine built-in, so a server that registers nothing still tells
+  the editor to send `didOpen`, `didChange`, and `didClose`.
 
 ### Changed
 
+- `lspf::stdio(...)` now takes a built `Server` rather than a `LanguageServer`,
+  and `serve()` resolves to `lspf::Result<Outcome>` instead of terminating the
+  process — a binary maps `Outcome::code()` onto its own process disposition.
+  Concurrency policy moves with it: the cap is set by
+  `ServerBuilder::concurrency_limit`, and the stdio builder no longer carries
+  the knob.
 - `Context::documents()` now returns `&DocumentsView` rather than `&Documents`,
   so handlers can read the connection's documents but never mutate them.
 - A `didChange` notification's content changes now apply all-or-nothing: a

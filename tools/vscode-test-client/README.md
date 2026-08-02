@@ -40,7 +40,8 @@ Extension Host's debug console).
 
 ## What this validates
 
-Commit 1's wire-level claim: VSCode's real `initialize` payload
-deserializes into `lsp_types::InitializeParams` and our reply round-trips
-back through stdio framing. Anything further (diagnostics, document
-sync) is commit 2+.
+The wire-level claims a real editor makes on the server: VSCode's own
+`initialize` payload deserializes into `lsp_types::InitializeParams`, the
+generated `ServerCapabilities` advertise incremental document sync, and the
+reply, the `didOpen` that follows it, and the diagnostic the server publishes
+all round-trip through stdio framing.

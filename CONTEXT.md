@@ -121,11 +121,10 @@ How one connection ended, returned by `Server::serve` over a [[Transport]]
 (ADR 0018). Reader EOF, a writer failure, `exit`, and a fatal initialize
 failure all converge on the protocol engine's single close operation; the
 first cause to arrive becomes the reported `Outcome`, which also carries the
-LSP exit code (0 only after a successful `shutdown`). `Server::serve` returns
-the `Outcome` rather than terminating the process — mapping it to a process
-disposition belongs to the server binary. The 0.1 `lspf::stdio(...).serve()`
-entry point still exits the process itself and is removed with the rest of
-the legacy surface.
+LSP exit code (0 only after a successful `shutdown`). Serving returns the
+`Outcome` rather than terminating the process — mapping it to a process
+disposition belongs to the server binary, and `lspf::stdio(server).serve()`
+reports the same `Outcome` as `Server::serve` over any other [[Transport]].
 _Avoid_: Exit code (only one part of it), close reason, status.
 
 **Runtime**:

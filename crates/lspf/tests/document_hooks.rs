@@ -717,6 +717,29 @@ async fn the_view_converts_positions_with_the_negotiated_encoding() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn initialize_advertises_the_built_in_incremental_document_sync() {
+    let seen: Log = Arc::default();
+    // No document hook is registered: the sync capability describes the
+    // protocol built-in the engine always performs, not a user registration.
+    let server = Server::builder(AppState {
+        seen: Arc::clone(&seen),
+    })
+    .build()
+    .expect("an empty server builds");
+    let outbox = drive(server, vec![initialize_request(1)]).await;
+
+    let init: lspf::types::InitializeResult = ok_result(&outbox, 1);
+    assert_eq!(
+        init.capabilities.text_document_sync,
+        Some(lspf::types::TextDocumentSyncCapability::Kind(
+            lspf::types::TextDocumentSyncKind::INCREMENTAL
+        )),
+        "a client only sends didOpen/didChange/didClose to a server that \
+         advertises the sync kind the engine's built-ins implement"
+    );
+}
+
 #[test]
 fn duplicate_document_hook_registration_fails_during_build() {
     let err = Server::builder(AppState {
