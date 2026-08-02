@@ -14,14 +14,14 @@ language server in very little code. You register typed handlers on a
 lifecycle, document synchronization, cancellation, bounded concurrency,
 `tracing` spans, and typed server-to-client traffic through `Client`.
 
-> **Status:** early-stage. This repository tracks the in-development **0.2**
-> surface — the built `Server`, the typed `Router`, post-mutation document
-> hooks, and the `Client` handle — which the examples below use. The published
-> `0.1.x` release still has the `LanguageServer` trait; see the
-> [0.1-to-0.2 migration guide](./docs/migrations/0.1-to-0.2.md). Hover,
-> completion, and commands are the standard features implemented so far; the
-> rest of the capability catalog and the first-party TCP, WebSocket, and WASM
-> worker transports are planned but not available yet.
+> **Status:** early-stage. **0.2** is the current surface — the built `Server`,
+> the typed `Router`, post-mutation document hooks, and the `Client` handle —
+> which the examples below use. It removes the `0.1.x` `LanguageServer` trait
+> outright, with no adapter and no deprecation cycle; the
+> [0.1-to-0.2 migration guide](./docs/migrations/0.1-to-0.2.md) maps one onto
+> the other. Hover, completion, and commands are the standard features
+> implemented so far; the rest of the capability catalog and the first-party
+> TCP, WebSocket, and WASM worker transports are planned but not available yet.
 
 ## Quick start
 
@@ -90,19 +90,16 @@ installable template server described under [Editor setup](#editor-setup).
 
 ## Install
 
-The quick start above targets the unpublished 0.2 surface, so depend on the
-repository until 0.2 is released:
-
 ```toml
 [dependencies]
-lspf = { git = "https://github.com/meymchen/lspf" }
+lspf = "0.2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ```
 
-The published `lspf = "0.1"` release is the older `LanguageServer` trait API;
-the [migration guide](./docs/migrations/0.1-to-0.2.md) maps one onto the other.
+`0.1.x` is the older `LanguageServer` trait API, which 0.2 removes; the
+[migration guide](./docs/migrations/0.1-to-0.2.md) maps one onto the other.
 
 `lspf`'s own `Cargo.toml` already pulls in `lsp-types`, `tokio`, `tracing`,
 `serde`, and the rest of the runtime stack, so you only need to opt in to the
@@ -202,7 +199,7 @@ More examples land as the framework grows.
 This repository is a Cargo workspace with two members:
 
 - [`crates/lspf`](./crates/lspf) — the framework library you depend on
-  (`lspf = "0.1"`).
+  (`lspf = "0.2"`).
 - [`crates/lspf-hello`](./crates/lspf-hello) — an installable **template
   server**. It builds a `lspf-hello` binary that speaks LSP over stdio and,
   on every `textDocument/didOpen`, publishes an informational diagnostic

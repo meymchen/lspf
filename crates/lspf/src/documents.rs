@@ -26,7 +26,7 @@ pub enum PositionEncoding {
 ///
 /// Backed by `ropey::Rope`, but `ropey` never leaks into the public API.
 /// The document is immutable from user code; mutations flow through the
-/// concurrency-safe [`Documents`] handle.
+/// concurrency-safe document store the connection's protocol engine owns.
 #[derive(Debug, Clone)]
 pub struct Document {
     uri: Uri,
@@ -178,23 +178,28 @@ struct DocumentsInner {
     encoding: PositionEncoding,
 }
 
-/// Concurrency-safe handle to every tracked [`Document`] (ADR 0003).
+/// Concurrency-safe handle to every tracked [`Document`], owned by the
+/// connection's protocol engine (ADR 0003, ADR 0018).
 ///
-/// Cheap to clone: all copies share the same `Arc<RwLock<...>>`. Users read
-/// freely; mutations happen only through the built-in doc-sync primitives
-/// (`open`, `apply_incremental_change`, `close`, `save`).
+/// Cheap to clone: all copies share the same `Arc<RwLock<...>>`. The type is
+/// crate-private on purpose — user code never constructs a store, never holds
+/// one in its state, and never mutates one. Mutations happen only through the
+/// engine's built-in doc-sync handling (`open`, `apply_changes`, `close`), and
+/// handlers read through the [`DocumentsView`] the [`Context`] hands them.
+///
+/// [`Context`]: crate::Context
 #[derive(Debug, Clone, Default)]
-pub struct Documents {
+pub(crate) struct Documents {
     inner: Arc<RwLock<DocumentsInner>>,
 }
 
 impl Documents {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
     /// Open or replace a document in the store.
-    pub fn open(&self, item: TextDocumentItem) {
+    pub(crate) fn open(&self, item: TextDocumentItem) {
         let mut inner = self.inner.write().unwrap();
         inner.by_uri.insert(
             item.uri.clone(),
@@ -208,40 +213,15 @@ impl Documents {
     }
 
     /// Read a snapshot of a document by URI.
-    pub fn get(&self, uri: &Uri) -> Option<Document> {
+    pub(crate) fn get(&self, uri: &Uri) -> Option<Document> {
         let inner = self.inner.read().unwrap();
         inner.by_uri.get(uri).cloned()
     }
 
     /// Remove a document from the store. Returns the removed document, if any.
-    pub fn close(&self, uri: &Uri) -> Option<Document> {
+    pub(crate) fn close(&self, uri: &Uri) -> Option<Document> {
         let mut inner = self.inner.write().unwrap();
         inner.by_uri.remove(uri)
-    }
-
-    /// Mark a document as saved. Returns `None` if no such document is open.
-    ///
-    /// The built-in store is in-memory, so this is otherwise a no-op; it
-    /// exists as the hook where future persistence logic will attach.
-    pub fn save(&self, uri: &Uri) -> Option<()> {
-        let inner = self.inner.read().unwrap();
-        inner.by_uri.contains_key(uri).then_some(())
-    }
-
-    /// Apply an incremental content change to a document, advancing it to
-    /// `version`.
-    ///
-    /// Uses the store's current position encoding to interpret `range`. The
-    /// caller passes the version from the `didChange` notification so the
-    /// stored [`Document::version`] stays current across edits.
-    pub fn apply_incremental_change(
-        &self,
-        uri: &Uri,
-        version: i32,
-        change: TextDocumentContentChangeEvent,
-    ) -> crate::Result<()> {
-        self.apply_changes(uri, version, [change])
-            .map_err(Into::into)
     }
 
     /// Apply one `didChange` notification's content changes in order,
@@ -277,7 +257,7 @@ impl Documents {
     }
 
     /// Convert a position using the store's current encoding.
-    pub fn position_to_offset(&self, uri: &Uri, position: Position) -> Option<usize> {
+    pub(crate) fn position_to_offset(&self, uri: &Uri, position: Position) -> Option<usize> {
         let inner = self.inner.read().unwrap();
         inner
             .by_uri
@@ -286,7 +266,7 @@ impl Documents {
     }
 
     /// Convert an offset using the store's current encoding.
-    pub fn offset_to_position(&self, uri: &Uri, offset: usize) -> Option<Position> {
+    pub(crate) fn offset_to_position(&self, uri: &Uri, offset: usize) -> Option<Position> {
         let inner = self.inner.read().unwrap();
         inner
             .by_uri
@@ -295,13 +275,14 @@ impl Documents {
     }
 
     /// Current position encoding for every document in the store.
-    pub fn position_encoding(&self) -> PositionEncoding {
+    pub(crate) fn position_encoding(&self) -> PositionEncoding {
         self.inner.read().unwrap().encoding
     }
 
-    /// Set the position encoding. Issue #10 calls this from the initialize
-    /// handshake; everything else reads it.
-    pub fn set_position_encoding(&self, encoding: PositionEncoding) {
+    /// Set the position encoding. Only
+    /// [`negotiate_position_encoding`](Self::negotiate_position_encoding), run
+    /// once by the initialize transaction, writes it; everything else reads it.
+    fn set_position_encoding(&self, encoding: PositionEncoding) {
         self.inner.write().unwrap().encoding = encoding;
     }
 
@@ -347,7 +328,7 @@ impl Documents {
     }
 }
 
-/// The read-only view of the connection's [`Documents`] that
+/// The read-only view of the connection's documents that
 /// [`Context::documents`](crate::Context::documents) hands to user code
 /// (ADR 0018).
 ///
@@ -387,5 +368,280 @@ impl DocumentsView {
     /// negotiated during initialization (ADR 0016).
     pub fn position_encoding(&self) -> PositionEncoding {
         self.documents.position_encoding()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use lsp_types::{GeneralClientCapabilities, Range};
+
+    use super::*;
+
+    fn uri(s: &str) -> Uri {
+        Uri::from_str(s).unwrap()
+    }
+
+    fn text_item(uri: Uri, text: &str) -> TextDocumentItem {
+        TextDocumentItem {
+            uri,
+            language_id: "plaintext".to_string(),
+            version: 1,
+            text: text.to_string(),
+        }
+    }
+
+    /// One content change, as `didChange` delivers it.
+    fn change(range: Option<Range>, text: &str) -> TextDocumentContentChangeEvent {
+        TextDocumentContentChangeEvent {
+            range,
+            range_length: None,
+            text: text.to_string(),
+        }
+    }
+
+    fn range(start: u32, end: u32) -> Range {
+        Range {
+            start: Position {
+                line: 0,
+                character: start,
+            },
+            end: Position {
+                line: 0,
+                character: end,
+            },
+        }
+    }
+
+    fn at(line: u32, character: u32) -> Position {
+        Position { line, character }
+    }
+
+    /// `InitializeParams` offering exactly `encodings` under
+    /// `general.positionEncodings`.
+    fn offering(encodings: Vec<PositionEncodingKind>) -> InitializeParams {
+        let mut params = InitializeParams::default();
+        params.capabilities.general = Some(GeneralClientCapabilities {
+            position_encodings: Some(encodings),
+            ..GeneralClientCapabilities::default()
+        });
+        params
+    }
+
+    #[test]
+    fn open_document_can_be_read_back() {
+        let docs = Documents::new();
+        let u = uri("file:///tmp/test.txt");
+        docs.open(text_item(u.clone(), "hello world"));
+
+        let doc = docs.get(&u).expect("document should exist");
+        assert_eq!(doc.uri(), &u);
+        assert_eq!(doc.language_id(), "plaintext");
+        assert_eq!(doc.version(), 1);
+        assert_eq!(doc.text(), "hello world");
+    }
+
+    #[test]
+    fn close_removes_document() {
+        let docs = Documents::new();
+        let u = uri("file:///close.txt");
+        docs.open(text_item(u.clone(), "x"));
+        assert!(docs.get(&u).is_some());
+
+        docs.close(&u);
+        assert!(docs.get(&u).is_none());
+    }
+
+    #[test]
+    fn documents_is_cheap_to_clone() {
+        let docs = Documents::new();
+        let docs2 = docs.clone();
+        let u = uri("file:///shared.txt");
+        docs.open(text_item(u.clone(), "shared"));
+
+        assert_eq!(docs2.get(&u).unwrap().text(), "shared");
+    }
+
+    #[test]
+    fn position_encoding_defaults_to_utf16() {
+        assert_eq!(
+            Documents::new().position_encoding(),
+            PositionEncoding::Utf16
+        );
+    }
+
+    #[test]
+    fn utf16_position_to_offset_counts_code_units() {
+        // "héllo" -> h(1) é(1 utf16) l(1) l(1) o(1) = 5 UTF-16 code units on line 0.
+        let docs = Documents::new();
+        let u = uri("file:///unicode.txt");
+        docs.open(text_item(u.clone(), "héllo\nworld"));
+
+        // 'é' starts at UTF-16 character 1 (after 'h').
+        assert_eq!(docs.position_to_offset(&u, at(0, 1)), Some(1));
+        // The second line starts at byte offset 7 ("héllo" = 6 bytes + '\n' = 1).
+        assert_eq!(docs.position_to_offset(&u, at(1, 0)), Some(7));
+    }
+
+    #[test]
+    fn utf16_offset_to_position_round_trips() {
+        let docs = Documents::new();
+        let u = uri("file:///unicode.txt");
+        docs.open(text_item(u.clone(), "héllo\nworld"));
+
+        assert_eq!(docs.offset_to_position(&u, 1), Some(at(0, 1)));
+        assert_eq!(docs.offset_to_position(&u, 7), Some(at(1, 0)));
+    }
+
+    #[test]
+    fn utf8_position_is_byte_offset() {
+        let docs = Documents::new();
+        docs.set_position_encoding(PositionEncoding::Utf8);
+        let u = uri("file:///unicode.txt");
+        docs.open(text_item(u.clone(), "héllo\nworld"));
+
+        // 'é' starts at byte 1, so 'l' starts at byte 3.
+        assert_eq!(docs.position_to_offset(&u, at(0, 3)), Some(3));
+        assert_eq!(docs.offset_to_position(&u, 3), Some(at(0, 3)));
+    }
+
+    #[test]
+    fn utf8_position_rejects_mid_codepoint_and_past_eol() {
+        let docs = Documents::new();
+        docs.set_position_encoding(PositionEncoding::Utf8);
+        let u = uri("file:///unicode.txt");
+        docs.open(text_item(u.clone(), "héllo\nworld"));
+
+        assert_eq!(
+            docs.position_to_offset(&u, at(0, 2)),
+            None,
+            "byte 2 falls inside the two-byte 'é', so it is not a boundary"
+        );
+        assert_eq!(
+            docs.position_to_offset(&u, at(0, 7)),
+            None,
+            "\"héllo\" is 6 bytes, so character 7 points past the line's content"
+        );
+    }
+
+    #[test]
+    fn emoji_counts_two_utf16_code_units() {
+        // "a👋b" -> a(1) 👋(2 utf16) b(1) = 4 UTF-16 code units.
+        let docs = Documents::new();
+        let u = uri("file:///emoji.txt");
+        docs.open(text_item(u.clone(), "a👋b"));
+
+        assert_eq!(
+            docs.position_to_offset(&u, at(0, 3)),
+            Some(5),
+            "character 3 is past the emoji, at the byte after its four bytes"
+        );
+        assert_eq!(docs.position_to_offset(&u, at(0, 1)), Some(1));
+    }
+
+    #[test]
+    fn a_change_advances_the_version_and_replaces_the_range() {
+        let docs = Documents::new();
+        let u = uri("file:///change.txt");
+        docs.open(text_item(u.clone(), "hello world"));
+
+        docs.apply_changes(&u, 2, [change(Some(range(6, 11)), "lspf")])
+            .expect("the change applies cleanly");
+
+        let doc = docs.get(&u).unwrap();
+        assert_eq!(doc.text(), "hello lspf");
+        assert_eq!(doc.version(), 2);
+    }
+
+    #[test]
+    fn an_omitted_range_replaces_the_whole_document() {
+        let docs = Documents::new();
+        let u = uri("file:///change.txt");
+        docs.open(text_item(u.clone(), "hello"));
+
+        docs.apply_changes(&u, 2, [change(None, "goodbye")])
+            .expect("the change applies cleanly");
+
+        let doc = docs.get(&u).unwrap();
+        assert_eq!(doc.text(), "goodbye");
+        assert_eq!(doc.version(), 2);
+    }
+
+    #[test]
+    fn a_reversed_range_is_rejected_without_poisoning_the_store() {
+        // A range whose end precedes its start would panic `Rope::remove` while
+        // the write lock is held, poisoning the store for every later access.
+        let docs = Documents::new();
+        let u = uri("file:///reversed.txt");
+        docs.open(text_item(u.clone(), "hello world"));
+
+        assert!(
+            docs.apply_changes(&u, 2, [change(Some(range(11, 6)), "x")])
+                .is_err(),
+            "a reversed range is an invalid request"
+        );
+
+        let doc = docs.get(&u).expect("the store is still readable");
+        assert_eq!(doc.text(), "hello world");
+        assert_eq!(doc.version(), 1, "a rejected change advances nothing");
+    }
+
+    #[test]
+    fn a_change_to_an_unopened_document_is_rejected() {
+        let docs = Documents::new();
+        assert!(
+            docs.apply_changes(&uri("file:///never-opened.txt"), 2, [change(None, "x")])
+                .is_err(),
+            "a change names a document the store must already hold"
+        );
+    }
+
+    #[test]
+    fn negotiation_defaults_to_utf16_when_the_client_offers_nothing() {
+        let docs = Documents::new();
+        assert_eq!(
+            docs.negotiate_position_encoding(&InitializeParams::default()),
+            PositionEncodingKind::UTF16
+        );
+        assert_eq!(docs.position_encoding(), PositionEncoding::Utf16);
+    }
+
+    #[test]
+    fn negotiation_picks_utf8_when_the_client_offers_it() {
+        let docs = Documents::new();
+        assert_eq!(
+            docs.negotiate_position_encoding(&offering(vec![PositionEncodingKind::UTF8])),
+            PositionEncodingKind::UTF8
+        );
+        assert_eq!(docs.position_encoding(), PositionEncoding::Utf8);
+    }
+
+    #[test]
+    fn negotiation_falls_back_to_utf16_for_utf16_only_and_unsupported_offers() {
+        for offered in [PositionEncodingKind::UTF16, PositionEncodingKind::UTF32] {
+            let docs = Documents::new();
+            assert_eq!(
+                docs.negotiate_position_encoding(&offering(vec![offered.clone()])),
+                PositionEncodingKind::UTF16,
+                "offering only {offered:?} leaves the LSP-mandatory default"
+            );
+            assert_eq!(docs.position_encoding(), PositionEncoding::Utf16);
+        }
+    }
+
+    #[test]
+    fn negotiation_prefers_utf8_over_utf16_when_both_are_offered() {
+        let docs = Documents::new();
+        // Offered UTF-16 first: lspf's own preference order decides, not the
+        // client's ordering.
+        assert_eq!(
+            docs.negotiate_position_encoding(&offering(vec![
+                PositionEncodingKind::UTF16,
+                PositionEncodingKind::UTF8,
+            ])),
+            PositionEncodingKind::UTF8
+        );
+        assert_eq!(docs.position_encoding(), PositionEncoding::Utf8);
     }
 }

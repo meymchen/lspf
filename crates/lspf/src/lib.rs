@@ -8,14 +8,12 @@ mod capability;
 mod client;
 mod codec;
 mod context;
-mod dispatcher;
 mod documents;
 mod engine;
 mod error;
 pub mod features;
 mod raw;
 mod runtime;
-mod server;
 mod service;
 mod transport;
 mod workspace;
@@ -44,12 +42,11 @@ mod markdown {
 pub use builder::{InitializeRegistrar, Server, ServerBuilder};
 pub use client::Client;
 pub use context::Context;
-pub use documents::{Document, Documents, DocumentsView, PositionEncoding};
+pub use documents::{Document, DocumentsView, PositionEncoding};
 pub use engine::Outcome;
 pub use error::{BuildError, ClientError, Error, LspError, Result};
 pub use features::FeatureSpec;
 pub use raw::{JsonRpcError, RawMessage, RequestId};
-pub use server::LanguageServer;
 pub use service::{CallKind, IncomingCall, Layer, Next, ServiceFuture, ServiceResult};
 #[cfg(not(target_arch = "wasm32"))]
 pub use transport::{StdioBuilder, StdioReader, StdioTransport, StdioWriter, stdio};
@@ -59,37 +56,10 @@ pub use workspace::Workspace;
 /// Cancellation primitive passed to every request handler (ADR 0007).
 pub use tokio_util::sync::CancellationToken;
 
-/// Default cap on in-flight handler tasks (ADR 0012).
-pub const DEFAULT_CONCURRENCY_LIMIT: usize = 64;
-
-/// Drive a 0.1 `LanguageServer` over a custom `Transport`.
+/// Cap on calls in flight inside the user Layer chain when a [`Server`] does
+/// not set its own with [`ServerBuilder::concurrency_limit`] (ADR 0012).
 ///
-/// The 0.2 entry points are [`stdio`] for the default adapter and
-/// [`Server::serve`] for any other `Transport` — a built [`Server`] carries its
-/// own concurrency policy and reports an [`Outcome`] instead of terminating the
-/// process. This function and [`serve_with_limit`] remain only for the
-/// superseded trait-based core and are removed with it. See ADR 0011 for the
-/// transport contract. Uses [`DEFAULT_CONCURRENCY_LIMIT`] for in-flight
-/// handlers; use [`serve_with_limit`] to override.
-pub async fn serve<S, T>(server: S, transport: T) -> Result<()>
-where
-    S: LanguageServer,
-    T: Transport,
-{
-    dispatcher::run(server, transport, DEFAULT_CONCURRENCY_LIMIT).await?;
-    Ok(())
-}
-
-/// Like [`serve`], but with an explicit cap on in-flight handler tasks
-/// (ADR 0012). When the cap is hit, the read-loop awaits a permit before
-/// spawning the next handler — visible in traces as a long
-/// `handler.acquire_permit` span. A 0.2 [`Server`] sets the same cap through
-/// [`ServerBuilder::concurrency_limit`] instead.
-pub async fn serve_with_limit<S, T>(server: S, transport: T, concurrency_limit: usize) -> Result<()>
-where
-    S: LanguageServer,
-    T: Transport,
-{
-    dispatcher::run(server, transport, concurrency_limit).await?;
-    Ok(())
-}
+/// The cap belongs to the built [`Server`]: neither [`stdio`] nor any other
+/// `Transport` carries the knob, and there is no serve entry point that takes
+/// one.
+pub const DEFAULT_CONCURRENCY_LIMIT: usize = 64;

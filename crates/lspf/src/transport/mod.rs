@@ -122,7 +122,7 @@ mod tests {
     use super::{
         RawMessage, Transport, TransportError, TransportReader, TransportWriter, envelope,
     };
-    use crate::{Documents, LanguageServer, RequestId};
+    use crate::{Outcome, RequestId, Server};
 
     struct FrameTransport {
         frames: VecDeque<Bytes>,
@@ -173,15 +173,7 @@ mod tests {
         }
     }
 
-    struct TestServer {
-        documents: Documents,
-    }
-
-    impl LanguageServer for TestServer {
-        fn documents(&self) -> &Documents {
-            &self.documents
-        }
-    }
+    struct TestState;
 
     #[tokio::test]
     async fn complete_protocol_error_frames_do_not_close_the_connection() {
@@ -197,14 +189,18 @@ mod tests {
             outbox: outbox.clone(),
         };
 
-        crate::serve(
-            TestServer {
-                documents: Documents::new(),
-            },
-            transport,
-        )
-        .await
-        .expect("complete protocol errors do not become transport errors");
+        let server = Server::builder(TestState)
+            .build()
+            .expect("an empty server builds");
+        let outcome = server
+            .serve(transport)
+            .await
+            .expect("complete protocol errors do not become transport errors");
+        assert_eq!(
+            outcome,
+            Outcome::TransportClosed,
+            "the frames run out, so the connection ends on reader EOF"
+        );
 
         let outbox = outbox.lock().unwrap();
         let error_codes: Vec<_> = outbox
