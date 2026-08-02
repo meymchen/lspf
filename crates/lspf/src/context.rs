@@ -3,7 +3,7 @@ use lsp_types::notification::PublishDiagnostics;
 use tokio_util::sync::CancellationToken;
 use tracing::{Span, warn};
 
-use crate::client::{Client, OutboundRegistry};
+use crate::client::Client;
 use crate::documents::{Documents, DocumentsView};
 use crate::raw::RequestId;
 use crate::workspace::Workspace;
@@ -21,8 +21,8 @@ pub struct Context {
     pub(crate) documents: DocumentsView,
     /// The connection's established [`Workspace`], present once the initialize
     /// transaction has run. Handlers only run after that point, so a handler
-    /// always observes `Some`; it is `None` only in the pre-init lifecycle
-    /// hooks and legacy dispatch paths that predate workspace establishment.
+    /// always observes `Some`; it is `None` only before the transaction
+    /// establishes one.
     pub(crate) workspace: Option<Workspace>,
     pub(crate) cancellation: Option<CancellationToken>,
 }
@@ -99,27 +99,11 @@ impl Context {
     /// The connection's [`Workspace`], established from `InitializeParams`
     /// during the initialize transaction (ADR 0017, ADR 0018).
     ///
-    /// Returns `None` only where no workspace has been established: the
-    /// `on_initialize`-and-later handlers of the 0.2 engine always see `Some`,
-    /// while the 0.1 `LanguageServer` dispatch path and the test-only
-    /// constructor carry none.
+    /// Returns `None` only where no workspace has been established, which no
+    /// handler can observe: the engine attaches the established workspace
+    /// before `on_initialize` runs, and every later dispatch inherits it.
     pub fn workspace(&self) -> Option<&Workspace> {
         self.workspace.as_ref()
-    }
-
-    #[doc(hidden)]
-    /// Test-only constructor that builds a notification context with a
-    /// dummy outgoing channel and a placeholder span.
-    pub fn for_test_notification(documents: Documents) -> Self {
-        let (outgoing, _rx) = tokio::sync::mpsc::unbounded_channel();
-        Self {
-            request_id: None,
-            span: Span::current(),
-            client: Client::new(outgoing, OutboundRegistry::default()),
-            documents: documents.view(),
-            workspace: None,
-            cancellation: None,
-        }
     }
 
     /// Push a `textDocument/publishDiagnostics` notification through the
