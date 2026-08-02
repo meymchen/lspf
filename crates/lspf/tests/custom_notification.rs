@@ -229,6 +229,37 @@ async fn a_malformed_notification_is_dropped_and_later_messages_still_run() {
     );
 }
 
+/// Initialize precedence (LSP §Initialize) on the notification side: there is
+/// no Router before the initialize transaction commits, so a notification that
+/// arrives first is dropped rather than queued for replay. The request side of
+/// the same rule answers `ServerNotInitialized` instead (see
+/// `custom_request::request_before_initialize_returns_server_not_initialized`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_notification_before_initialize_is_dropped_and_not_replayed() {
+    let (outbox, notes, handled) = drive(vec![
+        notification("custom/ping", json!({ "note": "too early" })),
+        initialize_request(1),
+        notification("custom/ping", json!({ "note": "after" })),
+        exit(),
+    ])
+    .await;
+
+    assert_eq!(
+        handled, 1,
+        "only the notification sent after initialize reaches the handler"
+    );
+    assert_eq!(
+        notes,
+        vec!["after".to_string()],
+        "the dropped notification is never replayed once the Router exists"
+    );
+    assert_eq!(
+        responses(&outbox).len(),
+        1,
+        "a dropped notification produces no response of its own"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unregistered_notification_is_ignored() {
     let (outbox, _notes, handled) = drive(vec![

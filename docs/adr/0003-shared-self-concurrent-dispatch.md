@@ -1,5 +1,13 @@
 # `&self` handlers with concurrent dispatch
 
+Status: Superseded by [ADR 0017](0017-typed-router-and-capability-catalog.md)
+and [ADR 0018](0018-protocol-engine-and-outbound-request-broker.md). The
+`LanguageServer` trait this decision rests on was removed in 0.2: handlers are
+registered on `Server::builder` and receive the shared state as an `Arc<S>`
+parameter, and the protocol engine — not a trait-based dispatcher — owns
+dispatch. The concurrency and document-visibility guarantees below still hold;
+only the receiver they were expressed through is gone.
+
 `LanguageServer` trait methods take `&self`. The dispatcher holds the
 user's server in an `Arc` and spawns each incoming request or
 notification as its own task, so multiple handlers can be in flight at

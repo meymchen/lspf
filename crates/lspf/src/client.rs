@@ -275,9 +275,9 @@ impl Client {
     /// # Errors
     ///
     /// - [`ClientError::ConnectionClosed`] or [`ClientError::OutboundClosed`]
-    ///   if the session is already closing, or if the outbound registry has
-    ///   already been drained by [`OutboundRegistry::close_all`] (e.g. this
-    ///   request started after the connection began closing).
+    ///   if the session is already closing, or if the engine's close operation
+    ///   has already drained the outbound registry (e.g. this request started
+    ///   after the connection began closing).
     /// - [`ClientError::IdExhausted`] if the outbound ID space is exhausted.
     /// - [`ClientError::Serialize`] if the params cannot be encoded.
     /// - [`ClientError::Cancelled`] if the session closes before the peer
