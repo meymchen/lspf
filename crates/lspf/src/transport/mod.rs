@@ -36,10 +36,10 @@ pub enum TransportError {
 /// A message-framed channel for LSP JSON-RPC envelopes (see ADR 0011).
 ///
 /// Concrete implementations split into a [`TransportReader`] and a
-/// [`TransportWriter`] so the dispatcher's read-loop and send-loop can
-/// own the two halves independently (ADR 0015). Framing
+/// [`TransportWriter`] so the protocol engine's read-loop and send-loop
+/// can own the two halves independently (ADR 0015). Framing
 /// (`Content-Length` for stdio/TCP, none for the message-framed
-/// transports) is the adapter's concern, never the dispatcher's.
+/// transports) is the adapter's concern, never the engine's.
 pub trait Transport: Send + 'static {
     type Reader: TransportReader;
     type Writer: TransportWriter;

@@ -14,9 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 It is a **breaking release with no adapter and no deprecation cycle**: the 0.1
 surface is removed rather than phased out, and no feature flag or runtime
 setting restores it. The
-[0.1-to-0.2 migration guide](./docs/migrations/0.1-to-0.2.md) maps every 0.1
-construct onto its 0.2 replacement, and each of its `0.2` examples is compiled
-as a doc-test against this release.
+[0.1-to-0.2 migration guide][migration-0.1-to-0.2] maps every 0.1 construct
+onto its 0.2 replacement, and each of its `0.2` examples is compiled as a
+doc-test against this release.
+
+[migration-0.1-to-0.2]: https://github.com/meymchen/lspf/blob/main/docs/migrations/0.1-to-0.2.md
 
 ### Removed
 

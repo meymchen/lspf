@@ -59,7 +59,6 @@ pub use tokio_util::sync::CancellationToken;
 /// Cap on calls in flight inside the user Layer chain when a [`Server`] does
 /// not set its own with [`ServerBuilder::concurrency_limit`] (ADR 0012).
 ///
-/// The cap belongs to the built [`Server`]: neither [`stdio`] nor any other
-/// `Transport` carries the knob, and there is no serve entry point that takes
-/// one.
+/// The cap is connection policy, so it belongs to the built [`Server`] that
+/// owns the connection rather than to the `Transport` it is served over.
 pub const DEFAULT_CONCURRENCY_LIMIT: usize = 64;

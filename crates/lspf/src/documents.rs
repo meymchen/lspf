@@ -392,6 +392,16 @@ mod tests {
         }
     }
 
+    /// A store holding one already-open document — the state every store test
+    /// starts from. Returns the store and the URI the document was opened
+    /// under.
+    fn opened(name: &str, text: &str) -> (Documents, Uri) {
+        let docs = Documents::new();
+        let u = uri(name);
+        docs.open(text_item(u.clone(), text));
+        (docs, u)
+    }
+
     /// One content change, as `didChange` delivers it.
     fn change(range: Option<Range>, text: &str) -> TextDocumentContentChangeEvent {
         TextDocumentContentChangeEvent {
@@ -431,9 +441,7 @@ mod tests {
 
     #[test]
     fn open_document_can_be_read_back() {
-        let docs = Documents::new();
-        let u = uri("file:///tmp/test.txt");
-        docs.open(text_item(u.clone(), "hello world"));
+        let (docs, u) = opened("file:///tmp/test.txt", "hello world");
 
         let doc = docs.get(&u).expect("document should exist");
         assert_eq!(doc.uri(), &u);
@@ -444,9 +452,7 @@ mod tests {
 
     #[test]
     fn close_removes_document() {
-        let docs = Documents::new();
-        let u = uri("file:///close.txt");
-        docs.open(text_item(u.clone(), "x"));
+        let (docs, u) = opened("file:///close.txt", "x");
         assert!(docs.get(&u).is_some());
 
         docs.close(&u);
@@ -474,9 +480,7 @@ mod tests {
     #[test]
     fn utf16_position_to_offset_counts_code_units() {
         // "héllo" -> h(1) é(1 utf16) l(1) l(1) o(1) = 5 UTF-16 code units on line 0.
-        let docs = Documents::new();
-        let u = uri("file:///unicode.txt");
-        docs.open(text_item(u.clone(), "héllo\nworld"));
+        let (docs, u) = opened("file:///unicode.txt", "héllo\nworld");
 
         // 'é' starts at UTF-16 character 1 (after 'h').
         assert_eq!(docs.position_to_offset(&u, at(0, 1)), Some(1));
@@ -486,9 +490,7 @@ mod tests {
 
     #[test]
     fn utf16_offset_to_position_round_trips() {
-        let docs = Documents::new();
-        let u = uri("file:///unicode.txt");
-        docs.open(text_item(u.clone(), "héllo\nworld"));
+        let (docs, u) = opened("file:///unicode.txt", "héllo\nworld");
 
         assert_eq!(docs.offset_to_position(&u, 1), Some(at(0, 1)));
         assert_eq!(docs.offset_to_position(&u, 7), Some(at(1, 0)));
@@ -496,10 +498,8 @@ mod tests {
 
     #[test]
     fn utf8_position_is_byte_offset() {
-        let docs = Documents::new();
+        let (docs, u) = opened("file:///unicode.txt", "héllo\nworld");
         docs.set_position_encoding(PositionEncoding::Utf8);
-        let u = uri("file:///unicode.txt");
-        docs.open(text_item(u.clone(), "héllo\nworld"));
 
         // 'é' starts at byte 1, so 'l' starts at byte 3.
         assert_eq!(docs.position_to_offset(&u, at(0, 3)), Some(3));
@@ -508,10 +508,8 @@ mod tests {
 
     #[test]
     fn utf8_position_rejects_mid_codepoint_and_past_eol() {
-        let docs = Documents::new();
+        let (docs, u) = opened("file:///unicode.txt", "héllo\nworld");
         docs.set_position_encoding(PositionEncoding::Utf8);
-        let u = uri("file:///unicode.txt");
-        docs.open(text_item(u.clone(), "héllo\nworld"));
 
         assert_eq!(
             docs.position_to_offset(&u, at(0, 2)),
@@ -528,9 +526,7 @@ mod tests {
     #[test]
     fn emoji_counts_two_utf16_code_units() {
         // "a👋b" -> a(1) 👋(2 utf16) b(1) = 4 UTF-16 code units.
-        let docs = Documents::new();
-        let u = uri("file:///emoji.txt");
-        docs.open(text_item(u.clone(), "a👋b"));
+        let (docs, u) = opened("file:///emoji.txt", "a👋b");
 
         assert_eq!(
             docs.position_to_offset(&u, at(0, 3)),
@@ -542,9 +538,7 @@ mod tests {
 
     #[test]
     fn a_change_advances_the_version_and_replaces_the_range() {
-        let docs = Documents::new();
-        let u = uri("file:///change.txt");
-        docs.open(text_item(u.clone(), "hello world"));
+        let (docs, u) = opened("file:///change.txt", "hello world");
 
         docs.apply_changes(&u, 2, [change(Some(range(6, 11)), "lspf")])
             .expect("the change applies cleanly");
@@ -556,9 +550,7 @@ mod tests {
 
     #[test]
     fn an_omitted_range_replaces_the_whole_document() {
-        let docs = Documents::new();
-        let u = uri("file:///change.txt");
-        docs.open(text_item(u.clone(), "hello"));
+        let (docs, u) = opened("file:///change.txt", "hello");
 
         docs.apply_changes(&u, 2, [change(None, "goodbye")])
             .expect("the change applies cleanly");
@@ -572,9 +564,7 @@ mod tests {
     fn a_reversed_range_is_rejected_without_poisoning_the_store() {
         // A range whose end precedes its start would panic `Rope::remove` while
         // the write lock is held, poisoning the store for every later access.
-        let docs = Documents::new();
-        let u = uri("file:///reversed.txt");
-        docs.open(text_item(u.clone(), "hello world"));
+        let (docs, u) = opened("file:///reversed.txt", "hello world");
 
         assert!(
             docs.apply_changes(&u, 2, [change(Some(range(11, 6)), "x")])
