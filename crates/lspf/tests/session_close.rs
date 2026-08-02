@@ -557,6 +557,37 @@ async fn exit_ends_a_long_running_handler_and_reports_code_one() {
     );
 }
 
+/// The custom-transport entry point reports every ending to its caller and
+/// terminates nothing, so one process can serve connection after connection —
+/// including the `exit` codes a server binary would turn into a process
+/// disposition. Each connection needs its own `Server`; connection state is
+/// never shared between them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn consecutive_connections_report_their_codes_without_ending_the_process() {
+    // First connection: `exit` with no `shutdown` — the ending a binary maps to
+    // process exit code 1.
+    let (in_tx, mut out_rx, serving) = start(AppState::default(), ALWAYS_WRITES);
+    initialized(&in_tx, &mut out_rx).await;
+    in_tx.send(exit()).unwrap();
+    assert_eq!(
+        served(serving).await.expect("the first connection ended"),
+        Outcome::Exit { code: 1 }
+    );
+
+    // The process is still here to serve a second connection from a second
+    // `Server`, which reaches its own, independent ending.
+    let (in_tx, mut out_rx, serving) = start(AppState::default(), ALWAYS_WRITES);
+    initialized(&in_tx, &mut out_rx).await;
+    in_tx.send(request(2, "shutdown", json!(null))).unwrap();
+    assert_eq!(recv(&mut out_rx).await.id(), Some(&RequestId::Number(2)));
+    in_tx.send(exit()).unwrap();
+    assert_eq!(
+        served(serving).await.expect("the second connection ended"),
+        Outcome::Exit { code: 0 },
+        "the second connection reports its own outcome, unaffected by the first"
+    );
+}
+
 /// A reader transport error runs the same close operation but, unlike EOF, is
 /// reported as an error rather than an outcome.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -169,6 +169,7 @@ dependencies = [
  "lspf",
  "serde_json",
  "tokio",
+ "tracing",
  "tracing-subscriber",
 ]
 

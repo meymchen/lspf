@@ -9,73 +9,78 @@
 A Rust framework for building extensible LSP (Language Server Protocol) language servers.
 
 `lspf` is **async-only** and designed so a developer can stand up a working
-language server in very little code. The current release provides an
-`stdio` transport, lifecycle and text-document dispatch, a concurrent
-document store, request cancellation, bounded concurrency, `tracing`
-spans, and `publish_diagnostics` on each handler's `Context`.
+language server in very little code. You register typed handlers on a
+`Server`, hand it to a transport, and the framework owns the protocol:
+lifecycle, document synchronization, cancellation, bounded concurrency,
+`tracing` spans, and typed server-to-client traffic through `Client`.
 
-> **Status:** `0.1.2` is an early-stage release. The implemented surface is
-> intentionally small: `stdio`, custom transports, lifecycle handlers,
-> text-document synchronization, and `publish_diagnostics`. The
-> `Layer`/`Service` API, additional LSP features and outgoing helpers, and
-> first-party TCP, WebSocket, and WASM worker transports are planned but are
-> not available yet.
+> **Status:** early-stage. This repository tracks the in-development **0.2**
+> surface — the built `Server`, the typed `Router`, post-mutation document
+> hooks, and the `Client` handle — which the examples below use. The published
+> `0.1.x` release still has the `LanguageServer` trait; see the
+> [0.1-to-0.2 migration guide](./docs/migrations/0.1-to-0.2.md). Hover,
+> completion, and commands are the standard features implemented so far; the
+> rest of the capability catalog and the first-party TCP, WebSocket, and WASM
+> worker transports are planned but not available yet.
 
 ## Quick start
 
-```rust
+```rust,no_run
+use std::sync::Arc;
+
+use lspf::types::notification::{DidOpenTextDocument, PublishDiagnostics};
 use lspf::types::{
     Diagnostic, DiagnosticSeverity, DidOpenTextDocumentParams, Position,
     PublishDiagnosticsParams, Range,
 };
-use lspf::{Context, Documents, LanguageServer};
+use lspf::{Context, Server};
 
-struct Hello {
-    documents: Documents,
-}
+/// Only your own application state — the framework owns the documents, the
+/// workspace, and the client, and hands them to handlers through `Context`.
+struct State;
 
-impl Hello {
-    fn new() -> Self {
-        Self {
-            documents: Documents::new(),
-        }
-    }
-}
-
-impl LanguageServer for Hello {
-    fn documents(&self) -> &Documents {
-        &self.documents
-    }
-
-    async fn text_document_did_open(
-        &self,
-        ctx: &Context,
-        params: DidOpenTextDocumentParams,
-    ) {
-        ctx.publish_diagnostics(PublishDiagnosticsParams {
-            uri: params.text_document.uri,
-            version: Some(params.text_document.version),
-            diagnostics: vec![Diagnostic {
-                range: Range {
-                    start: Position { line: 0, character: 0 },
-                    end:   Position { line: 0, character: 0 },
-                },
-                severity: Some(DiagnosticSeverity::INFORMATION),
-                source: Some("lspf-hello".into()),
-                message: "lspf saw this document open".into(),
-                ..Diagnostic::default()
-            }],
-        });
+/// A post-mutation hook for the built-in `textDocument/didOpen`: the framework
+/// has already opened the document, so `ctx.documents()` sees it here.
+async fn on_did_open(_state: Arc<State>, ctx: Context, params: DidOpenTextDocumentParams) {
+    let uri = params.text_document.uri;
+    let Some(document) = ctx.documents().get(&uri) else {
+        return;
+    };
+    let result = ctx.client().notify::<PublishDiagnostics>(PublishDiagnosticsParams {
+        uri,
+        version: Some(document.version()),
+        diagnostics: vec![Diagnostic {
+            range: Range {
+                start: Position { line: 0, character: 0 },
+                end:   Position { line: 0, character: 0 },
+            },
+            severity: Some(DiagnosticSeverity::INFORMATION),
+            source: Some("lspf-hello".into()),
+            message: "lspf saw this document open".into(),
+            ..Diagnostic::default()
+        }],
+    });
+    if let Err(error) = result {
+        tracing::warn!(%error, "publishing the open diagnostic failed");
     }
 }
 
 #[tokio::main]
 async fn main() -> lspf::Result<()> {
+    // Logs go to stderr: stdout carries the LSP wire protocol and nothing else.
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
-    lspf::stdio(Hello::new()).serve().await
+
+    let server = Server::builder(State)
+        .notification::<DidOpenTextDocument, _, _>(on_did_open)
+        .build()
+        .expect("the static registrations are valid");
+    // Serving reports how the connection ended; the binary decides what that
+    // means for the process.
+    let outcome = lspf::stdio(server).serve().await?;
+    std::process::exit(outcome.code());
 }
 ```
 
@@ -85,26 +90,38 @@ installable template server described under [Editor setup](#editor-setup).
 
 ## Install
 
+The quick start above targets the unpublished 0.2 surface, so depend on the
+repository until 0.2 is released:
+
 ```toml
 [dependencies]
-lspf = "0.1"
+lspf = { git = "https://github.com/meymchen/lspf" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ```
 
-`Cargo.toml` already pulls in `lsp-types`, `tokio`, `tracing`, `serde`, and
-the rest of the runtime stack, so you only need to opt in to the
+The published `lspf = "0.1"` release is the older `LanguageServer` trait API;
+the [migration guide](./docs/migrations/0.1-to-0.2.md) maps one onto the other.
+
+`lspf`'s own `Cargo.toml` already pulls in `lsp-types`, `tokio`, `tracing`,
+`serde`, and the rest of the runtime stack, so you only need to opt in to the
 `tokio` features you actually use.
 
 ## Why lspf
 
 - **Async-first.** The framework is `async fn` end to end; no `tower::Layer`
   interop, no sync escape hatch.
-- **Smallest viable server.** Implement the `LanguageServer` trait, hand
-  the value to `lspf::stdio(...)`, and you have a working LSP server.
+- **Smallest viable server.** Register your handlers on `Server::builder`,
+  hand the built `Server` to `lspf::stdio(...)`, and you have a working LSP
+  server.
 - **Framework-owned document state.** Incremental text changes are applied
-  to a concurrency-safe, rope-backed `Documents` store before user
-  handlers run.
+  to the concurrency-safe, rope-backed `Documents` the framework owns before
+  your hook runs; handlers read them through a `DocumentsView` that has no
+  mutation operation.
+- **Capabilities that cannot drift.** `ServerCapabilities` are generated from
+  the same registrations that dispatch, so what the server advertises is what
+  it serves.
 - **Safe concurrent dispatch.** Requests and notifications run with a
   configurable concurrency limit (64 by default); `$/cancelRequest`
   propagates through a `CancellationToken`.
@@ -122,42 +139,50 @@ the docs.
 
 | Term                | Meaning                                                                                                  |
 | ------------------- | -------------------------------------------------------------------------------------------------------- |
-| `LanguageServer`    | The async trait implemented by an application. It exposes lifecycle and text-document handlers today.    |
-| Handler             | An async trait method invoked for an LSP request or notification.                                        |
+| `Server`            | Owns exactly one LSP connection; built by `Server::builder(state)` and served over a `Transport`.        |
+| Handler             | An async function registered for one LSP method. User handlers take priority over the built-ins.         |
+| Built-in handler    | A handler the framework ships. Lifecycle, document sync, and cancellation are protocol built-ins.        |
+| Post-mutation hook  | What registering a built-in document notification records: it observes the mutation, never replaces it.  |
+| `Command`           | A user closure dispatched by name on `workspace/executeCommand`.                                         |
 | `Document`          | A text resource tracked by the framework: URI, language id, version, and rope-backed contents.           |
-| `Documents`         | The concurrency-safe store shared by the server and every handler's `Context`.                           |
-| `Context`           | Per-handler access to `Documents`, request id, `tracing` span, and currently `publish_diagnostics`.      |
+| `DocumentsView`     | The read-only document handle a handler reaches through `ctx.documents()`.                               |
+| `Context`           | The cheap-to-clone framework-state handle every handler receives: documents, workspace, client, scope.   |
+| `Client`            | The typed handle for server-to-client notifications and requests (`ctx.client()`).                       |
 | `CancellationToken` | The cancellation signal passed to request handlers.                                                      |
-| `Transport`         | A message-framed channel split into reader and writer halves for the dispatcher.                         |
+| `Transport`         | A message-framed channel split into reader and writer halves for the protocol engine.                    |
+| `Outcome`           | How one connection ended, returned by serving; it carries the LSP exit code but never exits the process. |
 
 ## Architecture
 
 The full design lives next to the code:
 
 - [`CONTEXT.md`](./CONTEXT.md) — domain language and shared vocabulary.
-- [`docs/adr/`](./docs/adr/) — 16 architecture decision records covering
-  async-only runtime, the dispatcher design, capability auto-derivation,
-  the cancellation model, the transport shape, the `Layer`/`Service`
-  proposal, position encoding, and more. ADRs describe architectural
-  direction as well as shipped behavior; an accepted ADR does not by itself
-  mean the feature has been implemented.
+- [`docs/adr/`](./docs/adr/) — 20 architecture decision records covering
+  the async-only runtime, the typed Router and capability catalog, the
+  protocol engine and outbound request broker, the cancellation model, the
+  transport shape, the `Layer`/`Service` stack, position encoding, and more.
+  ADRs describe architectural direction as well as shipped behavior; an
+  accepted ADR does not by itself mean the feature has been implemented.
 
 ## Roadmap
 
 Available today:
 
 - `stdio` plus the public custom-transport interface.
-- Lifecycle and incremental text-document synchronization.
+- The built `Server`: typed requests, notifications, commands, hover and
+  completion, user `Layer`s, and the one `configure_initialize` transaction.
+- Lifecycle and incremental text-document synchronization, with
+  post-mutation document hooks.
+- Typed server-to-client notifications and correlated requests through
+  `Client`.
 - Concurrent dispatch, bounded concurrency, request cancellation, and
   `tracing` spans.
 - Rope-backed documents with UTF-8/UTF-16 position negotiation.
-- `Context::publish_diagnostics`.
 
 Planned, without a committed release number:
 
-- More `LanguageServer` handlers and capability derivation.
-- The remaining outgoing notification and request helpers.
-- The `Layer`/`Service` composition API and panic isolation.
+- The remaining standard features in the capability catalog.
+- The remaining lifecycle hooks and outgoing helpers.
 - First-party TCP, WebSocket, and WASM worker transports.
 
 ## Examples

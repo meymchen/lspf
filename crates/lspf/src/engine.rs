@@ -26,7 +26,7 @@ use bytes::Bytes;
 use futures_util::future::{Either, select};
 use lsp_types::{
     DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-    InitializeParams, InitializeResult,
+    InitializeParams, InitializeResult, TextDocumentSyncCapability, TextDocumentSyncKind,
 };
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio_util::sync::CancellationToken;
@@ -862,6 +862,18 @@ where
         let position_encoding = self.documents.negotiate_position_encoding(&params);
         let mut capabilities = router.capabilities();
         capabilities.position_encoding = Some(position_encoding);
+        // Document sync is a protocol built-in rather than a registration
+        // (ADR 0018): the engine applies every `didOpen`, `didChange`, and
+        // `didClose` itself. So it advertises the sync kind those built-ins
+        // implement, as one more protocol-owned field layered onto the frozen
+        // catalog (ADR 0017) beside the negotiated position encoding. A client
+        // that sees no `textDocumentSync` sends no document notification at
+        // all, leaving the built-ins and every post-mutation hook unreachable.
+        // Nothing user-registered contributes this field, so there is no
+        // contribution here to overwrite.
+        capabilities.text_document_sync = Some(TextDocumentSyncCapability::Kind(
+            TextDocumentSyncKind::INCREMENTAL,
+        ));
 
         // `on_initialize` may contribute optional ServerInfo but cannot
         // register routes or replace the generated capabilities.
