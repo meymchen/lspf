@@ -8,8 +8,9 @@ use std::io;
 
 use thiserror::Error;
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::builder::Server;
 use crate::raw::RawMessage;
-use crate::server::LanguageServer;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use stdio::{StdioReader, StdioTransport, StdioWriter};
@@ -66,49 +67,48 @@ pub trait TransportWriter: Send + 'static {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-/// Entry point: wrap a `LanguageServer` in the default stdio adapter.
+/// Entry point: serve a built [`Server`] over the default stdio adapter.
+///
+/// The adapter supplies the transport and nothing else. Concurrency policy,
+/// registrations, and lifecycle hooks all belong to the [`Server`] that was
+/// handed in, and serving reports how the connection ended rather than
+/// terminating the process — mapping an [`Outcome`](crate::Outcome) to a
+/// process disposition is the binary's decision (ADR 0018).
 ///
 /// ```no_run
+/// # struct State;
 /// # async fn run() -> lspf::Result<()> {
-/// # struct Hello { documents: lspf::Documents }
-/// # impl lspf::LanguageServer for Hello {
-/// #     fn documents(&self) -> &lspf::Documents { &self.documents }
-/// # }
-/// lspf::stdio(Hello { documents: lspf::Documents::new() }).serve().await
+/// let server = lspf::Server::builder(State)
+///     .build()
+///     .expect("static registrations are valid");
+/// let outcome = lspf::stdio(server).serve().await?;
+/// std::process::exit(outcome.code());
 /// # }
 /// ```
-pub fn stdio<S: LanguageServer>(server: S) -> StdioBuilder<S> {
-    StdioBuilder {
-        server,
-        concurrency_limit: crate::DEFAULT_CONCURRENCY_LIMIT,
-    }
+pub fn stdio<S>(server: Server<S>) -> StdioBuilder<S>
+where
+    S: Send + Sync + 'static,
+{
+    StdioBuilder { server }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 pub struct StdioBuilder<S> {
-    server: S,
-    concurrency_limit: usize,
+    server: Server<S>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl<S: LanguageServer> StdioBuilder<S> {
-    /// Override the default cap on in-flight handler tasks (ADR 0012,
-    /// default [`crate::DEFAULT_CONCURRENCY_LIMIT`]).
-    pub fn concurrency_limit(mut self, limit: usize) -> Self {
-        self.concurrency_limit = limit;
-        self
-    }
-
-    pub async fn serve(self) -> crate::Result<()> {
-        let transport = StdioTransport::new();
-        match crate::dispatcher::run(self.server, transport, self.concurrency_limit).await? {
-            // Peer hung up before `exit`: return normally and let the
-            // caller's `main` decide the process disposition.
-            crate::dispatcher::Outcome::TransportClosed => Ok(()),
-            // `exit` notification: terminate the process with the LSP
-            // exit code, per the spec's lifecycle contract.
-            crate::dispatcher::Outcome::Exit(code) => std::process::exit(code),
-        }
+impl<S> StdioBuilder<S>
+where
+    S: Send + Sync + 'static,
+{
+    /// Serve the connection over stdio until it ends, and report the
+    /// [`Outcome`](crate::Outcome) that ended it.
+    ///
+    /// Equivalent to [`Server::serve`] over [`StdioTransport`]; the process is
+    /// never terminated here.
+    pub async fn serve(self) -> crate::Result<crate::Outcome> {
+        self.server.serve(StdioTransport::new()).await
     }
 }
 

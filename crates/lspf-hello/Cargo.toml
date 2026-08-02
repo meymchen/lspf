@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 lspf.workspace = true
 tokio.workspace = true
+tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
