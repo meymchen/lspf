@@ -426,12 +426,15 @@ async fn on_initialize_contributes_server_info_without_replacing_capabilities() 
         "on_initialize contributes optional ServerInfo"
     );
     // The generated capabilities are unchanged by on_initialize: hover is still
-    // advertised, plus the negotiated position encoding.
+    // advertised, plus the protocol-owned position encoding and document sync.
     assert_eq!(
         init.capabilities,
         ServerCapabilities {
             hover_provider: Some(lspf::types::HoverProviderCapability::Simple(true)),
             position_encoding: Some(PositionEncodingKind::UTF16),
+            text_document_sync: Some(lspf::types::TextDocumentSyncCapability::Kind(
+                lspf::types::TextDocumentSyncKind::INCREMENTAL,
+            )),
             ..ServerCapabilities::default()
         },
         "on_initialize cannot replace the framework-generated capabilities"
