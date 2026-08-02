@@ -9,69 +9,73 @@
 一个用于构建可扩展 LSP（Language Server Protocol，语言服务器协议）语言服务器的 Rust 框架。
 
 `lspf` **仅支持异步模式**，目标是让开发者用很少的代码即可启动一个可工作的语言服务器。
-当前版本提供 `stdio` 传输、生命周期和文本文档分发、并发文档存储、请求取消、有界并发、
-`tracing` span，以及每个处理器 `Context` 上的 `publish_diagnostics`。
+你在 `Server` 上注册带类型的处理器，再把它交给传输层，协议本身由框架负责：生命周期、
+文档同步、取消、有界并发、`tracing` span，以及通过 `Client` 发出的带类型服务端消息。
 
-> **当前状态：** `0.1.2` 是早期版本，已经实现的接口有意保持精简：`stdio`、自定义传输、
-> 生命周期处理器、文本文档同步和 `publish_diagnostics`。`Layer`/`Service` API、更多
-> LSP 功能与出站辅助方法，以及内置 TCP、WebSocket 和 WASM worker 传输仍在规划中，
-> 目前尚不可用。
+> **当前状态：** 仍处于早期阶段。本仓库跟踪的是开发中的 **0.2** 接口——构建出的
+> `Server`、带类型的 `Router`、变更后（post-mutation）文档钩子以及 `Client` 句柄，
+> 下面的示例均基于该接口。已发布的 `0.1.x` 仍使用 `LanguageServer` trait，迁移方式
+> 参见 [0.1 到 0.2 迁移指南](./docs/migrations/0.1-to-0.2.md)。标准功能目前实现了
+> hover、completion 和 Command；capability 目录的其余部分，以及内置 TCP、WebSocket
+> 和 WASM worker 传输仍在规划中，尚不可用。
 
 ## 快速开始
 
-```rust
+```rust,no_run
+use std::sync::Arc;
+
+use lspf::types::notification::{DidOpenTextDocument, PublishDiagnostics};
 use lspf::types::{
     Diagnostic, DiagnosticSeverity, DidOpenTextDocumentParams, Position,
     PublishDiagnosticsParams, Range,
 };
-use lspf::{Context, Documents, LanguageServer};
+use lspf::{Context, Server};
 
-struct Hello {
-    documents: Documents,
-}
+/// 只存放你自己的应用状态——文档、workspace 和 client 由框架持有，
+/// 并通过 `Context` 交给处理器。
+struct State;
 
-impl Hello {
-    fn new() -> Self {
-        Self {
-            documents: Documents::new(),
-        }
-    }
-}
-
-impl LanguageServer for Hello {
-    fn documents(&self) -> &Documents {
-        &self.documents
-    }
-
-    async fn text_document_did_open(
-        &self,
-        ctx: &Context,
-        params: DidOpenTextDocumentParams,
-    ) {
-        ctx.publish_diagnostics(PublishDiagnosticsParams {
-            uri: params.text_document.uri,
-            version: Some(params.text_document.version),
-            diagnostics: vec![Diagnostic {
-                range: Range {
-                    start: Position { line: 0, character: 0 },
-                    end:   Position { line: 0, character: 0 },
-                },
-                severity: Some(DiagnosticSeverity::INFORMATION),
-                source: Some("lspf-hello".into()),
-                message: "lspf saw this document open".into(),
-                ..Diagnostic::default()
-            }],
-        });
+/// 内置 `textDocument/didOpen` 的变更后钩子：框架已经打开了该文档，
+/// 因此这里的 `ctx.documents()` 能看到它。
+async fn on_did_open(_state: Arc<State>, ctx: Context, params: DidOpenTextDocumentParams) {
+    let uri = params.text_document.uri;
+    let Some(document) = ctx.documents().get(&uri) else {
+        return;
+    };
+    let result = ctx.client().notify::<PublishDiagnostics>(PublishDiagnosticsParams {
+        uri,
+        version: Some(document.version()),
+        diagnostics: vec![Diagnostic {
+            range: Range {
+                start: Position { line: 0, character: 0 },
+                end:   Position { line: 0, character: 0 },
+            },
+            severity: Some(DiagnosticSeverity::INFORMATION),
+            source: Some("lspf-hello".into()),
+            message: "lspf saw this document open".into(),
+            ..Diagnostic::default()
+        }],
+    });
+    if let Err(error) = result {
+        tracing::warn!(%error, "publishing the open diagnostic failed");
     }
 }
 
 #[tokio::main]
 async fn main() -> lspf::Result<()> {
+    // 日志写往 stderr：stdout 只承载 LSP 协议流量。
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
-    lspf::stdio(Hello::new()).serve().await
+
+    let server = Server::builder(State)
+        .notification::<DidOpenTextDocument, _, _>(on_did_open)
+        .build()
+        .expect("the static registrations are valid");
+    // serve 返回连接的结束方式（Outcome），由二进制自己决定它对进程意味着什么。
+    let outcome = lspf::stdio(server).serve().await?;
+    std::process::exit(outcome.code());
 }
 ```
 
@@ -81,12 +85,18 @@ async fn main() -> lspf::Result<()> {
 
 ## 安装依赖
 
+上面的快速开始使用尚未发布的 0.2 接口，因此在 0.2 发布之前请直接依赖仓库版本：
+
 ```toml
 [dependencies]
-lspf = "0.1"
+lspf = { git = "https://github.com/meymchen/lspf" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ```
+
+已发布的 `lspf = "0.1"` 仍是旧的 `LanguageServer` trait 接口，两者的对应关系
+参见[迁移指南](./docs/migrations/0.1-to-0.2.md)。
 
 `lspf` 的 `Cargo.toml` 已经引入 `lsp-types`、`tokio`、`tracing`、`serde`
 等运行时依赖，因此你的应用只需为直接使用的 `tokio` 功能选择相应 feature。
@@ -94,10 +104,13 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ## 为什么选择 lspf
 
 - **异步优先。** 框架端到端使用 `async fn`，没有同步处理路径。
-- **最小可用服务器。** 实现 `LanguageServer` trait，并把实例交给
-  `lspf::stdio(...)`，即可得到一个可工作的 LSP 服务器。
-- **由框架管理文档状态。** 增量文本变更会在用户处理器运行前应用到并发安全、
-  基于 rope 的 `Documents` 存储。
+- **最小可用服务器。** 在 `Server::builder` 上注册处理器，把构建出的 `Server`
+  交给 `lspf::stdio(...)`，即可得到一个可工作的 LSP 服务器。
+- **由框架管理文档状态。** 增量文本变更会在你的钩子运行前应用到框架持有的、
+  并发安全且基于 rope 的 `Documents`；处理器通过没有任何修改操作的
+  `DocumentsView` 读取它们。
+- **capability 不会与分发脱节。** `ServerCapabilities` 由参与分发的同一份注册
+  生成，因此服务器宣告的能力就是它实际提供的能力。
 - **安全的并发分发。** 请求和通知受可配置的并发上限约束（默认 64）；
   `$/cancelRequest` 通过 `CancellationToken` 传播。
 - **代为处理协议细节。** 生命周期顺序、JSON-RPC framing、文本同步以及
@@ -111,38 +124,45 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 | 术语                | 含义                                                                                   |
 | ------------------- | -------------------------------------------------------------------------------------- |
-| `LanguageServer`    | 应用实现的异步 trait；当前包含生命周期和文本文档处理器。                               |
-| Handler             | 处理 LSP 请求或通知的异步 trait 方法。                                                 |
+| `Server`            | 持有恰好一个 LSP 连接；由 `Server::builder(state)` 构建，并在 `Transport` 上运行。     |
+| Handler             | 为某个 LSP 方法注册的异步函数；用户处理器优先于内置处理器。                            |
+| 内置处理器          | 框架自带的处理器：生命周期、文档同步和取消都是协议内置项。                             |
+| 变更后钩子          | 为内置文档通知注册处理器得到的结果：它观察变更，而不会替换变更。                       |
+| `Command`           | 通过 `workspace/executeCommand` 按名称分发的用户闭包。                                 |
 | `Document`          | 框架跟踪的文本资源：URI、语言 ID、版本和基于 rope 的内容。                             |
-| `Documents`         | 服务器和每个处理器 `Context` 共享的并发安全文档存储。                                  |
-| `Context`           | 处理器访问 `Documents`、请求 ID、`tracing` span 和 `publish_diagnostics` 的入口。      |
+| `DocumentsView`     | 处理器通过 `ctx.documents()` 获得的只读文档句柄。                                      |
+| `Context`           | 每个处理器都会收到的框架状态句柄（克隆开销极小）：文档、workspace 和 client。          |
+| `Client`            | 发送带类型服务端通知与请求的句柄（`ctx.client()`）。                                   |
 | `CancellationToken` | 传递给请求处理器的取消信号。                                                           |
-| `Transport`         | 供分发器使用、拆分为 reader 和 writer 两部分的消息帧通道。                             |
+| `Transport`         | 供协议引擎使用、拆分为 reader 和 writer 两部分的消息帧通道。                           |
+| `Outcome`           | 连接如何结束；serve 返回它，其中带有 LSP 退出码，但框架从不结束进程。                  |
 
 ## 架构
 
 完整设计文档与代码一起维护：
 
 - [`CONTEXT.md`](./CONTEXT.md)：领域语言和共享词汇。
-- [`docs/adr/`](./docs/adr/)：16 份架构决策记录，涵盖纯异步运行时、分发器设计、
-  capability 自动推导、取消模型、传输形式、`Layer`/`Service` 提案、位置编码等。
-  ADR 同时描述架构方向和已经交付的行为；ADR 被接受并不表示对应功能已经实现。
+- [`docs/adr/`](./docs/adr/)：20 份架构决策记录，涵盖纯异步运行时、带类型的 Router
+  与 capability 目录、协议引擎与出站请求代理、取消模型、传输形式、`Layer`/`Service`
+  栈、位置编码等。ADR 同时描述架构方向和已经交付的行为；ADR 被接受并不表示对应
+  功能已经实现。
 
 ## 路线图
 
 当前已经可用：
 
 - `stdio` 和公开的自定义传输接口。
-- 生命周期和增量文本文档同步。
+- 构建出的 `Server`：带类型的请求、通知、Command、hover 与 completion、用户
+  `Layer`，以及唯一的 `configure_initialize` 事务。
+- 生命周期和增量文本文档同步，并支持变更后文档钩子。
+- 通过 `Client` 发送带类型的服务端通知与可关联响应的请求。
 - 并发分发、有界并发、请求取消和 `tracing` span。
 - 基于 rope 的文档，以及 UTF-8/UTF-16 位置编码协商。
-- `Context::publish_diagnostics`。
 
 已有规划，但尚未承诺发布版本：
 
-- 更多 `LanguageServer` 处理器和 capability 推导。
-- 其余出站通知和请求辅助方法。
-- `Layer`/`Service` 组合 API 和 panic 隔离。
+- capability 目录中其余的标准功能。
+- 其余生命周期钩子和出站辅助方法。
 - 内置 TCP、WebSocket 和 WASM worker 传输。
 
 ## 示例

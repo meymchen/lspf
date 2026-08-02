@@ -25,6 +25,22 @@ pub mod types {
     pub use lsp_types::*;
 }
 
+/// Compiles the Rust in the repository's user-facing Markdown as doc-tests, so
+/// a quickstart or a migration example cannot drift from the surface it
+/// documents. The module exists only under `cargo test --doc`; nothing here is
+/// part of the public API.
+#[cfg(doctest)]
+mod markdown {
+    #[doc = include_str!("../../../README.md")]
+    pub struct Readme;
+
+    #[doc = include_str!("../../../README.zh-CN.md")]
+    pub struct ReadmeZhCn;
+
+    #[doc = include_str!("../../../docs/migrations/0.1-to-0.2.md")]
+    pub struct MigrationGuide;
+}
+
 pub use builder::{InitializeRegistrar, Server, ServerBuilder};
 pub use client::Client;
 pub use context::Context;
@@ -46,13 +62,15 @@ pub use tokio_util::sync::CancellationToken;
 /// Default cap on in-flight handler tasks (ADR 0012).
 pub const DEFAULT_CONCURRENCY_LIMIT: usize = 64;
 
-/// Drive a `LanguageServer` over a custom `Transport`.
+/// Drive a 0.1 `LanguageServer` over a custom `Transport`.
 ///
-/// `stdio()` is the canonical entry point; `serve()` is the escape hatch
-/// for tests and for transports beyond stdio (TCP, WebSocket, in-process
-/// mocks). See ADR 0011 for the transport contract. Uses
-/// [`DEFAULT_CONCURRENCY_LIMIT`] for in-flight handlers; use
-/// [`serve_with_limit`] to override.
+/// The 0.2 entry points are [`stdio`] for the default adapter and
+/// [`Server::serve`] for any other `Transport` — a built [`Server`] carries its
+/// own concurrency policy and reports an [`Outcome`] instead of terminating the
+/// process. This function and [`serve_with_limit`] remain only for the
+/// superseded trait-based core and are removed with it. See ADR 0011 for the
+/// transport contract. Uses [`DEFAULT_CONCURRENCY_LIMIT`] for in-flight
+/// handlers; use [`serve_with_limit`] to override.
 pub async fn serve<S, T>(server: S, transport: T) -> Result<()>
 where
     S: LanguageServer,
@@ -65,7 +83,8 @@ where
 /// Like [`serve`], but with an explicit cap on in-flight handler tasks
 /// (ADR 0012). When the cap is hit, the read-loop awaits a permit before
 /// spawning the next handler — visible in traces as a long
-/// `handler.acquire_permit` span.
+/// `handler.acquire_permit` span. A 0.2 [`Server`] sets the same cap through
+/// [`ServerBuilder::concurrency_limit`] instead.
 pub async fn serve_with_limit<S, T>(server: S, transport: T, concurrency_limit: usize) -> Result<()>
 where
     S: LanguageServer,
