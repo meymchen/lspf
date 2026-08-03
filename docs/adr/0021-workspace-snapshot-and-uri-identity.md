@@ -57,7 +57,7 @@ the client means.
 We rejected **keeping `Option<Workspace>` in [[Context]]**. The engine
 rejects every request and drops every notification before the initialize
 transaction establishes the Workspace, so the `None` case was unobservable
-by user code; making the Workspace non-optional removes a unwrap-or-ignore
+by user code; making the Workspace non-optional removes an unwrap-or-ignore
 ceremony from every handler.
 
 The cost we accept: `UriKey` is framework-internal, so user code comparing
