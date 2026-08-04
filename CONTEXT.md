@@ -65,14 +65,23 @@ struct, or hand it back through a getter. Mutations happen only through
 the protocol engine's built-in document-sync handlers; user code reads it
 through a read-only `DocumentsView` from the [[Context]] parameter
 (`ctx.documents()`), and post-mutation hooks observe the updated state.
+Identity is one normalized URI key (ADR 0021): equivalent spellings —
+scheme and host case, percent-encoding, Windows drive-letter case —
+address one [[Document]], while public values keep the client's original
+URI.
 _Avoid_: Document store (correct but verbose).
 
 **Workspace**:
-The cloneable handle to workspace-folder and configuration state, exposed
+The cloneable handle to the connection's workspace state, exposed
 through [[Context]] (ADR 0017). The protocol engine establishes it from
-`InitializeParams` during initialization and owns its mutation
+`InitializeParams` during initialization — client info, capabilities,
+initialization options, root URI, and workspace folders, all verbatim
+and order-preserving (ADR 0021) — and owns its later mutation
 (`workspace/didChangeWorkspaceFolders`); user hooks observe post-mutation
-state. Document contents live in [[Documents]], not here.
+state. It owns the connection's [[Documents]] handle, so the read-only
+`DocumentsView` user code sees comes from it. `roots()` prefers the
+announced folders and falls back to one synthetic root derived from
+`rootUri`, named for its final path segment or `"workspace"`.
 _Avoid_: Project, root (the LSP `rootUri` is only an input to it).
 
 **Client**:
@@ -98,8 +107,9 @@ custom request (a separate extension mechanism, see below).
 **Context**:
 The cheap-to-clone framework-state handle passed by value to every
 [[Handler]] (ADR 0017, revising ADR 0009's borrowed `&Context`). Through
-it handlers reach the read-only [[Documents]] view, the [[Workspace]]
-handle, and the [[Client]] handle for outgoing requests and
+it handlers reach the established [[Workspace]] — initialization
+metadata, roots, workspace folders, and the read-only [[Documents]]
+view — and the [[Client]] handle for outgoing requests and
 notifications, plus the current request's scope (id, tracing span).
 It is the only way a handler reaches framework state — the user's own
 struct holds only user-owned state, and user code never constructs a
