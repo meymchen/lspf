@@ -7,6 +7,8 @@ use lsp_types::{
 };
 use ropey::Rope;
 
+use crate::uri_key::UriKey;
+
 /// Negotiated meaning of `Position.character` (ADR 0016).
 ///
 /// LSP defaults to UTF-16; lspf prefers UTF-8 when the client offers it.
@@ -174,7 +176,10 @@ impl Document {
 
 #[derive(Debug, Default)]
 struct DocumentsInner {
-    by_uri: HashMap<Uri, Document>,
+    /// Identity is the normalized [`UriKey`], so equivalent spellings of one
+    /// URI address one document; each [`Document`] still carries the original
+    /// URI the client opened it with.
+    by_uri: HashMap<UriKey, Document>,
     encoding: PositionEncoding,
 }
 
@@ -202,7 +207,7 @@ impl Documents {
     pub(crate) fn open(&self, item: TextDocumentItem) {
         let mut inner = self.inner.write().unwrap();
         inner.by_uri.insert(
-            item.uri.clone(),
+            UriKey::new(&item.uri),
             Document {
                 uri: item.uri,
                 language_id: item.language_id,
@@ -215,13 +220,13 @@ impl Documents {
     /// Read a snapshot of a document by URI.
     pub(crate) fn get(&self, uri: &Uri) -> Option<Document> {
         let inner = self.inner.read().unwrap();
-        inner.by_uri.get(uri).cloned()
+        inner.by_uri.get(&UriKey::new(uri)).cloned()
     }
 
     /// Remove a document from the store. Returns the removed document, if any.
     pub(crate) fn close(&self, uri: &Uri) -> Option<Document> {
         let mut inner = self.inner.write().unwrap();
-        inner.by_uri.remove(uri)
+        inner.by_uri.remove(&UriKey::new(uri))
     }
 
     /// Apply one `didChange` notification's content changes in order,
@@ -242,7 +247,7 @@ impl Documents {
         let encoding = inner.encoding;
         let doc = inner
             .by_uri
-            .get_mut(uri)
+            .get_mut(&UriKey::new(uri))
             .ok_or_else(|| crate::LspError::invalid_request("document not found"))?;
 
         // `Rope` clones share their nodes, so the working copy costs little
@@ -261,7 +266,7 @@ impl Documents {
         let inner = self.inner.read().unwrap();
         inner
             .by_uri
-            .get(uri)
+            .get(&UriKey::new(uri))
             .and_then(|doc| doc.position_to_offset(inner.encoding, position))
     }
 
@@ -270,7 +275,7 @@ impl Documents {
         let inner = self.inner.read().unwrap();
         inner
             .by_uri
-            .get(uri)
+            .get(&UriKey::new(uri))
             .and_then(|doc| doc.offset_to_position(inner.encoding, offset))
     }
 
@@ -346,6 +351,11 @@ pub struct DocumentsView {
 
 impl DocumentsView {
     /// Read a snapshot of a document by URI, or `None` if it is not open.
+    ///
+    /// The lookup resolves through the connection's normalized URI identity
+    /// (scheme and host case, percent-encoding, and Windows drive-letter case
+    /// are equivalent spellings of one document), while the returned
+    /// [`Document`] keeps the original URI the client opened it with.
     pub fn get(&self, uri: &Uri) -> Option<Document> {
         self.documents.get(uri)
     }
@@ -457,6 +467,59 @@ mod tests {
 
         docs.close(&u);
         assert!(docs.get(&u).is_none());
+    }
+
+    #[test]
+    fn equivalent_uri_spellings_resolve_to_one_document() {
+        let docs = Documents::new();
+        let original = uri("file:///C%3A/Users/Me/a.rs");
+        docs.open(text_item(original.clone(), "fn main() {}"));
+
+        for spelling in [
+            "file:///c:/Users/Me/a.rs",
+            "file:///C:/Users/Me/a.rs",
+            "file:///c%3A/Users/Me/a.rs",
+            "file:///c%3a/Users/Me/a.rs",
+            "FILE:///C:/Users/Me/a.rs",
+        ] {
+            let doc = docs
+                .get(&uri(spelling))
+                .unwrap_or_else(|| panic!("{spelling} resolves to the opened document"));
+            assert_eq!(
+                doc.uri(),
+                &original,
+                "the public value keeps the URI the client opened with"
+            );
+        }
+    }
+
+    #[test]
+    fn path_case_still_distinguishes_documents() {
+        let docs = Documents::new();
+        docs.open(text_item(uri("file:///home/Foo.rs"), "a"));
+        assert!(
+            docs.get(&uri("file:///home/foo.rs")).is_none(),
+            "ordinary path case is not normalized"
+        );
+    }
+
+    #[test]
+    fn change_and_close_resolve_through_the_same_normalized_key() {
+        let docs = Documents::new();
+        docs.open(text_item(uri("file:///C%3A/w/a.rs"), "hello"));
+
+        docs.apply_changes(&uri("file:///c:/w/a.rs"), 2, [change(None, "goodbye")])
+            .expect("the change names the same document by another spelling");
+        assert_eq!(
+            docs.get(&uri("FILE:///C:/w/a.rs")).unwrap().text(),
+            "goodbye"
+        );
+
+        assert!(
+            docs.close(&uri("file:///c%3A/w/a.rs")).is_some(),
+            "the close names the same document by another spelling"
+        );
+        assert!(docs.get(&uri("file:///c:/w/a.rs")).is_none());
     }
 
     #[test]
