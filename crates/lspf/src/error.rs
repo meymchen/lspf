@@ -85,8 +85,9 @@ pub enum BuildError {
     )]
     ExecuteCommandConflict,
 
-    /// Two feature contributions disagreed on a capability field that must be
-    /// singular within its family (ADR 0017). Capability construction never
+    /// Two contributions disagreed on a capability field that must be singular
+    /// within its family, or a dependent feature was registered without the
+    /// base its family requires (ADR 0017). Capability construction never
     /// resolves such a clash by last-write-wins; it fails the build instead.
     #[error("conflicting contributions for capability field `{field}`")]
     ConflictingCapability { field: &'static str },
