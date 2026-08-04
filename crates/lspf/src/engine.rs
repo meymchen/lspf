@@ -710,10 +710,8 @@ where
         params: serde_json::Value,
     ) {
         let span = info_span!("notification", method = %method);
-        let ctx = attach_workspace(
-            Context::for_notification(span, self.client.clone(), self.documents.clone()),
-            &self.workspace,
-        );
+        let ctx =
+            Context::for_notification(span, self.client.clone(), self.established_workspace());
         let result = service
             .call(IncomingCall::notification(
                 method.to_string(),
@@ -855,8 +853,10 @@ where
         // from InitializeParams before `on_initialize` observes them. Per
         // ADR 0018's precedence, the Workspace is established (step 4) before
         // protocol-owned fields are negotiated and capabilities generated
-        // (step 5).
-        let established = Workspace::from_params(&params);
+        // (step 5). The Workspace takes ownership of the connection's
+        // Documents handle; the engine keeps its own clone for the built-in
+        // document-sync mutations.
+        let established = Workspace::from_params(&params, self.documents.clone());
         self.workspace = Some(established.clone());
 
         let position_encoding = self.documents.negotiate_position_encoding(&params);
@@ -883,9 +883,8 @@ where
                     reservation.id.clone(),
                     span.clone(),
                     self.client.clone(),
-                    self.documents.clone(),
-                )
-                .with_workspace(established);
+                    established,
+                );
                 match hook(
                     Arc::clone(&self.state),
                     ctx,
@@ -921,6 +920,15 @@ where
         Flow::Continue
     }
 
+    /// The established [`Workspace`]. Dispatch reaches user code only in the
+    /// running state, which the initialize transaction enters only after
+    /// establishing the Workspace, so it is always present here.
+    fn established_workspace(&self) -> Workspace {
+        self.workspace.clone().expect(
+            "user dispatch runs only after the initialize transaction establishes the workspace",
+        )
+    }
+
     /// Spawn one user request into the engine's task group, racing user
     /// dispatch against the request's cancellation so a cancelled request stops
     /// at its next yield point, then hand whichever finished first to the
@@ -935,18 +943,14 @@ where
         cancellation: CancellationToken,
     ) {
         let state = Arc::clone(&self.state);
-        let documents = self.documents.clone();
-        let workspace = self.workspace.clone();
+        let workspace = self.established_workspace();
         let out_tx = self.out_tx.clone();
         let client = self.client.clone();
         let inbound = self.inbound.clone();
         self.tasks.spawn(async move {
             let id = reservation.id.clone();
-            let ctx = attach_workspace(
-                Context::for_request(id.clone(), span, client, documents),
-                &workspace,
-            )
-            .with_cancellation(cancellation.clone());
+            let ctx = Context::for_request(id.clone(), span, client, workspace)
+                .with_cancellation(cancellation.clone());
             let call = IncomingCall::request(method, id, params, ctx, state);
             let result = match select(
                 Box::pin(service.call(call)),
@@ -1019,15 +1023,6 @@ enum Flow {
     /// enters (ADR 0018) once its fixed error is enqueued — requesting the
     /// engine's one close operation with the cause that reached it.
     Close(CloseCause),
-}
-
-/// Attach the established [`Workspace`] to a handler `Context`, if one exists.
-/// Post-initialize dispatch always has one; the fallback keeps the helper total.
-fn attach_workspace(ctx: Context, workspace: &Option<Workspace>) -> Context {
-    match workspace {
-        Some(ws) => ctx.with_workspace(ws.clone()),
-        None => ctx,
-    }
 }
 
 /// Enqueue a success response after the protocol engine's final wire encoding,

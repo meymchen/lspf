@@ -16,6 +16,7 @@ mod raw;
 mod runtime;
 mod service;
 mod transport;
+mod uri_key;
 mod workspace;
 
 pub mod types {

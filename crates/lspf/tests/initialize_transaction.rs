@@ -57,6 +57,45 @@ async fn ping(
     })
 }
 
+// --- A document-probe request reading through the Context --------------------
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+struct DocProbeParams {
+    uri: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+struct DocProbeResult {
+    found: bool,
+    opened_uri: Option<String>,
+    text: Option<String>,
+}
+
+/// A marker whose handler reads `ctx.documents()`, so the test drives document
+/// identity end to end over the wire.
+enum DocProbe {}
+
+impl Request for DocProbe {
+    type Params = DocProbeParams;
+    type Result = DocProbeResult;
+    const METHOD: &'static str = "custom/docProbe";
+}
+
+async fn doc_probe(
+    _state: Arc<AppState>,
+    ctx: Context,
+    params: DocProbeParams,
+    _ct: lspf::CancellationToken,
+) -> Result<DocProbeResult, lspf::LspError> {
+    let probe = params.uri.parse::<Uri>().expect("the probe URI parses");
+    let doc = ctx.documents().get(&probe);
+    Ok(DocProbeResult {
+        found: doc.is_some(),
+        opened_uri: doc.as_ref().map(|d| d.uri().as_str().to_string()),
+        text: doc.map(|d| d.text()),
+    })
+}
+
 /// Application state shared across handlers. `observed` is an `Arc` so the test
 /// keeps a handle after the state moves into the server.
 #[derive(Clone, Default)]
@@ -70,6 +109,32 @@ struct Observed {
     encoding: PositionEncoding,
     root_uri: Option<Uri>,
     folder_count: usize,
+}
+
+/// State for tests capturing the complete workspace snapshot `on_initialize`
+/// observes. Fields not exercised by a test stay at their `Default`.
+#[derive(Clone, Default)]
+struct SnapshotState {
+    observed: Arc<Mutex<Option<WorkspaceSnapshot>>>,
+}
+
+#[derive(Clone, Default)]
+struct WorkspaceSnapshot {
+    client_name: Option<String>,
+    client_version: Option<String>,
+    initialization_options: Option<serde_json::Value>,
+    position_encodings: Option<Vec<PositionEncodingKind>>,
+    root_uri: Option<Uri>,
+    folder_names: Vec<String>,
+    roots: Vec<(String, String)>,
+}
+
+fn roots_of(ctx: &Context) -> Vec<(String, String)> {
+    ctx.workspace()
+        .roots()
+        .iter()
+        .map(|folder| (folder.uri.as_str().to_string(), folder.name.clone()))
+        .collect()
 }
 
 // --- In-memory transport -----------------------------------------------------
@@ -140,15 +205,22 @@ fn bare_initialize(id: i32) -> RawMessage {
 }
 
 fn notification(method: &'static str) -> RawMessage {
+    notification_with(method, serde_json::Value::Null)
+}
+
+fn notification_with(method: &'static str, params: serde_json::Value) -> RawMessage {
     RawMessage::Notification {
         method: Cow::Borrowed(method),
-        params: Bytes::from_static(b"null"),
+        params: Bytes::from(serde_json::to_vec(&params).unwrap()),
     }
 }
 
 /// Drive `server` with `messages`, then close the transport so `serve` returns
 /// once everything is processed. Returns the outbox.
-async fn drive(server: Server<AppState>, messages: Vec<RawMessage>) -> Vec<RawMessage> {
+async fn drive<S>(server: Server<S>, messages: Vec<RawMessage>) -> Vec<RawMessage>
+where
+    S: Send + Sync + 'static,
+{
     let (in_tx, in_rx) = mpsc::unbounded_channel::<RawMessage>();
     let (out_tx, mut out_rx) = mpsc::unbounded_channel::<RawMessage>();
     let transport = ChannelTransport { in_rx, out_tx };
@@ -451,9 +523,7 @@ async fn on_initialize_observes_established_workspace_and_encoding() {
         observed: Arc::clone(&observed_handle),
     })
     .on_initialize(|state, ctx, _params, _ct| async move {
-        let workspace = ctx
-            .workspace()
-            .expect("workspace established before on_initialize");
+        let workspace = ctx.workspace();
         let observed = Observed {
             encoding: ctx.documents().position_encoding(),
             root_uri: workspace.root_uri().cloned(),
@@ -543,4 +613,202 @@ async fn on_initialize_error_sends_that_error_and_closes() {
         response(&outbox, 2).is_none(),
         "the connection entered the close path instead of the running state"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn initialize_stores_the_complete_workspace_snapshot() {
+    // The initialize transaction stores client info, capabilities,
+    // initialization options, root URI, and folders — verbatim, folder order
+    // included — so on_initialize (and every later handler) observes them all
+    // through the established Workspace.
+    let observed_handle = Arc::new(Mutex::new(None));
+    let server = Server::builder(SnapshotState {
+        observed: Arc::clone(&observed_handle),
+    })
+    .on_initialize(|state, ctx, _params, _ct| async move {
+        let workspace = ctx.workspace();
+        let snapshot = WorkspaceSnapshot {
+            client_name: workspace.client_info().map(|info| info.name.clone()),
+            client_version: workspace
+                .client_info()
+                .and_then(|info| info.version.clone()),
+            initialization_options: workspace.initialization_options().cloned(),
+            position_encodings: workspace
+                .capabilities()
+                .general
+                .as_ref()
+                .and_then(|general| general.position_encodings.clone()),
+            root_uri: workspace.root_uri().cloned(),
+            folder_names: workspace
+                .folders()
+                .iter()
+                .map(|folder| folder.name.clone())
+                .collect(),
+            roots: roots_of(&ctx),
+        };
+        *state.observed.lock().await = Some(snapshot);
+        Ok(None)
+    })
+    .build()
+    .expect("server builds");
+
+    let outbox = drive(
+        server,
+        vec![
+            initialize_request(
+                1,
+                json!({
+                    "processId": null,
+                    "clientInfo": { "name": "vscode", "version": "1.100.0" },
+                    "initializationOptions": { "settings": { "tabSize": 4 } },
+                    "rootUri": "file:///workspace/root",
+                    "capabilities": { "general": { "positionEncodings": ["utf-8"] } },
+                    "workspaceFolders": [
+                        { "uri": "file:///b", "name": "second" },
+                        { "uri": "file:///a", "name": "first" }
+                    ]
+                }),
+            ),
+            notification("exit"),
+        ],
+    )
+    .await;
+
+    assert!(ok_result(&outbox, 1).is_some(), "initialize succeeds");
+    let observed = observed_handle
+        .lock()
+        .await
+        .clone()
+        .expect("on_initialize ran and recorded the snapshot");
+    assert_eq!(observed.client_name.as_deref(), Some("vscode"));
+    assert_eq!(observed.client_version.as_deref(), Some("1.100.0"));
+    assert_eq!(
+        observed.initialization_options,
+        Some(json!({ "settings": { "tabSize": 4 } })),
+        "initialization options survive verbatim"
+    );
+    assert_eq!(
+        observed.position_encodings,
+        Some(vec![PositionEncodingKind::UTF8]),
+        "client capabilities survive verbatim"
+    );
+    assert_eq!(
+        observed.root_uri,
+        Some("file:///workspace/root".parse::<Uri>().unwrap())
+    );
+    assert_eq!(
+        observed.folder_names,
+        ["second", "first"],
+        "folder order is preserved"
+    );
+    assert_eq!(
+        observed.roots,
+        [
+            ("file:///b".to_string(), "second".to_string()),
+            ("file:///a".to_string(), "first".to_string()),
+        ],
+        "roots() prefers the announced folders over rootUri"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn initialize_without_folders_synthesizes_one_root_from_root_uri() {
+    let observed_handle = Arc::new(Mutex::new(None));
+    let server = Server::builder(SnapshotState {
+        observed: Arc::clone(&observed_handle),
+    })
+    .on_initialize(|state, ctx, _params, _ct| async move {
+        let snapshot = WorkspaceSnapshot {
+            roots: roots_of(&ctx),
+            ..WorkspaceSnapshot::default()
+        };
+        *state.observed.lock().await = Some(snapshot);
+        Ok(None)
+    })
+    .build()
+    .expect("server builds");
+
+    let outbox = drive(
+        server,
+        vec![
+            initialize_request(
+                1,
+                json!({
+                    "processId": null,
+                    "rootUri": "file:///workspace/root",
+                    "capabilities": {}
+                }),
+            ),
+            notification("exit"),
+        ],
+    )
+    .await;
+
+    assert!(ok_result(&outbox, 1).is_some(), "initialize succeeds");
+    let observed = observed_handle
+        .lock()
+        .await
+        .clone()
+        .expect("on_initialize ran and recorded the roots");
+    assert_eq!(
+        observed.roots,
+        [("file:///workspace/root".to_string(), "root".to_string())],
+        "with no folders, roots() falls back to one synthetic root named for the final segment"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn documents_resolve_equivalent_uri_spellings_end_to_end() {
+    // A document opened under one URI spelling is found through any equivalent
+    // spelling — percent-encoded drive colon, drive-letter case — while the
+    // public value keeps the original client URI.
+    let server = Server::builder(AppState::default())
+        .request::<DocProbe, _, _>(doc_probe)
+        .build()
+        .expect("server builds");
+
+    let outbox = drive(
+        server,
+        vec![
+            initialize_request(
+                1,
+                json!({
+                    "processId": null,
+                    "rootUri": "file:///C%3A/src",
+                    "capabilities": {}
+                }),
+            ),
+            notification_with(
+                "textDocument/didOpen",
+                json!({
+                    "textDocument": {
+                        "uri": "file:///C%3A/src/main.rs",
+                        "languageId": "rust",
+                        "version": 1,
+                        "text": "fn main() {}"
+                    }
+                }),
+            ),
+            request(
+                2,
+                "custom/docProbe",
+                json!({ "uri": "file:///c:/src/main.rs" }),
+            ),
+            notification("exit"),
+        ],
+    )
+    .await;
+
+    let probe: DocProbeResult =
+        serde_json::from_value(ok_result(&outbox, 2).expect("docProbe response")).unwrap();
+    assert!(
+        probe.found,
+        "the probe's spelling resolves to the opened document"
+    );
+    assert_eq!(
+        probe.opened_uri.as_deref(),
+        Some("file:///C%3A/src/main.rs"),
+        "the public value keeps the URI the client opened with"
+    );
+    assert_eq!(probe.text.as_deref(), Some("fn main() {}"));
 }
