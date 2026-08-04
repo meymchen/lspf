@@ -14,7 +14,7 @@
 //! no capability.
 
 use lsp_types::CompletionOptions;
-use lsp_types::request::{Completion, HoverRequest, Request};
+use lsp_types::request::{Completion, HoverRequest, Request, ResolveCompletionItem};
 
 use crate::capability::CapabilityBuilder;
 use crate::error::BuildError;
@@ -95,4 +95,32 @@ impl sealed::Sealed for CompletionFeature {
 }
 impl FeatureSpec for CompletionFeature {
     type Marker = Completion;
+}
+
+/// The `completionItem/resolve` feature descriptor. Construct it with
+/// [`completion_resolve`].
+pub struct CompletionResolveFeature(());
+
+/// Describe the standard completion-item resolve feature: it dispatches the
+/// lsp-types [`ResolveCompletionItem`] marker — a typed
+/// [`CompletionItem`](lsp_types::CompletionItem) in and out — and augments
+/// the completion family's capability with `resolveProvider`.
+///
+/// Resolve is a dependent feature: registering it without the base
+/// [`completion`] feature fails validation with
+/// [`BuildError::ConflictingCapability`](crate::BuildError::ConflictingCapability)
+/// rather than advertising a dangling `resolveProvider`.
+pub fn completion_resolve() -> CompletionResolveFeature {
+    CompletionResolveFeature(())
+}
+
+#[allow(private_interfaces)]
+impl sealed::Sealed for CompletionResolveFeature {
+    fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
+        caps.set_completion_resolve();
+        Ok(())
+    }
+}
+impl FeatureSpec for CompletionResolveFeature {
+    type Marker = ResolveCompletionItem;
 }
