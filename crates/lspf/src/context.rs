@@ -4,26 +4,25 @@ use tokio_util::sync::CancellationToken;
 use tracing::{Span, warn};
 
 use crate::client::Client;
-use crate::documents::{Documents, DocumentsView};
+use crate::documents::DocumentsView;
 use crate::raw::RequestId;
 use crate::workspace::Workspace;
 
 /// Per-request handle to framework state (see ADR 0009).
 ///
-/// The handle exposes connection-scoped capabilities such as [`Client`], the
-/// read-only [`DocumentsView`], and [`Workspace`] without exposing
+/// The handle exposes connection-scoped capabilities — the established
+/// [`Workspace`] (initialization metadata, roots, workspace folders, and the
+/// read-only [`DocumentsView`]) and the [`Client`] — without exposing
 /// protocol-owned queues or registries.
 #[derive(Debug, Clone)]
 pub struct Context {
     pub(crate) request_id: Option<RequestId>,
     pub(crate) span: Span,
     pub(crate) client: Client,
-    pub(crate) documents: DocumentsView,
-    /// The connection's established [`Workspace`], present once the initialize
-    /// transaction has run. Handlers only run after that point, so a handler
-    /// always observes `Some`; it is `None` only before the transaction
-    /// establishes one.
-    pub(crate) workspace: Option<Workspace>,
+    /// The connection's established [`Workspace`]. Handlers only run after
+    /// the initialize transaction has established it, so user code always
+    /// observes one — there is no workspace-less dispatch.
+    pub(crate) workspace: Workspace,
     pub(crate) cancellation: Option<CancellationToken>,
 }
 
@@ -32,36 +31,25 @@ impl Context {
         id: RequestId,
         span: Span,
         client: Client,
-        documents: Documents,
+        workspace: Workspace,
     ) -> Self {
         Self {
             request_id: Some(id),
             span,
             client,
-            documents: documents.view(),
-            workspace: None,
+            workspace,
             cancellation: None,
         }
     }
 
-    pub(crate) fn for_notification(span: Span, client: Client, documents: Documents) -> Self {
+    pub(crate) fn for_notification(span: Span, client: Client, workspace: Workspace) -> Self {
         Self {
             request_id: None,
             span,
             client,
-            documents: documents.view(),
-            workspace: None,
+            workspace,
             cancellation: None,
         }
-    }
-
-    /// Attach the connection's established [`Workspace`] to this context. The
-    /// protocol engine calls this once the initialize transaction has run, so
-    /// every handler and lifecycle hook that observes a workspace sees the same
-    /// established state.
-    pub(crate) fn with_workspace(mut self, workspace: Workspace) -> Self {
-        self.workspace = Some(workspace);
-        self
     }
 
     pub(crate) fn with_cancellation(mut self, cancellation: CancellationToken) -> Self {
@@ -81,14 +69,15 @@ impl Context {
         &self.span
     }
 
-    /// The connection's documents, as a read-only [`DocumentsView`].
+    /// The connection's documents, as a read-only [`DocumentsView`] — the
+    /// same view [`Workspace::documents`] hands out.
     ///
-    /// The framework owns and mutates the documents; a handler reads the retained
-    /// documents and converts positions through this view, and a registered
-    /// document hook sees it already carrying the built-in mutation
-    /// (ADR 0018).
-    pub fn documents(&self) -> &DocumentsView {
-        &self.documents
+    /// The framework owns and mutates the documents; a handler reads the
+    /// retained documents and converts positions through this view, and a
+    /// registered document hook sees it already carrying the built-in
+    /// mutation (ADR 0018).
+    pub fn documents(&self) -> DocumentsView {
+        self.workspace.documents()
     }
 
     /// A cheap clone of the typed handle for this connection's LSP client.
@@ -97,13 +86,11 @@ impl Context {
     }
 
     /// The connection's [`Workspace`], established from `InitializeParams`
-    /// during the initialize transaction (ADR 0017, ADR 0018).
-    ///
-    /// Returns `None` only where no workspace has been established, which no
-    /// handler can observe: the engine attaches the established workspace
-    /// before `on_initialize` runs, and every later dispatch inherits it.
-    pub fn workspace(&self) -> Option<&Workspace> {
-        self.workspace.as_ref()
+    /// during the initialize transaction (ADR 0017, ADR 0018): the one
+    /// cheap, shared, read-only view of the initialization metadata, roots,
+    /// workspace folders, and documents every handler observes.
+    pub fn workspace(&self) -> &Workspace {
+        &self.workspace
     }
 
     /// Push a `textDocument/publishDiagnostics` notification through the
@@ -117,5 +104,53 @@ impl Context {
         if let Err(error) = self.client.notify::<PublishDiagnostics>(params) {
             warn!(%error, "publish_diagnostics: notification failed");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use lsp_types::{InitializeParams, TextDocumentItem, Uri};
+    use tokio::sync::mpsc;
+
+    use super::*;
+    use crate::client::OutboundRegistry;
+    use crate::documents::Documents;
+
+    fn context() -> (Context, Documents) {
+        let (out_tx, _out_rx) = mpsc::unbounded_channel();
+        let documents = Documents::new();
+        let workspace = Workspace::from_params(&InitializeParams::default(), documents.clone());
+        let client = Client::new(out_tx, OutboundRegistry::default());
+        (
+            Context::for_notification(Span::none(), client, workspace),
+            documents,
+        )
+    }
+
+    #[test]
+    fn cloning_shares_connection_state_instead_of_copying_it() {
+        let (ctx, documents) = context();
+        let clone = ctx.clone();
+
+        let uri = Uri::from_str("file:///shared.rs").unwrap();
+        documents.open(TextDocumentItem {
+            uri: uri.clone(),
+            language_id: "rust".to_string(),
+            version: 1,
+            text: "fn main() {}".to_string(),
+        });
+
+        let doc = clone
+            .documents()
+            .get(&uri)
+            .expect("a cloned context reads the same connection documents");
+        assert_eq!(doc.text(), "fn main() {}");
+        assert_eq!(
+            clone.workspace().roots(),
+            ctx.workspace().roots(),
+            "a cloned context shares the one workspace"
+        );
     }
 }
