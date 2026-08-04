@@ -322,6 +322,7 @@ impl<S: Send + Sync + 'static> Registrations<S> {
     /// own. Run both at static build time and when the initialize transaction
     /// commits, so a conditional registration cannot smuggle in a conflict.
     fn validate(&self) -> Result<(), BuildError> {
+        self.capabilities.validate()?;
         // A command registration and an explicit `workspace/executeCommand`
         // request handler both claim the same method; they cannot coexist.
         if !self.commands.is_empty() && self.requests.contains_key(EXECUTE_COMMAND_METHOD) {
@@ -812,6 +813,15 @@ mod tests {
         Ok(None)
     }
 
+    async fn ok_resolve(
+        _state: Arc<DummyState>,
+        _ctx: Context,
+        item: lsp_types::CompletionItem,
+        _ct: CancellationToken,
+    ) -> Result<lsp_types::CompletionItem, LspError> {
+        Ok(item)
+    }
+
     async fn noop_command(
         _state: Arc<DummyState>,
         _ctx: Context,
@@ -1101,6 +1111,78 @@ mod tests {
         assert_eq!(
             err,
             BuildError::DuplicateMethod("textDocument/hover".to_string())
+        );
+    }
+
+    #[test]
+    fn completion_and_resolve_merge_into_one_capability_independent_of_order() {
+        let options = || CompletionOptions {
+            trigger_characters: Some(vec![".".to_string()]),
+            ..CompletionOptions::default()
+        };
+        let base_first = Server::builder(DummyState)
+            .feature(crate::features::completion(options()), ok_completion)
+            .feature(crate::features::completion_resolve(), ok_resolve)
+            .build()
+            .expect("completion then resolve builds")
+            .into_router();
+        let resolve_first = Server::builder(DummyState)
+            .feature(crate::features::completion_resolve(), ok_resolve)
+            .feature(crate::features::completion(options()), ok_completion)
+            .build()
+            .expect("resolve then completion builds")
+            .into_router();
+
+        assert_eq!(
+            base_first.capabilities(),
+            resolve_first.capabilities(),
+            "the family merge is independent of registration order"
+        );
+        let merged = base_first
+            .capabilities()
+            .completion_provider
+            .expect("the family emits one completionProvider capability");
+        assert_eq!(merged.resolve_provider, Some(true));
+        assert_eq!(merged.trigger_characters, Some(vec![".".to_string()]));
+        assert!(base_first.request("textDocument/completion").is_some());
+        assert!(base_first.request("completionItem/resolve").is_some());
+    }
+
+    #[test]
+    fn completion_resolve_without_completion_is_a_build_error() {
+        let err = Server::builder(DummyState)
+            .feature(crate::features::completion_resolve(), ok_resolve)
+            .build()
+            .err()
+            .expect("resolve without its base feature must fail");
+        assert_eq!(
+            err,
+            BuildError::ConflictingCapability {
+                field: "completionProvider"
+            }
+        );
+    }
+
+    #[test]
+    fn unequal_resolve_contributions_within_the_family_fail() {
+        let err = Server::builder(DummyState)
+            .feature(
+                crate::features::completion(CompletionOptions {
+                    resolve_provider: Some(false),
+                    ..CompletionOptions::default()
+                }),
+                ok_completion,
+            )
+            .feature(crate::features::completion_resolve(), ok_resolve)
+            .build()
+            .err()
+            .expect("a base that denies resolve and a resolve registration clash");
+        assert_eq!(
+            err,
+            BuildError::ConflictingCapability {
+                field: "completionProvider"
+            },
+            "capability construction never resolves a clash by last-write-wins"
         );
     }
 
