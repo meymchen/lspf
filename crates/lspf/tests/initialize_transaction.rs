@@ -7,6 +7,8 @@
 //! (ADR 0017, ADR 0018). These tests drive real envelopes over an in-memory
 //! channel-backed [`Transport`] and inspect the outbox.
 
+mod common;
+
 use std::borrow::Cow;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -498,7 +500,8 @@ async fn on_initialize_contributes_server_info_without_replacing_capabilities() 
         "on_initialize contributes optional ServerInfo"
     );
     // The generated capabilities are unchanged by on_initialize: hover is still
-    // advertised, plus the protocol-owned position encoding and document sync.
+    // advertised, plus protocol-owned position encoding, document sync, and
+    // workspace-folder support.
     assert_eq!(
         init.capabilities,
         ServerCapabilities {
@@ -507,6 +510,7 @@ async fn on_initialize_contributes_server_info_without_replacing_capabilities() 
             text_document_sync: Some(lspf::types::TextDocumentSyncCapability::Kind(
                 lspf::types::TextDocumentSyncKind::INCREMENTAL,
             )),
+            workspace: Some(common::workspace_capabilities()),
             ..ServerCapabilities::default()
         },
         "on_initialize cannot replace the framework-generated capabilities"

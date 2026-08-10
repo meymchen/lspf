@@ -77,8 +77,9 @@ through [[Context]] (ADR 0017). The protocol engine establishes it from
 `InitializeParams` during initialization — client info, capabilities,
 initialization options, root URI, and workspace folders, all verbatim
 and order-preserving (ADR 0021) — and owns its later mutation
-(`workspace/didChangeWorkspaceFolders`); user hooks observe post-mutation
-state. It owns the connection's [[Documents]] handle, so the read-only
+(`workspace/didChangeWorkspaceFolders`), latest raw configuration settings,
+and trace level; user hooks observe post-mutation state. It owns the
+connection's [[Documents]] handle, so the read-only
 `DocumentsView` user code sees comes from it. `roots()` prefers the
 announced folders and falls back to one synthetic root derived from
 `rootUri`, named for its final path segment or `"workspace"`.
