@@ -267,7 +267,7 @@ async fn features_advertise_no_unrelated_capabilities() {
     // Only hover and completion are set; everything else stays default apart
     // from the protocol-owned fields the engine adds for its own built-ins: the
     // negotiated position encoding (ADR 0016), which defaults to UTF-16 when
-    // the client offers none, and the document sync the engine performs itself.
+    // the client offers none, plus document sync and workspace-folder support.
     let expected = ServerCapabilities {
         hover_provider: Some(lspf::types::HoverProviderCapability::Simple(true)),
         completion_provider: Some(completion_options()),
@@ -275,6 +275,13 @@ async fn features_advertise_no_unrelated_capabilities() {
         text_document_sync: Some(lspf::types::TextDocumentSyncCapability::Kind(
             lspf::types::TextDocumentSyncKind::INCREMENTAL,
         )),
+        workspace: Some(lspf::types::WorkspaceServerCapabilities {
+            workspace_folders: Some(lspf::types::WorkspaceFoldersServerCapabilities {
+                supported: Some(true),
+                change_notifications: Some(lspf::types::OneOf::Left(true)),
+            }),
+            ..Default::default()
+        }),
         ..ServerCapabilities::default()
     };
     assert_eq!(init.capabilities, expected);

@@ -7,17 +7,20 @@
 //! hooks observe the established state. It also owns the connection's
 //! [`Documents`] handle, handing out the read-only [`DocumentsView`].
 //!
-//! This slice establishes the snapshot, roots, and the documents handle from
-//! `InitializeParams`; `workspace/didChangeWorkspaceFolders` mutation and the
-//! configuration handle arrive in later slices.
+//! Workspace-folder, configuration, and trace notifications update shared
+//! live state before their user hooks run. Concurrent readers receive owned
+//! snapshots, so cloned handles safely observe later protocol mutations.
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
-use lsp_types::{ClientCapabilities, ClientInfo, InitializeParams, Uri, WorkspaceFolder};
+use lsp_types::{
+    ClientCapabilities, ClientInfo, DidChangeWorkspaceFoldersParams, InitializeParams, TraceValue,
+    Uri, WorkspaceFolder,
+};
 use serde_json::Value;
 
 use crate::documents::{Documents, DocumentsView};
-use crate::uri_key::percent_decode;
+use crate::uri_key::{UriKey, percent_decode};
 
 /// Cloneable handle to the connection's workspace state (ADR 0017).
 ///
@@ -36,7 +39,9 @@ struct WorkspaceState {
     capabilities: ClientCapabilities,
     initialization_options: Option<Value>,
     root_uri: Option<Uri>,
-    folders: Vec<WorkspaceFolder>,
+    folders: RwLock<Vec<WorkspaceFolder>>,
+    configuration: RwLock<Option<Value>>,
+    trace: RwLock<TraceValue>,
     documents: Documents,
 }
 
@@ -57,7 +62,9 @@ impl Workspace {
                 capabilities: params.capabilities.clone(),
                 initialization_options: params.initialization_options.clone(),
                 root_uri,
-                folders: params.workspace_folders.clone().unwrap_or_default(),
+                folders: RwLock::new(params.workspace_folders.clone().unwrap_or_default()),
+                configuration: RwLock::new(None),
+                trace: RwLock::new(TraceValue::Off),
                 documents,
             }),
         }
@@ -84,9 +91,22 @@ impl Workspace {
         self.inner.root_uri.as_ref()
     }
 
-    /// The workspace folders announced at initialization.
-    pub fn folders(&self) -> &[WorkspaceFolder] {
-        &self.inner.folders
+    /// The current workspace folders as an owned, order-preserving snapshot.
+    pub fn folders(&self) -> Vec<WorkspaceFolder> {
+        self.inner.folders.read().unwrap().clone()
+    }
+
+    /// The latest raw `workspace/didChangeConfiguration` settings value.
+    ///
+    /// The framework neither interprets this value nor persists it outside
+    /// the connection-owned workspace.
+    pub fn configuration(&self) -> Option<Value> {
+        self.inner.configuration.read().unwrap().clone()
+    }
+
+    /// The connection's current protocol trace level.
+    pub fn trace(&self) -> TraceValue {
+        *self.inner.trace.read().unwrap()
     }
 
     /// The effective workspace roots.
@@ -97,8 +117,9 @@ impl Workspace {
     /// a display string) or `"workspace"` when there is none. With no
     /// folders and no `rootUri`, there are no roots.
     pub fn roots(&self) -> Vec<WorkspaceFolder> {
-        if !self.inner.folders.is_empty() {
-            return self.inner.folders.clone();
+        let folders = self.folders();
+        if !folders.is_empty() {
+            return folders;
         }
         let Some(root_uri) = &self.inner.root_uri else {
             return Vec::new();
@@ -125,11 +146,46 @@ impl Workspace {
     pub fn documents(&self) -> DocumentsView {
         self.inner.documents.view()
     }
+
+    pub(crate) fn apply_folder_change(&self, params: DidChangeWorkspaceFoldersParams) {
+        let mut folders = self.inner.folders.write().unwrap();
+        for removed in params.event.removed {
+            let key = UriKey::new(&removed.uri);
+            if let Some(index) = folders
+                .iter()
+                .position(|folder| UriKey::new(&folder.uri) == key)
+            {
+                folders.remove(index);
+            } else {
+                tracing::debug!(uri = ?removed.uri, "removing an unknown workspace folder");
+            }
+        }
+        for added in params.event.added {
+            let key = UriKey::new(&added.uri);
+            if let Some(existing) = folders
+                .iter_mut()
+                .find(|folder| UriKey::new(&folder.uri) == key)
+            {
+                *existing = added;
+            } else {
+                folders.push(added);
+            }
+        }
+    }
+
+    pub(crate) fn set_configuration(&self, settings: Value) {
+        *self.inner.configuration.write().unwrap() = Some(settings);
+    }
+
+    pub(crate) fn set_trace(&self, trace: TraceValue) {
+        *self.inner.trace.write().unwrap() = trace;
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
+    use std::sync::Barrier;
 
     use lsp_types::{
         ClientCapabilities, ClientInfo, GeneralClientCapabilities, PositionEncodingKind,
@@ -199,11 +255,7 @@ mod tests {
             "initialization options are stored verbatim"
         );
         assert_eq!(workspace.root_uri(), params.root_uri.as_ref());
-        let names: Vec<&str> = workspace
-            .folders()
-            .iter()
-            .map(|f| f.name.as_str())
-            .collect();
+        let names: Vec<String> = workspace.folders().into_iter().map(|f| f.name).collect();
         assert_eq!(names, ["second", "first"], "folder order is preserved");
     }
 
@@ -327,5 +379,44 @@ mod tests {
                 .expect("a clone reads the same connection documents");
             assert_eq!(doc.text(), "fn main() {}");
         }
+    }
+
+    #[test]
+    fn concurrent_clone_reads_are_safe_and_observe_later_folder_mutation() {
+        let params = InitializeParams {
+            workspace_folders: Some(vec![folder("file:///before", "before")]),
+            ..InitializeParams::default()
+        };
+        let workspace = Workspace::from_params(&params, Documents::new());
+        let barrier = Arc::new(Barrier::new(5));
+        let readers: Vec<_> = (0..4)
+            .map(|_| {
+                let clone = workspace.clone();
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    for _ in 0..100 {
+                        let _snapshot = clone.folders();
+                    }
+                })
+            })
+            .collect();
+
+        barrier.wait();
+        workspace.apply_folder_change(DidChangeWorkspaceFoldersParams {
+            event: lsp_types::WorkspaceFoldersChangeEvent {
+                removed: vec![folder("file:///before", "ignored")],
+                added: vec![folder("file:///after", "after")],
+            },
+        });
+        for reader in readers {
+            reader.join().expect("concurrent reader did not panic");
+        }
+
+        assert_eq!(
+            workspace.clone().folders(),
+            vec![folder("file:///after", "after")],
+            "a cloned handle observes mutation made through the shared workspace"
+        );
     }
 }

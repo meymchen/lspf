@@ -217,7 +217,7 @@ async fn initialize_custom_request_shutdown_round_trip() {
     // initialize succeeded and advertised no custom capabilities. Only the
     // protocol-owned fields remain: the negotiated position encoding
     // (ADR 0016) — the client offered none, so it defaults to UTF-16 — and the
-    // document sync the engine's built-ins perform.
+    // document sync and workspace-folder support the engine's built-ins perform.
     let init: lspf::types::InitializeResult =
         serde_json::from_value(ok_result(&outbox, 1).expect("initialize response")).unwrap();
     assert_eq!(
@@ -227,6 +227,13 @@ async fn initialize_custom_request_shutdown_round_trip() {
             text_document_sync: Some(lspf::types::TextDocumentSyncCapability::Kind(
                 lspf::types::TextDocumentSyncKind::INCREMENTAL,
             )),
+            workspace: Some(lspf::types::WorkspaceServerCapabilities {
+                workspace_folders: Some(lspf::types::WorkspaceFoldersServerCapabilities {
+                    supported: Some(true),
+                    change_notifications: Some(lspf::types::OneOf::Left(true)),
+                }),
+                ..Default::default()
+            }),
             ..lspf::types::ServerCapabilities::default()
         },
         "custom requests must not add ServerCapabilities beyond protocol-owned fields"
