@@ -5,16 +5,16 @@
 //! contributions by field rather than by method, so a family spread across
 //! several methods — completion and completion-item resolve merging into one
 //! `completionProvider`, or execute-command merging every command into one
-//! de-duplicated list — produces a single deterministic capability regardless
-//! of registration order. Custom requests and notifications contribute nothing.
+//! de-duplicated list — produces a single deterministic capability. Family
+//! merging is independent of registration order; the execute-command list
+//! preserves registration order (ADR 0022). Custom requests and notifications
+//! contribute nothing.
 //!
 //! Merging never uses last-write-wins: a contribution that disagrees with an
 //! already-recorded singular field, and a dependent contribution whose base
 //! is absent, are both a [`BuildError::ConflictingCapability`] surfaced by
 //! [`ServerBuilder::build`](crate::ServerBuilder::build) or by the initialize
 //! transaction's commit.
-
-use std::collections::BTreeSet;
 
 use lsp_types::{
     CompletionOptions, ExecuteCommandOptions, HoverProviderCapability, ServerCapabilities,
@@ -29,15 +29,16 @@ use crate::error::BuildError;
 /// `ServerCapabilities` rather than in it: the completion family keeps its
 /// base options and its resolve flag together so the base feature and the
 /// completion-item resolve feature emit one merged `completionProvider`
-/// regardless of registration order. The `BTreeSet` of command names makes
-/// the execute-command list both de-duplicated and order-independent.
+/// regardless of registration order. The ordered `Vec` of command names makes
+/// the execute-command list de-duplicated and registration-order preserving
+/// (ADR 0022).
 /// Protocol-owned negotiated fields (for example ADR 0016's position
 /// encoding) are layered on separately by the engine and never pass through
 /// here.
 #[derive(Default)]
 pub(crate) struct CapabilityBuilder {
     caps: ServerCapabilities,
-    commands: BTreeSet<String>,
+    commands: Vec<String>,
     completion: CompletionFamily,
 }
 
@@ -112,10 +113,13 @@ impl CapabilityBuilder {
     }
 
     /// Add one command name to the execute-command capability. Duplicate names
-    /// are rejected earlier as a [`BuildError::DuplicateCommand`]; the set only
-    /// guarantees the emitted list is sorted and de-duplicated.
+    /// are rejected earlier as a [`BuildError::DuplicateCommand`]; the ordered
+    /// list only guarantees the emitted list is de-duplicated and preserves
+    /// registration order (ADR 0022).
     pub(crate) fn add_command(&mut self, name: String) {
-        self.commands.insert(name);
+        if !self.commands.contains(&name) {
+            self.commands.push(name);
+        }
     }
 
     /// Freeze the accumulated contributions into a `ServerCapabilities`.
@@ -123,8 +127,8 @@ impl CapabilityBuilder {
     /// The completion family folds its resolve flag into the base options as
     /// `resolveProvider`, emitting one merged `completionProvider`. The
     /// execute-command field appears only when at least one command was
-    /// registered, and its command list is deterministic (sorted) regardless
-    /// of the order the commands were declared in.
+    /// registered, and its command list exactly matches the frozen registry:
+    /// de-duplicated and in registration order (ADR 0022).
     pub(crate) fn finish(mut self) -> ServerCapabilities {
         if let Some(mut options) = self.completion.options {
             if self.completion.resolve {
@@ -134,7 +138,7 @@ impl CapabilityBuilder {
         }
         if !self.commands.is_empty() {
             self.caps.execute_command_provider = Some(ExecuteCommandOptions {
-                commands: self.commands.into_iter().collect(),
+                commands: self.commands,
                 work_done_progress_options: Default::default(),
             });
         }
@@ -280,7 +284,7 @@ mod tests {
     }
 
     #[test]
-    fn commands_merge_into_one_sorted_deduplicated_list() {
+    fn commands_merge_into_one_deduplicated_registration_order_list() {
         let mut caps = CapabilityBuilder::default();
         for name in ["b.cmd", "a.cmd", "b.cmd"] {
             caps.add_command(name.to_string());
@@ -291,8 +295,8 @@ mod tests {
             .expect("registered commands contribute an execute-command capability");
         assert_eq!(
             provider.commands,
-            vec!["a.cmd".to_string(), "b.cmd".to_string()],
-            "commands are sorted and de-duplicated, so the list is order-independent"
+            vec!["b.cmd".to_string(), "a.cmd".to_string()],
+            "commands are de-duplicated and keep registration order, not sorted order"
         );
     }
 
