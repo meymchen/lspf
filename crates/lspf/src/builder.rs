@@ -505,17 +505,19 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
     /// Register a typed command dispatched on `workspace/executeCommand`.
     ///
     /// The command is invoked when the editor sends `workspace/executeCommand`
-    /// with a matching `name`; its `arguments` array is decoded into `Args`,
-    /// and the handler's `Output` is returned as the command result. The
+    /// with a matching `name`; its complete `arguments` array is decoded into
+    /// `Args` (tuple, struct, and `Vec` types alike), and an absent `arguments`
+    /// field decodes as an empty array. The handler's `Output` is returned as
+    /// the command result. The
     /// handler receives the shared application state, a [`Context`], the typed
     /// arguments, and a request-scoped [`CancellationToken`]. `Args` and
     /// `Output` are bounded by the serialization required to cross the wire.
     ///
-    /// Each registered `name` merges into one deterministic execute-command
-    /// capability (ADR 0017). An empty name, two handlers for the same name, or
-    /// a command alongside an explicit `workspace/executeCommand`
-    /// [`request`](Self::request) handler is a [`BuildError`] reported by
-    /// [`build`](Self::build).
+    /// Each registered `name` merges into one de-duplicated execute-command
+    /// capability that preserves registration order (ADR 0022). An
+    /// empty name, two handlers for the same name, or a command alongside an
+    /// explicit `workspace/executeCommand` [`request`](Self::request) handler
+    /// is a [`BuildError`] reported by [`build`](Self::build).
     pub fn command<Args, Output, H, Fut>(mut self, name: impl Into<String>, handler: H) -> Self
     where
         Args: DeserializeOwned + Send + 'static,
@@ -1048,8 +1050,8 @@ mod tests {
             .expect("commands advertise an execute-command capability");
         assert_eq!(
             provider.commands,
-            vec!["a.cmd".to_string(), "b.cmd".to_string()],
-            "command names merge into one sorted, order-independent list"
+            vec!["b.cmd".to_string(), "a.cmd".to_string()],
+            "command names merge into one de-duplicated, registration-order list"
         );
     }
 

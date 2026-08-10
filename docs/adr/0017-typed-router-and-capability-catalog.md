@@ -13,6 +13,11 @@ Status note:
 ADR's first-registered-outermost user-Layer composition rule with
 last-registered-outermost. The historical body below is unchanged.
 
+[ADR 0022](0022-execute-command-registration-order.md) supersedes this ADR's
+sorted, registration-order-independent command-merging wording: the
+execute-command capability list preserves registration order. The historical
+body below is unchanged.
+
 ## Context
 
 ADR 0004 coupled user handlers and advertised capabilities through
