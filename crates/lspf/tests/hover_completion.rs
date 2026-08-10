@@ -7,6 +7,8 @@
 //! an in-memory transport, covering the initialize → hover → shutdown flow the
 //! issue calls for, with equivalent completion coverage.
 
+mod common;
+
 use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Duration;
@@ -275,13 +277,7 @@ async fn features_advertise_no_unrelated_capabilities() {
         text_document_sync: Some(lspf::types::TextDocumentSyncCapability::Kind(
             lspf::types::TextDocumentSyncKind::INCREMENTAL,
         )),
-        workspace: Some(lspf::types::WorkspaceServerCapabilities {
-            workspace_folders: Some(lspf::types::WorkspaceFoldersServerCapabilities {
-                supported: Some(true),
-                change_notifications: Some(lspf::types::OneOf::Left(true)),
-            }),
-            ..Default::default()
-        }),
+        workspace: Some(common::workspace_capabilities()),
         ..ServerCapabilities::default()
     };
     assert_eq!(init.capabilities, expected);

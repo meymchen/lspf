@@ -6,6 +6,8 @@
 //! [`Transport`] alongside the `initialize` / `shutdown` lifecycle. The tests
 //! drive real envelopes through that transport and inspect the outbox.
 
+mod common;
+
 use std::borrow::Cow;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -227,13 +229,7 @@ async fn initialize_custom_request_shutdown_round_trip() {
             text_document_sync: Some(lspf::types::TextDocumentSyncCapability::Kind(
                 lspf::types::TextDocumentSyncKind::INCREMENTAL,
             )),
-            workspace: Some(lspf::types::WorkspaceServerCapabilities {
-                workspace_folders: Some(lspf::types::WorkspaceFoldersServerCapabilities {
-                    supported: Some(true),
-                    change_notifications: Some(lspf::types::OneOf::Left(true)),
-                }),
-                ..Default::default()
-            }),
+            workspace: Some(common::workspace_capabilities()),
             ..lspf::types::ServerCapabilities::default()
         },
         "custom requests must not add ServerCapabilities beyond protocol-owned fields"

@@ -19,10 +19,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::mpsc;
 
-type Seen = Arc<Mutex<Vec<Vec<(String, String)>>>>;
+type ObservedFolderSnapshots = Arc<Mutex<Vec<Vec<(String, String)>>>>;
 
 struct AppState {
-    seen: Seen,
+    folder_snapshots: ObservedFolderSnapshots,
     configurations: Arc<Mutex<Vec<Option<serde_json::Value>>>>,
     traces: Arc<Mutex<Vec<TraceValue>>>,
 }
@@ -52,7 +52,7 @@ fn folders(ctx: &Context) -> Vec<(String, String)> {
 }
 
 async fn on_folders(state: Arc<AppState>, ctx: Context, _params: DidChangeWorkspaceFoldersParams) {
-    state.seen.lock().unwrap().push(folders(&ctx));
+    state.folder_snapshots.lock().unwrap().push(folders(&ctx));
 }
 
 #[derive(Deserialize, Serialize)]
@@ -181,9 +181,9 @@ fn result(outbox: &[RawMessage], id: i32) -> serde_json::Value {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn folder_hook_and_later_handler_observe_normalized_ordered_mutation() {
-    let seen: Seen = Arc::default();
+    let folder_snapshots: ObservedFolderSnapshots = Arc::default();
     let server = Server::builder(AppState {
-        seen: Arc::clone(&seen),
+        folder_snapshots: Arc::clone(&folder_snapshots),
         configurations: Arc::default(),
         traces: Arc::default(),
     })
@@ -216,7 +216,7 @@ async fn folder_hook_and_later_handler_observe_normalized_ordered_mutation() {
                         { "uri": "file:///unknown", "name": "unknown" }
                     ],
                     "added": [
-                        { "uri": "file:///second", "name": "renamed" },
+                        { "uri": "FILE:///second", "name": "renamed" },
                         { "uri": "file:///third", "name": "third" }
                     ]
                 }}),
@@ -231,7 +231,7 @@ async fn folder_hook_and_later_handler_observe_normalized_ordered_mutation() {
         ("file:///second".to_string(), "renamed".to_string()),
         ("file:///third".to_string(), "third".to_string()),
     ];
-    assert_eq!(*seen.lock().unwrap(), vec![expected.clone()]);
+    assert_eq!(*folder_snapshots.lock().unwrap(), vec![expected.clone()]);
     let probe: ProbeResult = serde_json::from_value(result(&outbox, 2)).unwrap();
     assert_eq!(probe.folders, expected);
 
@@ -251,7 +251,7 @@ async fn folder_hook_and_later_handler_observe_normalized_ordered_mutation() {
 async fn configuration_hook_and_later_handler_observe_latest_raw_value() {
     let configurations = Arc::default();
     let server = Server::builder(AppState {
-        seen: Arc::default(),
+        folder_snapshots: Arc::default(),
         configurations: Arc::clone(&configurations),
         traces: Arc::default(),
     })
@@ -297,7 +297,7 @@ async fn configuration_hook_and_later_handler_observe_latest_raw_value() {
 async fn trace_starts_off_and_malformed_update_preserves_state_and_skips_hook() {
     let traces = Arc::default();
     let server = Server::builder(AppState {
-        seen: Arc::default(),
+        folder_snapshots: Arc::default(),
         configurations: Arc::default(),
         traces: Arc::clone(&traces),
     })

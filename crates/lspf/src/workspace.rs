@@ -166,7 +166,7 @@ impl Workspace {
                 .iter_mut()
                 .find(|folder| UriKey::new(&folder.uri) == key)
             {
-                *existing = added;
+                existing.name = added.name;
             } else {
                 folders.push(added);
             }

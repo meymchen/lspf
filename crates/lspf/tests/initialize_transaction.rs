@@ -7,6 +7,8 @@
 //! (ADR 0017, ADR 0018). These tests drive real envelopes over an in-memory
 //! channel-backed [`Transport`] and inspect the outbox.
 
+mod common;
+
 use std::borrow::Cow;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -508,13 +510,7 @@ async fn on_initialize_contributes_server_info_without_replacing_capabilities() 
             text_document_sync: Some(lspf::types::TextDocumentSyncCapability::Kind(
                 lspf::types::TextDocumentSyncKind::INCREMENTAL,
             )),
-            workspace: Some(lspf::types::WorkspaceServerCapabilities {
-                workspace_folders: Some(lspf::types::WorkspaceFoldersServerCapabilities {
-                    supported: Some(true),
-                    change_notifications: Some(lspf::types::OneOf::Left(true)),
-                }),
-                ..Default::default()
-            }),
+            workspace: Some(common::workspace_capabilities()),
             ..ServerCapabilities::default()
         },
         "on_initialize cannot replace the framework-generated capabilities"
