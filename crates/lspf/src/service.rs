@@ -217,7 +217,7 @@ impl<S: Send + Sync + 'static> Service<S> for RouterService<S> {
                     // match and their order carries no meaning.
                     let handler = router
                         .notification(&call.method)
-                        .or_else(|| router.document_hook(&call.method));
+                        .or_else(|| router.built_in_hook(&call.method));
                     if let Some(handler) = handler {
                         handler(call.state, call.context, call.params).await;
                     }

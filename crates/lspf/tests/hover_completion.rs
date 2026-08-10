@@ -7,6 +7,8 @@
 //! an in-memory transport, covering the initialize → hover → shutdown flow the
 //! issue calls for, with equivalent completion coverage.
 
+mod common;
+
 use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Duration;
@@ -267,7 +269,7 @@ async fn features_advertise_no_unrelated_capabilities() {
     // Only hover and completion are set; everything else stays default apart
     // from the protocol-owned fields the engine adds for its own built-ins: the
     // negotiated position encoding (ADR 0016), which defaults to UTF-16 when
-    // the client offers none, and the document sync the engine performs itself.
+    // the client offers none, plus document sync and workspace-folder support.
     let expected = ServerCapabilities {
         hover_provider: Some(lspf::types::HoverProviderCapability::Simple(true)),
         completion_provider: Some(completion_options()),
@@ -275,6 +277,7 @@ async fn features_advertise_no_unrelated_capabilities() {
         text_document_sync: Some(lspf::types::TextDocumentSyncCapability::Kind(
             lspf::types::TextDocumentSyncKind::INCREMENTAL,
         )),
+        workspace: Some(common::workspace_capabilities()),
         ..ServerCapabilities::default()
     };
     assert_eq!(init.capabilities, expected);

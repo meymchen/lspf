@@ -25,15 +25,17 @@ use std::sync::{Arc, Mutex};
 use bytes::Bytes;
 use futures_util::future::{Either, select};
 use lsp_types::{
-    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-    InitializeParams, InitializeResult, TextDocumentSyncCapability, TextDocumentSyncKind,
+    DidChangeConfigurationParams, DidChangeTextDocumentParams, DidChangeWorkspaceFoldersParams,
+    DidCloseTextDocumentParams, DidOpenTextDocumentParams, InitializeParams, InitializeResult,
+    OneOf, SetTraceParams, TextDocumentSyncCapability, TextDocumentSyncKind,
+    WorkspaceFoldersServerCapabilities, WorkspaceServerCapabilities,
 };
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Span, debug, info_span, warn};
 
 use crate::builder::{
-    ConfigureInitialize, DocumentSync, InitializeRegistrar, OnInitialize, Registrations, Server,
+    ConfigureInitialize, InitializeRegistrar, OnInitialize, ProtocolMutation, Registrations, Server,
 };
 use crate::client::{Client, OutboundRegistry};
 use crate::codec::{decode_params, decode_value, encode_body};
@@ -648,17 +650,17 @@ where
                     };
                     let service = Arc::clone(service);
 
-                    // A document-sync notification is a protocol built-in
-                    // (ADR 0018): its decode and mutation run here, on the
+                    // A protocol mutation notification is a built-in (ADR
+                    // 0018): its decode and mutation run here, on the
                     // read-loop, before anything user-registered is reached, so
                     // the hook below — and every later message — observes the
-                    // mutated documents. A failure reports the notification
+                    // mutated state. A failure reports the notification
                     // error and skips the hook, leaving the connection to
                     // process the next message.
-                    if let Some(built_in) = DocumentSync::from_method(other)
-                        && let Err(error) = self.apply_document_mutation(built_in, &params)
+                    if let Some(built_in) = ProtocolMutation::from_method(other)
+                        && let Err(error) = self.apply_protocol_mutation(built_in, &params)
                     {
-                        warn!(method = other, %error, "document notification skipped its hook");
+                        warn!(method = other, %error, "protocol mutation skipped its hook");
                         return Flow::Continue;
                     }
 
@@ -725,8 +727,7 @@ where
         }
     }
 
-    /// Decode and apply the built-in mutation behind one document-sync
-    /// notification (ADR 0018).
+    /// Decode and apply a protocol-owned notification mutation (ADR 0018).
     ///
     /// Built-in validation is what the documents themselves can establish: a
     /// change names a document that must already be open, and each of its
@@ -734,17 +735,17 @@ where
     /// is what skips the notification's hook, so nothing partial is left for a
     /// hook to observe: a rejected `didChange` batch leaves the document at the
     /// revision the last accepted notification produced.
-    fn apply_document_mutation(
+    fn apply_protocol_mutation(
         &self,
-        built_in: DocumentSync,
+        built_in: ProtocolMutation,
         raw_params: &Bytes,
     ) -> std::result::Result<(), LspError> {
         match built_in {
-            DocumentSync::Open => {
+            ProtocolMutation::Open => {
                 let params: DidOpenTextDocumentParams = decode_params(raw_params)?;
                 self.documents.open(params.text_document);
             }
-            DocumentSync::Change => {
+            ProtocolMutation::Change => {
                 let params: DidChangeTextDocumentParams = decode_params(raw_params)?;
                 self.documents.apply_changes(
                     &params.text_document.uri,
@@ -752,7 +753,7 @@ where
                     params.content_changes,
                 )?;
             }
-            DocumentSync::Close => {
+            ProtocolMutation::Close => {
                 let params: DidCloseTextDocumentParams = decode_params(raw_params)?;
                 // Closing a document that was never opened breaks the LSP's
                 // ordering, but there is nothing to roll back and no response
@@ -764,6 +765,19 @@ where
                         "closing a document that was not open"
                     );
                 }
+            }
+            ProtocolMutation::WorkspaceFolders => {
+                let params: DidChangeWorkspaceFoldersParams = decode_params(raw_params)?;
+                self.established_workspace().apply_folder_change(params);
+            }
+            ProtocolMutation::Configuration => {
+                let params: DidChangeConfigurationParams = decode_params(raw_params)?;
+                self.established_workspace()
+                    .set_configuration(params.settings);
+            }
+            ProtocolMutation::Trace => {
+                let params: SetTraceParams = decode_params(raw_params)?;
+                self.established_workspace().set_trace(params.value);
             }
         }
         Ok(())
@@ -874,6 +888,13 @@ where
         capabilities.text_document_sync = Some(TextDocumentSyncCapability::Kind(
             TextDocumentSyncKind::INCREMENTAL,
         ));
+        capabilities.workspace = Some(WorkspaceServerCapabilities {
+            workspace_folders: Some(WorkspaceFoldersServerCapabilities {
+                supported: Some(true),
+                change_notifications: Some(OneOf::Left(true)),
+            }),
+            ..WorkspaceServerCapabilities::default()
+        });
 
         // `on_initialize` may contribute optional ServerInfo but cannot
         // register routes or replace the generated capabilities.
