@@ -49,8 +49,7 @@ const RESERVED_METHODS: &[&str] = &[
 /// explicit request handler for this method cannot coexist.
 const EXECUTE_COMMAND_METHOD: &str = "workspace/executeCommand";
 
-/// A document-sync notification the protocol engine decodes and mutates itself
-/// (ADR 0018).
+/// A notification whose state mutation the protocol engine owns (ADR 0018).
 ///
 /// A `notification` registration for one of these methods records the
 /// connection's single post-mutation hook rather than a Router route, so a user
@@ -61,13 +60,16 @@ const EXECUTE_COMMAND_METHOD: &str = "workspace/executeCommand";
 /// `textDocument/didSave` is deliberately not a variant: it carries no
 /// framework mutation in 0.2, so it stays an ordinary typed notification route.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DocumentSync {
+pub(crate) enum ProtocolMutation {
     Open,
     Change,
     Close,
+    WorkspaceFolders,
+    Configuration,
+    Trace,
 }
 
-impl DocumentSync {
+impl ProtocolMutation {
     const OPEN_METHOD: &'static str = "textDocument/didOpen";
     const CHANGE_METHOD: &'static str = "textDocument/didChange";
     const CLOSE_METHOD: &'static str = "textDocument/didClose";
@@ -79,6 +81,9 @@ impl DocumentSync {
             Self::OPEN_METHOD => Some(Self::Open),
             Self::CHANGE_METHOD => Some(Self::Change),
             Self::CLOSE_METHOD => Some(Self::Close),
+            "workspace/didChangeWorkspaceFolders" => Some(Self::WorkspaceFolders),
+            "workspace/didChangeConfiguration" => Some(Self::Configuration),
+            "$/setTrace" => Some(Self::Trace),
             _ => None,
         }
     }
@@ -176,9 +181,9 @@ where
 pub(crate) struct Registrations<S> {
     requests: HashMap<String, ErasedRequestHandler<S>>,
     notifications: HashMap<String, ErasedNotificationHandler<S>>,
-    /// Post-mutation hooks for the [`DOCUMENT_SYNC_METHODS`], kept apart from
+    /// Post-mutation hooks for protocol-owned notifications, kept apart from
     /// `notifications` so no ordinary route can ever shadow a built-in.
-    document_hooks: HashMap<String, ErasedNotificationHandler<S>>,
+    built_in_hooks: HashMap<String, ErasedNotificationHandler<S>>,
     commands: HashMap<String, ErasedCommandHandler<S>>,
     capabilities: CapabilityBuilder,
 }
@@ -188,7 +193,7 @@ impl<S: Send + Sync + 'static> Registrations<S> {
         Self {
             requests: HashMap::new(),
             notifications: HashMap::new(),
-            document_hooks: HashMap::new(),
+            built_in_hooks: HashMap::new(),
             commands: HashMap::new(),
             capabilities: CapabilityBuilder::default(),
         }
@@ -273,10 +278,10 @@ impl<S: Send + Sync + 'static> Registrations<S> {
         if RESERVED_METHODS.contains(&method.as_str()) {
             return Err(BuildError::ReservedMethod(method));
         }
-        // A built-in document-sync method records the connection's one
+        // A protocol-owned mutation records the connection's one
         // post-mutation hook; every other method becomes a Router route.
-        let table = if DocumentSync::from_method(&method).is_some() {
-            &mut self.document_hooks
+        let table = if ProtocolMutation::from_method(&method).is_some() {
+            &mut self.built_in_hooks
         } else {
             &mut self.notifications
         };
@@ -338,7 +343,7 @@ impl<S: Send + Sync + 'static> Registrations<S> {
         Router {
             requests: self.requests,
             notifications: self.notifications,
-            document_hooks: self.document_hooks,
+            built_in_hooks: self.built_in_hooks,
             commands: self.commands,
             capabilities: self.capabilities.finish(),
         }
@@ -351,7 +356,7 @@ impl<S: Send + Sync + 'static> Registrations<S> {
 pub(crate) struct Router<S> {
     requests: HashMap<String, ErasedRequestHandler<S>>,
     notifications: HashMap<String, ErasedNotificationHandler<S>>,
-    document_hooks: HashMap<String, ErasedNotificationHandler<S>>,
+    built_in_hooks: HashMap<String, ErasedNotificationHandler<S>>,
     commands: HashMap<String, ErasedCommandHandler<S>>,
     /// Capabilities implied by the frozen registrations, computed once at
     /// freeze time from the same registrations used for dispatch.
@@ -369,12 +374,12 @@ impl<S> Router<S> {
         self.notifications.get(method)
     }
 
-    /// The erased post-mutation hook registered for a built-in document-sync
-    /// `method`, if any (ADR 0018). The protocol engine has already decoded and
-    /// mutated by the time this hook is reached, so it observes — and cannot
-    /// replace — the built-in.
-    pub(crate) fn document_hook(&self, method: &str) -> Option<&ErasedNotificationHandler<S>> {
-        self.document_hooks.get(method)
+    /// The erased post-mutation hook registered for a protocol-owned `method`,
+    /// if any (ADR 0018). The protocol engine has already decoded and mutated
+    /// by the time this hook is reached, so it observes — and cannot replace —
+    /// the built-in.
+    pub(crate) fn built_in_hook(&self, method: &str) -> Option<&ErasedNotificationHandler<S>> {
+        self.built_in_hooks.get(method)
     }
 
     /// The erased command handler registered under `name`, if any.
@@ -912,7 +917,7 @@ mod tests {
     }
 
     #[test]
-    fn custom_notifications_contribute_no_capabilities() {
+    fn workspace_mutation_hooks_contribute_no_catalog_capabilities() {
         let server = Server::builder(DummyState)
             .notification::<lsp_types::notification::DidChangeConfiguration, _, _>(
                 |_s, _c, _p: lsp_types::DidChangeConfigurationParams| async {},
@@ -922,8 +927,13 @@ mod tests {
         let router = server.into_router();
         assert!(
             router
-                .notification("workspace/didChangeConfiguration")
+                .built_in_hook("workspace/didChangeConfiguration")
                 .is_some()
+        );
+        assert!(
+            router
+                .notification("workspace/didChangeConfiguration")
+                .is_none()
         );
         assert_eq!(router.capabilities(), ServerCapabilities::default());
     }
@@ -942,7 +952,7 @@ mod tests {
         let router = server.into_router();
 
         assert!(
-            router.document_hook("textDocument/didOpen").is_some(),
+            router.built_in_hook("textDocument/didOpen").is_some(),
             "a built-in document notification records a post-mutation hook"
         );
         assert!(
@@ -951,7 +961,7 @@ mod tests {
         );
         // didSave has no framework mutation in 0.2, so it stays a plain route.
         assert!(router.notification("textDocument/didSave").is_some());
-        assert!(router.document_hook("textDocument/didSave").is_none());
+        assert!(router.built_in_hook("textDocument/didSave").is_none());
     }
 
     #[test]
