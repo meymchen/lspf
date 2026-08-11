@@ -56,12 +56,11 @@ struct CompletionFamily {
 }
 
 /// The in-progress `diagnosticProvider` capability family. Document and
-/// workspace routes share one options value, while route presence keeps
-/// the advertised `workspaceDiagnostics` setting tied to actual dispatch.
+/// workspace routes share one options value, so either route can contribute
+/// the provider without allowing its singular options to drift.
 #[derive(Default)]
 struct DiagnosticFamily {
     options: Option<DiagnosticOptions>,
-    workspace: bool,
 }
 
 impl CapabilityBuilder {
@@ -127,9 +126,7 @@ impl CapabilityBuilder {
         &mut self,
         options: DiagnosticOptions,
     ) -> Result<(), BuildError> {
-        self.merge_diagnostic_options(options)?;
-        self.diagnostics.workspace = true;
-        Ok(())
+        self.merge_diagnostic_options(options)
     }
 
     /// Cross-contribution validation a single contribution cannot perform on
@@ -153,13 +150,6 @@ impl CapabilityBuilder {
             _ => {}
         }
 
-        if let Some(options) = &self.diagnostics.options
-            && options.workspace_diagnostics != self.diagnostics.workspace
-        {
-            return Err(BuildError::ConflictingCapability {
-                field: "diagnosticProvider",
-            });
-        }
         Ok(())
     }
 
@@ -406,31 +396,6 @@ mod tests {
             BuildError::ConflictingCapability {
                 field: "diagnosticProvider"
             }
-        );
-    }
-
-    #[test]
-    fn workspace_diagnostics_setting_must_match_the_registered_route() {
-        let mut document_only = CapabilityBuilder::default();
-        document_only
-            .set_document_diagnostics(diagnostic_options(Some("compiler"), true))
-            .unwrap();
-        assert_eq!(
-            document_only.validate(),
-            Err(BuildError::ConflictingCapability {
-                field: "diagnosticProvider"
-            })
-        );
-
-        let mut workspace_only = CapabilityBuilder::default();
-        workspace_only
-            .set_workspace_diagnostics(diagnostic_options(Some("compiler"), false))
-            .unwrap();
-        assert_eq!(
-            workspace_only.validate(),
-            Err(BuildError::ConflictingCapability {
-                field: "diagnosticProvider"
-            })
         );
     }
 

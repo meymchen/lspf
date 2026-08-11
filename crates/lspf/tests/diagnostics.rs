@@ -363,6 +363,31 @@ async fn conditional_diagnostic_option_drift_uses_the_same_validation() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn compatible_static_and_conditional_routes_merge() {
+    let shared_options = options("compiler", true);
+    let server = Server::builder(AppState)
+        .feature(
+            lspf::features::document_diagnostic(shared_options.clone()),
+            document_diagnostic,
+        )
+        .configure_initialize(move |_params, registrar| {
+            registrar.feature(
+                lspf::features::workspace_diagnostic(shared_options.clone()),
+                workspace_diagnostic,
+            );
+            Ok(())
+        })
+        .build()
+        .expect("static options remain available to the initialize transaction");
+
+    let outbox = drive(server, vec![initialize_request(1), exit()]).await;
+    assert_eq!(
+        diagnostic_provider(&outbox),
+        DiagnosticServerCapabilities::Options(options("compiler", true))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn combined_diagnostics_capability_is_byte_stable() {
     let options = options("compiler", true);
     let server = Server::builder(AppState)
