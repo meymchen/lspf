@@ -888,12 +888,20 @@ where
         capabilities.text_document_sync = Some(TextDocumentSyncCapability::Kind(
             TextDocumentSyncKind::INCREMENTAL,
         ));
+        // Workspace-folder sync is likewise a protocol built-in, so the
+        // engine advertises its support itself. Registration-contributed
+        // workspace fields (the file-operation families) come from the frozen
+        // catalog and are preserved beside the protocol-owned field.
+        let file_operations = capabilities
+            .workspace
+            .take()
+            .and_then(|workspace| workspace.file_operations);
         capabilities.workspace = Some(WorkspaceServerCapabilities {
             workspace_folders: Some(WorkspaceFoldersServerCapabilities {
                 supported: Some(true),
                 change_notifications: Some(OneOf::Left(true)),
             }),
-            ..WorkspaceServerCapabilities::default()
+            file_operations,
         });
 
         // `on_initialize` may contribute optional ServerInfo but cannot
