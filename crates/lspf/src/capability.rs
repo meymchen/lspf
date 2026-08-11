@@ -17,7 +17,8 @@
 //! transaction's commit.
 
 use lsp_types::{
-    CompletionOptions, ExecuteCommandOptions, HoverProviderCapability, ServerCapabilities,
+    CompletionOptions, DiagnosticOptions, DiagnosticServerCapabilities, ExecuteCommandOptions,
+    HoverProviderCapability, ServerCapabilities,
 };
 
 use crate::error::BuildError;
@@ -40,6 +41,7 @@ pub(crate) struct CapabilityBuilder {
     caps: ServerCapabilities,
     commands: Vec<String>,
     completion: CompletionFamily,
+    diagnostics: DiagnosticFamily,
 }
 
 /// The in-progress `completionProvider` capability family (ADR 0017). The
@@ -51,6 +53,14 @@ pub(crate) struct CapabilityBuilder {
 struct CompletionFamily {
     options: Option<CompletionOptions>,
     resolve: bool,
+}
+
+/// The in-progress `diagnosticProvider` capability family. Document and
+/// workspace routes share one options value, so either route can contribute
+/// the provider without allowing its singular options to drift.
+#[derive(Default)]
+struct DiagnosticFamily {
+    options: Option<DiagnosticOptions>,
 }
 
 impl CapabilityBuilder {
@@ -90,6 +100,21 @@ impl CapabilityBuilder {
         self.completion.resolve = true;
     }
 
+    /// Contribute options to the shared document/workspace diagnostics
+    /// capability. Every route must agree on the complete provider options;
+    /// unequal contributions fail instead of making output order-dependent.
+    pub(crate) fn set_diagnostics(&mut self, options: DiagnosticOptions) -> Result<(), BuildError> {
+        match &self.diagnostics.options {
+            Some(existing) if *existing != options => Err(BuildError::ConflictingCapability {
+                field: "diagnosticProvider",
+            }),
+            _ => {
+                self.diagnostics.options = Some(options);
+                Ok(())
+            }
+        }
+    }
+
     /// Cross-contribution validation a single contribution cannot perform on
     /// its own: a dependent feature whose required base is absent, or a base
     /// and a dependent that disagree on a singular family field. Run both at
@@ -102,14 +127,16 @@ impl CapabilityBuilder {
         match &self.completion.options {
             // Resolve without its base feature would advertise a dangling
             // `resolveProvider`.
-            None if self.completion.resolve => Err(clash()),
+            None if self.completion.resolve => return Err(clash()),
             // The resolve feature contributes `resolveProvider = true`; a base
             // that explicitly denies it cannot be honored by last-write-wins.
             Some(options) if self.completion.resolve && options.resolve_provider == Some(false) => {
-                Err(clash())
+                return Err(clash());
             }
-            _ => Ok(()),
+            _ => {}
         }
+
+        Ok(())
     }
 
     /// Add one command name to the execute-command capability. Duplicate names
@@ -126,7 +153,8 @@ impl CapabilityBuilder {
     ///
     /// The completion family folds its resolve flag into the base options as
     /// `resolveProvider`, emitting one merged `completionProvider`. The
-    /// execute-command field appears only when at least one command was
+    /// diagnostics family emits its shared options as one `diagnosticProvider`.
+    /// The execute-command field appears only when at least one command was
     /// registered, and its command list exactly matches the frozen registry:
     /// de-duplicated and in registration order (ADR 0022).
     pub(crate) fn finish(mut self) -> ServerCapabilities {
@@ -141,6 +169,9 @@ impl CapabilityBuilder {
                 commands: self.commands,
                 work_done_progress_options: Default::default(),
             });
+        }
+        if let Some(options) = self.diagnostics.options {
+            self.caps.diagnostic_provider = Some(DiagnosticServerCapabilities::Options(options));
         }
         self.caps
     }
@@ -279,6 +310,62 @@ mod tests {
             err,
             BuildError::ConflictingCapability {
                 field: "completionProvider"
+            }
+        );
+    }
+
+    fn diagnostic_options(
+        identifier: Option<&str>,
+        workspace_diagnostics: bool,
+    ) -> DiagnosticOptions {
+        DiagnosticOptions {
+            identifier: identifier.map(str::to_string),
+            inter_file_dependencies: true,
+            workspace_diagnostics,
+            work_done_progress_options: Default::default(),
+        }
+    }
+
+    #[test]
+    fn identical_diagnostic_contributions_merge() {
+        let options = diagnostic_options(Some("compiler"), true);
+        let mut caps = CapabilityBuilder::default();
+        caps.set_diagnostics(options.clone()).unwrap();
+        caps.set_diagnostics(options.clone()).unwrap();
+        assert_eq!(
+            caps.finish().diagnostic_provider,
+            Some(DiagnosticServerCapabilities::Options(options))
+        );
+    }
+
+    #[test]
+    fn conflicting_diagnostic_identifier_is_rejected() {
+        let mut caps = CapabilityBuilder::default();
+        caps.set_diagnostics(diagnostic_options(Some("compiler"), true))
+            .unwrap();
+        let error = caps
+            .set_diagnostics(diagnostic_options(Some("linter"), true))
+            .expect_err("identifier drift must conflict");
+        assert_eq!(
+            error,
+            BuildError::ConflictingCapability {
+                field: "diagnosticProvider"
+            }
+        );
+    }
+
+    #[test]
+    fn conflicting_workspace_diagnostics_setting_is_rejected() {
+        let mut caps = CapabilityBuilder::default();
+        caps.set_diagnostics(diagnostic_options(Some("compiler"), false))
+            .unwrap();
+        let error = caps
+            .set_diagnostics(diagnostic_options(Some("compiler"), true))
+            .expect_err("workspaceDiagnostics drift must conflict");
+        assert_eq!(
+            error,
+            BuildError::ConflictingCapability {
+                field: "diagnosticProvider"
             }
         );
     }
