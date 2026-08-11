@@ -1,0 +1,1 @@
+{"didCreate":{"filters":[{"scheme":"file","pattern":{"glob":"**/*.rs","matches":"file"}}]},"didRename":{"filters":[{"scheme":"file","pattern":{"glob":"**/*.rs","matches":"file"}}]},"willRename":{"filters":[{"scheme":"file","pattern":{"glob":"**/*.rs","matches":"file"}}]}}
