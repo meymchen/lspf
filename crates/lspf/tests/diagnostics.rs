@@ -206,40 +206,41 @@ fn diagnostic_provider(outbox: &[RawMessage]) -> DiagnosticServerCapabilities {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn either_route_contributes_the_same_provider_and_combined_order_is_stable() {
-    let options = options("compiler", true);
+async fn either_route_contributes_a_provider_and_combined_order_is_stable() {
+    let document_options = options("compiler", false);
+    let combined_options = options("compiler", true);
     let document_only = Server::builder(AppState)
         .feature(
-            lspf::features::document_diagnostic(options.clone()),
+            lspf::features::document_diagnostic(document_options.clone()),
             document_diagnostic,
         )
         .build()
         .unwrap();
     let workspace_only = Server::builder(AppState)
         .feature(
-            lspf::features::workspace_diagnostic(options.clone()),
+            lspf::features::workspace_diagnostic(combined_options.clone()),
             workspace_diagnostic,
         )
         .build()
         .unwrap();
     let document_first = Server::builder(AppState)
         .feature(
-            lspf::features::document_diagnostic(options.clone()),
+            lspf::features::document_diagnostic(combined_options.clone()),
             document_diagnostic,
         )
         .feature(
-            lspf::features::workspace_diagnostic(options.clone()),
+            lspf::features::workspace_diagnostic(combined_options.clone()),
             workspace_diagnostic,
         )
         .build()
         .unwrap();
     let workspace_first = Server::builder(AppState)
         .feature(
-            lspf::features::workspace_diagnostic(options.clone()),
+            lspf::features::workspace_diagnostic(combined_options.clone()),
             workspace_diagnostic,
         )
         .feature(
-            lspf::features::document_diagnostic(options.clone()),
+            lspf::features::document_diagnostic(combined_options.clone()),
             document_diagnostic,
         )
         .build()
@@ -249,12 +250,13 @@ async fn either_route_contributes_the_same_provider_and_combined_order_is_stable
     let workspace_only = drive(workspace_only, vec![initialize_request(1), exit()]).await;
     let document_first = drive(document_first, vec![initialize_request(1), exit()]).await;
     let workspace_first = drive(workspace_first, vec![initialize_request(1), exit()]).await;
-    let expected = DiagnosticServerCapabilities::Options(options);
+    let document_expected = DiagnosticServerCapabilities::Options(document_options);
+    let combined_expected = DiagnosticServerCapabilities::Options(combined_options);
 
-    assert_eq!(diagnostic_provider(&document_only), expected);
-    assert_eq!(diagnostic_provider(&workspace_only), expected);
-    assert_eq!(diagnostic_provider(&document_first), expected);
-    assert_eq!(diagnostic_provider(&workspace_first), expected);
+    assert_eq!(diagnostic_provider(&document_only), document_expected);
+    assert_eq!(diagnostic_provider(&workspace_only), combined_expected);
+    assert_eq!(diagnostic_provider(&document_first), combined_expected);
+    assert_eq!(diagnostic_provider(&workspace_first), combined_expected);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -343,12 +345,12 @@ fn static_diagnostic_option_drift_is_a_capability_conflict() {
 async fn conditional_diagnostic_option_drift_uses_the_same_validation() {
     let server = Server::builder(AppState)
         .feature(
-            lspf::features::document_diagnostic(options("compiler", true)),
+            lspf::features::document_diagnostic(options("compiler", false)),
             document_diagnostic,
         )
         .configure_initialize(|_params, registrar| {
             registrar.feature(
-                lspf::features::workspace_diagnostic(options("compiler", false)),
+                lspf::features::workspace_diagnostic(options("compiler", true)),
                 workspace_diagnostic,
             );
             Ok(())
