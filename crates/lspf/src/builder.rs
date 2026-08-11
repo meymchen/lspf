@@ -7,9 +7,9 @@
 //! valid `initialize`, it runs the sole [`configure_initialize`] callback
 //! against a transactional [`InitializeRegistrar`], then the [`on_initialize`]
 //! lifecycle hook. This surface wires typed custom requests and notifications,
-//! typed commands beneath `workspace/executeCommand`, the standard hover and
-//! completion features, and the two initialize-time hooks. The remaining catalog
-//! features arrive in later slices of PRD 0.2.
+//! typed commands beneath `workspace/executeCommand`, the standard features
+//! with sealed descriptors in [`lspf::features`](crate::features), and the two
+//! initialize-time hooks.
 //!
 //! [`configure_initialize`]: ServerBuilder::configure_initialize
 //! [`on_initialize`]: ServerBuilder::on_initialize
