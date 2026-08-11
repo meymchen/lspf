@@ -153,7 +153,8 @@ impl CapabilityBuilder {
     ///
     /// The completion family folds its resolve flag into the base options as
     /// `resolveProvider`, emitting one merged `completionProvider`. The
-    /// execute-command field appears only when at least one command was
+    /// diagnostics family emits its shared options as one `diagnosticProvider`.
+    /// The execute-command field appears only when at least one command was
     /// registered, and its command list exactly matches the frozen registry:
     /// de-duplicated and in registration order (ADR 0022).
     pub(crate) fn finish(mut self) -> ServerCapabilities {

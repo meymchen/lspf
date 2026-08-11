@@ -144,13 +144,18 @@ async fn drive(server: Server<AppState>, messages: Vec<RawMessage>) -> Vec<RawMe
                         assert_eq!(response.id(), Some(&response_id));
                         outbox.push(response);
                     } else {
-                        (&mut handle).await.unwrap().unwrap();
+                        (&mut handle)
+                            .await
+                            .expect("server task did not panic")
+                            .expect("serve ended cleanly");
                         server_done = true;
                         break 'messages;
                     }
                 }
                 result = &mut handle => {
-                    result.unwrap().unwrap();
+                    result
+                        .expect("server task did not panic")
+                        .expect("serve ended cleanly");
                     server_done = true;
                     break 'messages;
                 }
@@ -163,8 +168,8 @@ async fn drive(server: Server<AppState>, messages: Vec<RawMessage>) -> Vec<RawMe
         tokio::time::timeout(Duration::from_secs(2), handle)
             .await
             .expect("serve returned within 2s")
-            .unwrap()
-            .unwrap();
+            .expect("server task did not panic")
+            .expect("serve ended cleanly");
     }
     outbox.extend(std::iter::from_fn(|| out_rx.try_recv().ok()));
     outbox
