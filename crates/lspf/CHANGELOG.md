@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1](https://github.com/meymchen/lspf/compare/v0.2.0...v0.2.1) - 2026-08-10
+
+### Other
+
+- Apply workspace mutations before user hooks ([#86](https://github.com/meymchen/lspf/pull/86))
+- Complete the typed Command wire contract ([#70](https://github.com/meymchen/lspf/pull/70)) ([#85](https://github.com/meymchen/lspf/pull/85))
+- Introduce family-aware capability merging through completion resolve ([#69](https://github.com/meymchen/lspf/pull/69)) ([#84](https://github.com/meymchen/lspf/pull/84))
+- Establish the complete Workspace snapshot and normalized URI identity ([#83](https://github.com/meymchen/lspf/pull/83))
+- release v0.2.0 ([#53](https://github.com/meymchen/lspf/pull/53))
+
 ## [0.2.0](https://github.com/meymchen/lspf/compare/v0.1.3...v0.2.0) - 2026-08-02
 
 ### Added
