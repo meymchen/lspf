@@ -13,8 +13,11 @@
 //! [`notification`](crate::ServerBuilder::notification) instead and advertise
 //! no capability.
 
-use lsp_types::CompletionOptions;
-use lsp_types::request::{Completion, HoverRequest, Request, ResolveCompletionItem};
+use lsp_types::request::{
+    Completion, DocumentDiagnosticRequest, HoverRequest, Request, ResolveCompletionItem,
+    WorkspaceDiagnosticRequest,
+};
+use lsp_types::{CompletionOptions, DiagnosticOptions};
 
 use crate::capability::CapabilityBuilder;
 use crate::error::BuildError;
@@ -123,4 +126,89 @@ impl sealed::Sealed for CompletionResolveFeature {
 }
 impl FeatureSpec for CompletionResolveFeature {
     type Marker = ResolveCompletionItem;
+}
+
+/// The `textDocument/diagnostic` feature descriptor. Construct it with
+/// [`document_diagnostic`].
+pub struct DocumentDiagnosticFeature {
+    options: DiagnosticOptions,
+}
+
+/// Describe document diagnostics with the shared pull-diagnostics provider
+/// options and the exact [`DocumentDiagnosticRequest`] wire contract.
+pub fn document_diagnostic(options: DiagnosticOptions) -> DocumentDiagnosticFeature {
+    DocumentDiagnosticFeature { options }
+}
+
+#[allow(private_interfaces)]
+impl sealed::Sealed for DocumentDiagnosticFeature {
+    fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
+        caps.set_diagnostics(self.options.clone())
+    }
+}
+impl FeatureSpec for DocumentDiagnosticFeature {
+    type Marker = DocumentDiagnosticRequest;
+}
+
+/// The `workspace/diagnostic` feature descriptor. Construct it with
+/// [`workspace_diagnostic`].
+pub struct WorkspaceDiagnosticFeature {
+    options: DiagnosticOptions,
+}
+
+/// Describe workspace diagnostics with the shared pull-diagnostics provider
+/// options and the exact [`WorkspaceDiagnosticRequest`] wire contract.
+pub fn workspace_diagnostic(options: DiagnosticOptions) -> WorkspaceDiagnosticFeature {
+    WorkspaceDiagnosticFeature { options }
+}
+
+#[allow(private_interfaces)]
+impl sealed::Sealed for WorkspaceDiagnosticFeature {
+    fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
+        caps.set_diagnostics(self.options.clone())
+    }
+}
+impl FeatureSpec for WorkspaceDiagnosticFeature {
+    type Marker = WorkspaceDiagnosticRequest;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lsp_types::request::{DocumentDiagnosticRequest, WorkspaceDiagnosticRequest};
+    use lsp_types::{
+        DiagnosticOptions, DocumentDiagnosticParams, DocumentDiagnosticReportResult,
+        WorkspaceDiagnosticParams, WorkspaceDiagnosticReportResult,
+    };
+
+    fn assert_document_descriptor<F: FeatureSpec<Marker = DocumentDiagnosticRequest>>(_: F) {}
+    fn assert_workspace_descriptor<F: FeatureSpec<Marker = WorkspaceDiagnosticRequest>>(_: F) {}
+
+    fn assert_document_contract<R>()
+    where
+        R: Request<Params = DocumentDiagnosticParams, Result = DocumentDiagnosticReportResult>,
+    {
+    }
+
+    fn assert_workspace_contract<R>()
+    where
+        R: Request<Params = WorkspaceDiagnosticParams, Result = WorkspaceDiagnosticReportResult>,
+    {
+    }
+
+    #[test]
+    fn diagnostic_descriptors_fix_the_exact_lsp_types_contracts() {
+        assert_document_descriptor(document_diagnostic(DiagnosticOptions::default()));
+        assert_workspace_descriptor(workspace_diagnostic(DiagnosticOptions::default()));
+        assert_document_contract::<DocumentDiagnosticRequest>();
+        assert_workspace_contract::<WorkspaceDiagnosticRequest>();
+        assert_eq!(
+            <DocumentDiagnosticRequest as Request>::METHOD,
+            "textDocument/diagnostic"
+        );
+        assert_eq!(
+            <WorkspaceDiagnosticRequest as Request>::METHOD,
+            "workspace/diagnostic"
+        );
+    }
 }

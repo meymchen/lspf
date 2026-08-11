@@ -17,7 +17,8 @@
 //! transaction's commit.
 
 use lsp_types::{
-    CompletionOptions, ExecuteCommandOptions, HoverProviderCapability, ServerCapabilities,
+    CompletionOptions, DiagnosticOptions, DiagnosticServerCapabilities, ExecuteCommandOptions,
+    HoverProviderCapability, ServerCapabilities,
 };
 
 use crate::error::BuildError;
@@ -40,6 +41,7 @@ pub(crate) struct CapabilityBuilder {
     caps: ServerCapabilities,
     commands: Vec<String>,
     completion: CompletionFamily,
+    diagnostics: Option<DiagnosticOptions>,
 }
 
 /// The in-progress `completionProvider` capability family (ADR 0017). The
@@ -88,6 +90,21 @@ impl CapabilityBuilder {
     /// independent of registration order.
     pub(crate) fn set_completion_resolve(&mut self) {
         self.completion.resolve = true;
+    }
+
+    /// Contribute options to the shared document/workspace diagnostics
+    /// capability. Every route must agree on the complete provider options;
+    /// unequal contributions fail instead of making output order-dependent.
+    pub(crate) fn set_diagnostics(&mut self, options: DiagnosticOptions) -> Result<(), BuildError> {
+        match &self.diagnostics {
+            Some(existing) if *existing != options => Err(BuildError::ConflictingCapability {
+                field: "diagnosticProvider",
+            }),
+            _ => {
+                self.diagnostics = Some(options);
+                Ok(())
+            }
+        }
     }
 
     /// Cross-contribution validation a single contribution cannot perform on
@@ -141,6 +158,9 @@ impl CapabilityBuilder {
                 commands: self.commands,
                 work_done_progress_options: Default::default(),
             });
+        }
+        if let Some(options) = self.diagnostics {
+            self.caps.diagnostic_provider = Some(DiagnosticServerCapabilities::Options(options));
         }
         self.caps
     }
@@ -279,6 +299,70 @@ mod tests {
             err,
             BuildError::ConflictingCapability {
                 field: "completionProvider"
+            }
+        );
+    }
+
+    fn diagnostic_options(
+        identifier: Option<&str>,
+        workspace_diagnostics: bool,
+    ) -> DiagnosticOptions {
+        DiagnosticOptions {
+            identifier: identifier.map(str::to_string),
+            inter_file_dependencies: true,
+            workspace_diagnostics,
+            work_done_progress_options: Default::default(),
+        }
+    }
+
+    #[test]
+    fn compatible_diagnostic_routes_merge_independent_of_order() {
+        let options = diagnostic_options(Some("compiler"), true);
+        let mut document_first = CapabilityBuilder::default();
+        document_first.set_diagnostics(options.clone()).unwrap();
+        document_first.set_diagnostics(options.clone()).unwrap();
+
+        let mut workspace_first = CapabilityBuilder::default();
+        workspace_first.set_diagnostics(options.clone()).unwrap();
+        workspace_first.set_diagnostics(options.clone()).unwrap();
+
+        let document_first = document_first.finish().diagnostic_provider;
+        let workspace_first = workspace_first.finish().diagnostic_provider;
+        assert_eq!(document_first, workspace_first);
+        assert_eq!(
+            document_first,
+            Some(DiagnosticServerCapabilities::Options(options))
+        );
+    }
+
+    #[test]
+    fn conflicting_diagnostic_identifier_is_rejected() {
+        let mut caps = CapabilityBuilder::default();
+        caps.set_diagnostics(diagnostic_options(Some("compiler"), true))
+            .unwrap();
+        let error = caps
+            .set_diagnostics(diagnostic_options(Some("linter"), true))
+            .expect_err("identifier drift must conflict");
+        assert_eq!(
+            error,
+            BuildError::ConflictingCapability {
+                field: "diagnosticProvider"
+            }
+        );
+    }
+
+    #[test]
+    fn conflicting_workspace_diagnostics_setting_is_rejected() {
+        let mut caps = CapabilityBuilder::default();
+        caps.set_diagnostics(diagnostic_options(Some("compiler"), false))
+            .unwrap();
+        let error = caps
+            .set_diagnostics(diagnostic_options(Some("compiler"), true))
+            .expect_err("workspaceDiagnostics drift must conflict");
+        assert_eq!(
+            error,
+            BuildError::ConflictingCapability {
+                field: "diagnosticProvider"
             }
         );
     }
