@@ -103,7 +103,7 @@ impl CapabilityBuilder {
     /// Contribute options to the shared document/workspace diagnostics
     /// capability. Every route must agree on the complete provider options;
     /// unequal contributions fail instead of making output order-dependent.
-    fn merge_diagnostic_options(&mut self, options: DiagnosticOptions) -> Result<(), BuildError> {
+    pub(crate) fn set_diagnostics(&mut self, options: DiagnosticOptions) -> Result<(), BuildError> {
         match &self.diagnostics.options {
             Some(existing) if *existing != options => Err(BuildError::ConflictingCapability {
                 field: "diagnosticProvider",
@@ -113,20 +113,6 @@ impl CapabilityBuilder {
                 Ok(())
             }
         }
-    }
-
-    pub(crate) fn set_document_diagnostics(
-        &mut self,
-        options: DiagnosticOptions,
-    ) -> Result<(), BuildError> {
-        self.merge_diagnostic_options(options)
-    }
-
-    pub(crate) fn set_workspace_diagnostics(
-        &mut self,
-        options: DiagnosticOptions,
-    ) -> Result<(), BuildError> {
-        self.merge_diagnostic_options(options)
     }
 
     /// Cross-contribution validation a single contribution cannot perform on
@@ -340,29 +326,13 @@ mod tests {
     }
 
     #[test]
-    fn compatible_diagnostic_routes_merge_independent_of_order() {
+    fn identical_diagnostic_contributions_merge() {
         let options = diagnostic_options(Some("compiler"), true);
-        let mut document_first = CapabilityBuilder::default();
-        document_first
-            .set_document_diagnostics(options.clone())
-            .unwrap();
-        document_first
-            .set_workspace_diagnostics(options.clone())
-            .unwrap();
-
-        let mut workspace_first = CapabilityBuilder::default();
-        workspace_first
-            .set_workspace_diagnostics(options.clone())
-            .unwrap();
-        workspace_first
-            .set_document_diagnostics(options.clone())
-            .unwrap();
-
-        let document_first = document_first.finish().diagnostic_provider;
-        let workspace_first = workspace_first.finish().diagnostic_provider;
-        assert_eq!(document_first, workspace_first);
+        let mut caps = CapabilityBuilder::default();
+        caps.set_diagnostics(options.clone()).unwrap();
+        caps.set_diagnostics(options.clone()).unwrap();
         assert_eq!(
-            document_first,
+            caps.finish().diagnostic_provider,
             Some(DiagnosticServerCapabilities::Options(options))
         );
     }
@@ -370,10 +340,10 @@ mod tests {
     #[test]
     fn conflicting_diagnostic_identifier_is_rejected() {
         let mut caps = CapabilityBuilder::default();
-        caps.set_document_diagnostics(diagnostic_options(Some("compiler"), true))
+        caps.set_diagnostics(diagnostic_options(Some("compiler"), true))
             .unwrap();
         let error = caps
-            .set_workspace_diagnostics(diagnostic_options(Some("linter"), true))
+            .set_diagnostics(diagnostic_options(Some("linter"), true))
             .expect_err("identifier drift must conflict");
         assert_eq!(
             error,
@@ -386,10 +356,10 @@ mod tests {
     #[test]
     fn conflicting_workspace_diagnostics_setting_is_rejected() {
         let mut caps = CapabilityBuilder::default();
-        caps.set_document_diagnostics(diagnostic_options(Some("compiler"), false))
+        caps.set_diagnostics(diagnostic_options(Some("compiler"), false))
             .unwrap();
         let error = caps
-            .set_workspace_diagnostics(diagnostic_options(Some("compiler"), true))
+            .set_diagnostics(diagnostic_options(Some("compiler"), true))
             .expect_err("workspaceDiagnostics drift must conflict");
         assert_eq!(
             error,

@@ -143,7 +143,7 @@ pub fn document_diagnostic(options: DiagnosticOptions) -> DocumentDiagnosticFeat
 #[allow(private_interfaces)]
 impl sealed::Sealed for DocumentDiagnosticFeature {
     fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
-        caps.set_document_diagnostics(self.options.clone())
+        caps.set_diagnostics(self.options.clone())
     }
 }
 impl FeatureSpec for DocumentDiagnosticFeature {
@@ -165,7 +165,7 @@ pub fn workspace_diagnostic(options: DiagnosticOptions) -> WorkspaceDiagnosticFe
 #[allow(private_interfaces)]
 impl sealed::Sealed for WorkspaceDiagnosticFeature {
     fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
-        caps.set_workspace_diagnostics(self.options.clone())
+        caps.set_diagnostics(self.options.clone())
     }
 }
 impl FeatureSpec for WorkspaceDiagnosticFeature {
