@@ -32,7 +32,7 @@ use crate::capability::CapabilityBuilder;
 use crate::codec::erase_value;
 use crate::context::Context;
 use crate::error::{BuildError, LspError};
-use crate::features::FeatureSpec;
+use crate::features::{FeatureSpec, NotificationFeatureSpec};
 use crate::service::{Layer, UserLayer};
 
 /// Method names owned by the framework's lifecycle; a custom request or
@@ -170,6 +170,41 @@ where
     })
 }
 
+/// Wrap a typed notification handler in the erased closure the [`Router`]
+/// stores. Shared by [`ServerBuilder::notification`] and
+/// [`ServerBuilder::feature_notification`], which differ only in whether the
+/// method also contributes a capability. Malformed parameters are logged and
+/// dropped without ever calling the typed handler.
+fn erase_notification<S, N, H, Fut>(handler: H) -> ErasedNotificationHandler<S>
+where
+    S: Send + Sync + 'static,
+    N: Notification,
+    H: Fn(Arc<S>, Context, N::Params) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = ()> + Send + 'static,
+{
+    let handler = Arc::new(handler);
+    Box::new(move |state, ctx, params| {
+        let handler = Arc::clone(&handler);
+        Box::pin(async move {
+            let parsed: N::Params = match serde_json::from_value(params) {
+                Ok(parsed) => parsed,
+                Err(error) => {
+                    // A notification has no reply, so a decode failure is
+                    // reported through tracing and dropped; later messages
+                    // are unaffected (ADR 0017).
+                    warn!(
+                        method = N::METHOD,
+                        %error,
+                        "dropping notification with malformed params"
+                    );
+                    return;
+                }
+            };
+            handler(state, ctx, parsed).await;
+        })
+    })
+}
+
 /// The still-mutable set of handler registrations and their capability
 /// contributions (ADR 0017). Both [`ServerBuilder`] and [`InitializeRegistrar`]
 /// accumulate into one of these; the protocol engine [`freeze`](Self::freeze)s
@@ -253,33 +288,38 @@ impl<S: Send + Sync + 'static> Registrations<S> {
         Fut: Future<Output = ()> + Send + 'static,
     {
         let method = N::METHOD.to_string();
-        let handler = Arc::new(handler);
-        let erased: ErasedNotificationHandler<S> = Box::new(move |state, ctx, params| {
-            let handler = Arc::clone(&handler);
-            Box::pin(async move {
-                let parsed: N::Params = match serde_json::from_value(params) {
-                    Ok(parsed) => parsed,
-                    Err(error) => {
-                        // A notification has no reply, so a decode failure is
-                        // reported through tracing and dropped; later messages
-                        // are unaffected (ADR 0017).
-                        warn!(
-                            method = N::METHOD,
-                            %error,
-                            "dropping notification with malformed params"
-                        );
-                        return;
-                    }
-                };
-                handler(state, ctx, parsed).await;
-            })
-        });
+        let erased = erase_notification::<S, N, H, Fut>(handler);
+        self.insert_notification(method, erased)
+    }
 
+    /// Register a standard notification feature handler and its capability
+    /// contribution. Shares [`add_notification`](Self::add_notification)'s
+    /// routing — a protocol-owned method still records a post-mutation hook
+    /// rather than a route.
+    fn add_feature_notification<F, H, Fut>(&mut self, spec: F, handler: H) -> Result<(), BuildError>
+    where
+        F: NotificationFeatureSpec,
+        H: Fn(Arc<S>, Context, <F::Marker as Notification>::Params) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        let method = <F::Marker as Notification>::METHOD.to_string();
+        let erased = erase_notification::<S, F::Marker, H, Fut>(handler);
+        self.insert_notification(method, erased)?;
+        spec.contribute(&mut self.capabilities)
+    }
+
+    /// Insert an already-erased notification handler under `method`, rejecting
+    /// a reserved method or a duplicate. A protocol-owned mutation records the
+    /// connection's one post-mutation hook; every other method becomes a
+    /// Router route.
+    fn insert_notification(
+        &mut self,
+        method: String,
+        erased: ErasedNotificationHandler<S>,
+    ) -> Result<(), BuildError> {
         if RESERVED_METHODS.contains(&method.as_str()) {
             return Err(BuildError::ReservedMethod(method));
         }
-        // A protocol-owned mutation records the connection's one
-        // post-mutation hook; every other method becomes a Router route.
         let table = if ProtocolMutation::from_method(&method).is_some() {
             &mut self.built_in_hooks
         } else {
@@ -507,6 +547,32 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
         self
     }
 
+    /// Register a standard LSP notification feature and its capability
+    /// contribution.
+    ///
+    /// `spec` is a descriptor from [`lspf::features`](crate::features) — for
+    /// example [`features::did_create_files(options)`](crate::features::did_create_files).
+    /// It fixes the wire method, the typed parameter, and the capability field
+    /// the feature advertises. The handler has the same shape as a custom
+    /// [`notification`](Self::notification) handler for that method.
+    ///
+    /// Registering two handlers for the same method is a
+    /// [`BuildError::DuplicateMethod`]; two features that disagree on a
+    /// singular capability field are a
+    /// [`BuildError::ConflictingCapability`]. Both are reported by
+    /// [`build`](Self::build).
+    pub fn feature_notification<F, H, Fut>(mut self, spec: F, handler: H) -> Self
+    where
+        F: NotificationFeatureSpec,
+        H: Fn(Arc<S>, Context, <F::Marker as Notification>::Params) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        if let Err(err) = self.registrations.add_feature_notification(spec, handler) {
+            self.record(err);
+        }
+        self
+    }
+
     /// Register a typed command dispatched on `workspace/executeCommand`.
     ///
     /// The command is invoked when the editor sends `workspace/executeCommand`
@@ -703,6 +769,17 @@ impl<S: Send + Sync + 'static> InitializeRegistrar<S> {
         Fut: Future<Output = ()> + Send + 'static,
     {
         self.try_register(|r| r.add_notification::<N, H, Fut>(handler))
+    }
+
+    /// Conditionally register a standard notification feature and its
+    /// capability. See [`ServerBuilder::feature_notification`].
+    pub fn feature_notification<F, H, Fut>(&mut self, spec: F, handler: H) -> &mut Self
+    where
+        F: NotificationFeatureSpec,
+        H: Fn(Arc<S>, Context, <F::Marker as Notification>::Params) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        self.try_register(|r| r.add_feature_notification(spec, handler))
     }
 
     /// Conditionally register a typed command. See [`ServerBuilder::command`].
@@ -1227,5 +1304,216 @@ mod tests {
             .err()
             .expect("supplying on_initialize twice must fail");
         assert_eq!(err, BuildError::DuplicateLifecycleHook("on_initialize"));
+    }
+
+    async fn ok_workspace_symbol(
+        _state: Arc<DummyState>,
+        _ctx: Context,
+        _params: lsp_types::WorkspaceSymbolParams,
+        _ct: CancellationToken,
+    ) -> Result<Option<lsp_types::WorkspaceSymbolResponse>, LspError> {
+        Ok(None)
+    }
+
+    async fn ok_symbol_resolve(
+        _state: Arc<DummyState>,
+        _ctx: Context,
+        symbol: lsp_types::WorkspaceSymbol,
+        _ct: CancellationToken,
+    ) -> Result<lsp_types::WorkspaceSymbol, LspError> {
+        Ok(symbol)
+    }
+
+    async fn ok_will_rename(
+        _state: Arc<DummyState>,
+        _ctx: Context,
+        _params: lsp_types::RenameFilesParams,
+        _ct: CancellationToken,
+    ) -> Result<Option<lsp_types::WorkspaceEdit>, LspError> {
+        Ok(None)
+    }
+
+    async fn noop_rename_files(
+        _state: Arc<DummyState>,
+        _ctx: Context,
+        _params: lsp_types::RenameFilesParams,
+    ) {
+    }
+
+    fn rename_filters() -> lsp_types::FileOperationRegistrationOptions {
+        lsp_types::FileOperationRegistrationOptions {
+            filters: vec![lsp_types::FileOperationFilter {
+                scheme: Some("file".to_string()),
+                pattern: lsp_types::FileOperationPattern {
+                    glob: "**/*.rs".to_string(),
+                    matches: Some(lsp_types::FileOperationPatternKind::File),
+                    options: None,
+                },
+            }],
+        }
+    }
+
+    fn workspace_symbol_options() -> lsp_types::WorkspaceSymbolOptions {
+        lsp_types::WorkspaceSymbolOptions {
+            work_done_progress_options: Default::default(),
+            resolve_provider: None,
+        }
+    }
+
+    #[test]
+    fn workspace_symbol_and_resolve_merge_into_one_capability_independent_of_order() {
+        let base_first = Server::builder(DummyState)
+            .feature(
+                crate::features::workspace_symbol(workspace_symbol_options()),
+                ok_workspace_symbol,
+            )
+            .feature(
+                crate::features::workspace_symbol_resolve(),
+                ok_symbol_resolve,
+            )
+            .build()
+            .expect("workspace symbol then resolve builds")
+            .into_router();
+        let resolve_first = Server::builder(DummyState)
+            .feature(
+                crate::features::workspace_symbol_resolve(),
+                ok_symbol_resolve,
+            )
+            .feature(
+                crate::features::workspace_symbol(workspace_symbol_options()),
+                ok_workspace_symbol,
+            )
+            .build()
+            .expect("resolve then workspace symbol builds")
+            .into_router();
+
+        assert_eq!(
+            base_first.capabilities(),
+            resolve_first.capabilities(),
+            "the family merge is independent of registration order"
+        );
+        let merged = base_first
+            .capabilities()
+            .workspace_symbol_provider
+            .expect("the family emits one workspaceSymbolProvider capability");
+        let lsp_types::OneOf::Right(options) = merged else {
+            panic!("the family advertises full options, not a bare boolean");
+        };
+        assert_eq!(options.resolve_provider, Some(true));
+        assert!(base_first.request("workspace/symbol").is_some());
+        assert!(base_first.request("workspaceSymbol/resolve").is_some());
+    }
+
+    #[test]
+    fn workspace_symbol_resolve_without_workspace_symbol_is_a_build_error() {
+        let err = Server::builder(DummyState)
+            .feature(
+                crate::features::workspace_symbol_resolve(),
+                ok_symbol_resolve,
+            )
+            .build()
+            .err()
+            .expect("resolve without its base feature must fail");
+        assert_eq!(
+            err,
+            BuildError::ConflictingCapability {
+                field: "workspaceSymbolProvider"
+            }
+        );
+    }
+
+    #[test]
+    fn file_operation_features_share_one_family_capability() {
+        let server = Server::builder(DummyState)
+            .feature(
+                crate::features::will_rename_files(rename_filters()),
+                ok_will_rename,
+            )
+            .feature_notification(
+                crate::features::did_rename_files(rename_filters()),
+                noop_rename_files,
+            )
+            .build()
+            .expect("identical will/did filters merge");
+        let router = server.into_router();
+        assert!(router.request("workspace/willRenameFiles").is_some());
+        assert!(router.notification("workspace/didRenameFiles").is_some());
+        let file_operations = router
+            .capabilities()
+            .workspace
+            .expect("the family advertises the workspace object")
+            .file_operations
+            .expect("the family advertises a fileOperations capability");
+        let expected = Some(rename_filters());
+        assert_eq!(file_operations.will_rename, expected.clone());
+        assert_eq!(file_operations.did_rename, expected);
+        assert_eq!(file_operations.will_create, None);
+    }
+
+    #[test]
+    fn disagreeing_file_operation_filters_are_a_build_error() {
+        let mut other = rename_filters();
+        other.filters[0].pattern.glob = "**/*.toml".to_string();
+        let err = Server::builder(DummyState)
+            .feature(
+                crate::features::will_rename_files(rename_filters()),
+                ok_will_rename,
+            )
+            .feature_notification(crate::features::did_rename_files(other), noop_rename_files)
+            .build()
+            .err()
+            .expect("differing filters within one family must fail");
+        assert_eq!(
+            err,
+            BuildError::ConflictingCapability {
+                field: "workspace.fileOperations.rename"
+            }
+        );
+    }
+
+    #[test]
+    fn a_duplicate_notification_feature_is_a_build_error() {
+        let err = Server::builder(DummyState)
+            .feature_notification(
+                crate::features::did_rename_files(rename_filters()),
+                noop_rename_files,
+            )
+            .feature_notification(
+                crate::features::did_rename_files(rename_filters()),
+                noop_rename_files,
+            )
+            .build()
+            .err()
+            .expect("registering the same notification feature twice must fail");
+        assert_eq!(
+            err,
+            BuildError::DuplicateMethod("workspace/didRenameFiles".to_string())
+        );
+    }
+
+    #[test]
+    fn watched_files_feature_registers_a_route_and_contributes_no_capability() {
+        async fn noop_watched(
+            _state: Arc<DummyState>,
+            _ctx: Context,
+            _params: lsp_types::DidChangeWatchedFilesParams,
+        ) {
+        }
+        let server = Server::builder(DummyState)
+            .feature_notification(crate::features::did_change_watched_files(), noop_watched)
+            .build()
+            .expect("the watched-files feature builds");
+        let router = server.into_router();
+        assert!(
+            router
+                .notification("workspace/didChangeWatchedFiles")
+                .is_some(),
+            "watched files is an ordinary route: the framework owns no mutation for it"
+        );
+        assert_eq!(
+            router.capabilities(),
+            ServerCapabilities::default(),
+            "LSP 3.17 has no watched-files server capability, so none is advertised"
+        );
     }
 }
