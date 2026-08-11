@@ -46,7 +46,7 @@ pub use context::Context;
 pub use documents::{Document, DocumentsView, PositionEncoding};
 pub use engine::Outcome;
 pub use error::{BuildError, ClientError, Error, LspError, Result};
-pub use features::FeatureSpec;
+pub use features::{FeatureSpec, NotificationFeatureSpec};
 pub use raw::{JsonRpcError, RawMessage, RequestId};
 pub use service::{CallKind, IncomingCall, Layer, Next, ServiceFuture, ServiceResult};
 #[cfg(not(target_arch = "wasm32"))]
