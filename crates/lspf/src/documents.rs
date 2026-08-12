@@ -33,7 +33,7 @@ pub enum PositionEncoding {
 pub struct Document {
     uri: Uri,
     language_id: String,
-    version: i32,
+    version: Option<i32>,
     text: Rope,
 }
 
@@ -46,8 +46,19 @@ impl Document {
         &self.language_id
     }
 
-    pub fn version(&self) -> i32 {
+    /// The editor-managed version, or `None` for a snapshot loaded through a
+    /// [`FileProvider`](crate::FileProvider).
+    pub fn version(&self) -> Option<i32> {
         self.version
+    }
+
+    pub(crate) fn provider_snapshot(uri: Uri, text: String) -> Self {
+        Self {
+            uri,
+            language_id: String::new(),
+            version: None,
+            text: Rope::from_str(&text),
+        }
     }
 
     /// Full document text as a `String`.
@@ -211,7 +222,7 @@ impl Documents {
             Document {
                 uri: item.uri,
                 language_id: item.language_id,
-                version: item.version,
+                version: Some(item.version),
                 text: Rope::from_str(&item.text),
             },
         );
@@ -256,7 +267,7 @@ impl Documents {
         for change in changes {
             updated.apply_change(encoding, change)?;
         }
-        updated.version = version;
+        updated.version = Some(version);
         *doc = updated;
         Ok(())
     }
@@ -456,7 +467,7 @@ mod tests {
         let doc = docs.get(&u).expect("document should exist");
         assert_eq!(doc.uri(), &u);
         assert_eq!(doc.language_id(), "plaintext");
-        assert_eq!(doc.version(), 1);
+        assert_eq!(doc.version(), Some(1));
         assert_eq!(doc.text(), "hello world");
     }
 
@@ -608,7 +619,7 @@ mod tests {
 
         let doc = docs.get(&u).unwrap();
         assert_eq!(doc.text(), "hello lspf");
-        assert_eq!(doc.version(), 2);
+        assert_eq!(doc.version(), Some(2));
     }
 
     #[test]
@@ -620,7 +631,7 @@ mod tests {
 
         let doc = docs.get(&u).unwrap();
         assert_eq!(doc.text(), "goodbye");
-        assert_eq!(doc.version(), 2);
+        assert_eq!(doc.version(), Some(2));
     }
 
     #[test]
@@ -637,7 +648,7 @@ mod tests {
 
         let doc = docs.get(&u).expect("the store is still readable");
         assert_eq!(doc.text(), "hello world");
-        assert_eq!(doc.version(), 1, "a rejected change advances nothing");
+        assert_eq!(doc.version(), Some(1), "a rejected change advances nothing");
     }
 
     #[test]

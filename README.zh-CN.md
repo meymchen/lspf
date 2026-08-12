@@ -45,7 +45,7 @@ async fn on_did_open(_state: Arc<State>, ctx: Context, params: DidOpenTextDocume
     };
     let result = ctx.client().notify::<PublishDiagnostics>(PublishDiagnosticsParams {
         uri,
-        version: Some(document.version()),
+        version: document.version(),
         diagnostics: vec![Diagnostic {
             range: Range {
                 start: Position { line: 0, character: 0 },
