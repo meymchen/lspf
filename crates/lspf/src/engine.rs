@@ -27,10 +27,11 @@ use futures_util::future::{Either, select};
 use lsp_types::{
     DidChangeConfigurationParams, DidChangeTextDocumentParams, DidChangeWorkspaceFoldersParams,
     DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
-    InitializeParams, InitializeResult, OneOf, SetTraceParams, TextDocumentSyncKind,
+    InitializeParams, OneOf, ServerInfo, SetTraceParams, TextDocumentSyncKind,
     TextDocumentSyncOptions, TextDocumentSyncSaveOptions, WillSaveTextDocumentParams,
     WorkspaceFoldersServerCapabilities, WorkspaceServerCapabilities,
 };
+use serde::Serialize;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Span, debug, info_span, warn};
@@ -39,6 +40,7 @@ use crate::builder::{
     ConfigureInitialize, InitializeRegistrar, OnInitialize, ProtocolNotification, Registrations,
     Server,
 };
+use crate::capability::GeneratedCapabilities;
 use crate::client::{Client, OutboundRegistry};
 use crate::codec::{decode_params, decode_value, encode_body};
 use crate::context::Context;
@@ -49,6 +51,15 @@ use crate::runtime::{Runtime, TaskHandle, TaskSend, default_runtime};
 use crate::service::{IncomingCall, ServiceResult, UserLayer, UserService, build_service_stack};
 use crate::transport::{Transport, TransportError, TransportReader, TransportWriter};
 use crate::workspace::Workspace;
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WireInitializeResult {
+    capabilities: GeneratedCapabilities,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    server_info: Option<ServerInfo>,
+}
+
 use crate::{LspError, Result};
 
 fn validate_sync_changes(
@@ -952,8 +963,9 @@ where
         self.workspace = Some(established.clone());
 
         let position_encoding = self.documents.negotiate_position_encoding(&params);
-        let mut capabilities = router.capabilities();
-        capabilities.position_encoding = Some(position_encoding);
+        let mut capabilities = router.generated_capabilities();
+        let standard_capabilities = capabilities.standard_mut();
+        standard_capabilities.position_encoding = Some(position_encoding);
         // Document sync is a protocol built-in rather than a registration
         // (ADR 0018): the engine applies every `didOpen`, `didChange`, and
         // `didClose` itself. So it advertises the sync kind those built-ins
@@ -965,16 +977,16 @@ where
         // contribution here to overwrite.
         let document_sync = router.document_sync();
         self.document_sync = document_sync.options;
-        capabilities.text_document_sync = Some(document_sync.capability);
+        standard_capabilities.text_document_sync = Some(document_sync.capability);
         // Workspace-folder sync is likewise a protocol built-in, so the
         // engine advertises its support itself. Registration-contributed
         // workspace fields (the file-operation families) come from the frozen
         // catalog and are preserved beside the protocol-owned field.
-        let file_operations = capabilities
+        let file_operations = standard_capabilities
             .workspace
             .take()
             .and_then(|workspace| workspace.file_operations);
-        capabilities.workspace = Some(WorkspaceServerCapabilities {
+        standard_capabilities.workspace = Some(WorkspaceServerCapabilities {
             workspace_folders: Some(WorkspaceFoldersServerCapabilities {
                 supported: Some(true),
                 change_notifications: Some(OneOf::Left(true)),
@@ -1018,7 +1030,7 @@ where
         self.inbound.complete(
             &self.out_tx,
             reservation,
-            encode_body(&InitializeResult {
+            encode_body(&WireInitializeResult {
                 capabilities,
                 server_info,
             }),
