@@ -49,7 +49,7 @@ async fn on_did_open(_state: Arc<State>, ctx: Context, params: DidOpenTextDocume
         uri,
         // The retained version, not the one on the wire: that is the revision
         // this diagnostic actually describes.
-        version: Some(document.version()),
+        version: document.version(),
         diagnostics: vec![Diagnostic {
             range: Range {
                 start: Position {
