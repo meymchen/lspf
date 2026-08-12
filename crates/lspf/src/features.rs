@@ -20,18 +20,23 @@ use lsp_types::notification::{
 };
 use lsp_types::request::{
     CallHierarchyIncomingCalls, CallHierarchyOutgoingCalls, CallHierarchyPrepare,
-    CodeActionRequest, CodeActionResolveRequest, CodeLensRequest, CodeLensResolve, Completion,
-    DocumentDiagnosticRequest, DocumentLinkRequest, DocumentLinkResolve, HoverRequest,
-    InlayHintRequest, InlayHintResolveRequest, PrepareRenameRequest, Rename, Request,
-    ResolveCompletionItem, SemanticTokensFullDeltaRequest, SemanticTokensFullRequest,
+    CodeActionRequest, CodeActionResolveRequest, CodeLensRequest, CodeLensResolve,
+    ColorPresentationRequest, Completion, DocumentColor, DocumentDiagnosticRequest,
+    DocumentLinkRequest, DocumentLinkResolve, FoldingRangeRequest, Formatting, HoverRequest,
+    InlayHintRequest, InlayHintResolveRequest, InlineValueRequest, OnTypeFormatting,
+    PrepareRenameRequest, RangeFormatting, Rename, Request, ResolveCompletionItem,
+    SelectionRangeRequest, SemanticTokensFullDeltaRequest, SemanticTokensFullRequest,
     SemanticTokensRangeRequest, TypeHierarchyPrepare, TypeHierarchySubtypes,
     TypeHierarchySupertypes, WillCreateFiles, WillDeleteFiles, WillRenameFiles, WillSaveWaitUntil,
     WorkspaceDiagnosticRequest, WorkspaceSymbolRequest, WorkspaceSymbolResolve,
 };
 use lsp_types::{
-    CallHierarchyOptions, CodeActionOptions, CodeLensOptions, CompletionOptions, DiagnosticOptions,
-    DocumentLinkOptions, FileOperationRegistrationOptions, InlayHintOptions, RenameOptions,
-    SemanticTokensOptions, TypeHierarchyOptions, WorkspaceSymbolOptions,
+    CallHierarchyOptions, CodeActionOptions, CodeLensOptions, ColorProviderOptions,
+    CompletionOptions, DiagnosticOptions, DocumentFormattingOptions, DocumentLinkOptions,
+    DocumentOnTypeFormattingOptions, DocumentRangeFormattingOptions,
+    FileOperationRegistrationOptions, FoldingProviderOptions, InlayHintOptions, InlineValueOptions,
+    RenameOptions, SelectionRangeOptions, SemanticTokensOptions, TypeHierarchyOptions,
+    WorkspaceSymbolOptions,
 };
 
 use crate::capability::CapabilityBuilder;
@@ -124,6 +129,165 @@ impl sealed::Sealed for HoverFeature {
 }
 impl FeatureSpec for HoverFeature {
     type Marker = HoverRequest;
+}
+
+/// The `textDocument/formatting` feature descriptor.
+pub struct DocumentFormattingFeature {
+    options: DocumentFormattingOptions,
+}
+
+/// Describe whole-document formatting and its provider options.
+pub fn document_formatting(options: DocumentFormattingOptions) -> DocumentFormattingFeature {
+    DocumentFormattingFeature { options }
+}
+
+#[allow(private_interfaces)]
+impl sealed::Sealed for DocumentFormattingFeature {
+    fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
+        caps.set_document_formatting(self.options.clone())
+    }
+}
+impl FeatureSpec for DocumentFormattingFeature {
+    type Marker = Formatting;
+}
+
+/// The `textDocument/rangeFormatting` feature descriptor.
+pub struct RangeFormattingFeature {
+    options: DocumentRangeFormattingOptions,
+}
+
+/// Describe range formatting and its provider options.
+pub fn range_formatting(options: DocumentRangeFormattingOptions) -> RangeFormattingFeature {
+    RangeFormattingFeature { options }
+}
+
+#[allow(private_interfaces)]
+impl sealed::Sealed for RangeFormattingFeature {
+    fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
+        caps.set_range_formatting(self.options.clone())
+    }
+}
+impl FeatureSpec for RangeFormattingFeature {
+    type Marker = RangeFormatting;
+}
+
+/// The `textDocument/onTypeFormatting` feature descriptor.
+pub struct OnTypeFormattingFeature {
+    options: DocumentOnTypeFormattingOptions,
+}
+
+/// Describe on-type formatting and its trigger-character options.
+pub fn on_type_formatting(options: DocumentOnTypeFormattingOptions) -> OnTypeFormattingFeature {
+    OnTypeFormattingFeature { options }
+}
+
+#[allow(private_interfaces)]
+impl sealed::Sealed for OnTypeFormattingFeature {
+    fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
+        caps.set_on_type_formatting(self.options.clone())
+    }
+}
+impl FeatureSpec for OnTypeFormattingFeature {
+    type Marker = OnTypeFormatting;
+}
+
+/// The `textDocument/documentColor` feature descriptor.
+pub struct DocumentColorFeature {
+    options: ColorProviderOptions,
+}
+
+/// Describe document-color discovery and the shared color provider.
+pub fn document_color(options: ColorProviderOptions) -> DocumentColorFeature {
+    DocumentColorFeature { options }
+}
+
+#[allow(private_interfaces)]
+impl sealed::Sealed for DocumentColorFeature {
+    fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
+        caps.set_document_color(self.options.clone())
+    }
+}
+impl FeatureSpec for DocumentColorFeature {
+    type Marker = DocumentColor;
+}
+
+/// The `textDocument/colorPresentation` feature descriptor.
+pub struct ColorPresentationFeature(());
+
+/// Describe color presentation, the subordinate route of `colorProvider`.
+pub fn color_presentation() -> ColorPresentationFeature {
+    ColorPresentationFeature(())
+}
+
+#[allow(private_interfaces)]
+impl sealed::Sealed for ColorPresentationFeature {
+    fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
+        caps.set_color_presentation();
+        Ok(())
+    }
+}
+impl FeatureSpec for ColorPresentationFeature {
+    type Marker = ColorPresentationRequest;
+}
+
+/// The `textDocument/foldingRange` feature descriptor.
+pub struct FoldingRangeFeature {
+    options: FoldingProviderOptions,
+}
+
+/// Describe folding-range discovery and its provider options.
+pub fn folding_range(options: FoldingProviderOptions) -> FoldingRangeFeature {
+    FoldingRangeFeature { options }
+}
+
+#[allow(private_interfaces)]
+impl sealed::Sealed for FoldingRangeFeature {
+    fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
+        caps.set_folding_range(self.options.clone())
+    }
+}
+impl FeatureSpec for FoldingRangeFeature {
+    type Marker = FoldingRangeRequest;
+}
+
+/// The `textDocument/selectionRange` feature descriptor.
+pub struct SelectionRangeFeature {
+    options: SelectionRangeOptions,
+}
+
+/// Describe selection-range discovery and its provider options.
+pub fn selection_range(options: SelectionRangeOptions) -> SelectionRangeFeature {
+    SelectionRangeFeature { options }
+}
+
+#[allow(private_interfaces)]
+impl sealed::Sealed for SelectionRangeFeature {
+    fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
+        caps.set_selection_range(self.options.clone())
+    }
+}
+impl FeatureSpec for SelectionRangeFeature {
+    type Marker = SelectionRangeRequest;
+}
+
+/// The `textDocument/inlineValue` feature descriptor.
+pub struct InlineValueFeature {
+    options: InlineValueOptions,
+}
+
+/// Describe inline-value calculation and its provider options.
+pub fn inline_value(options: InlineValueOptions) -> InlineValueFeature {
+    InlineValueFeature { options }
+}
+
+#[allow(private_interfaces)]
+impl sealed::Sealed for InlineValueFeature {
+    fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
+        caps.set_inline_value(self.options.clone())
+    }
+}
+impl FeatureSpec for InlineValueFeature {
+    type Marker = InlineValueRequest;
 }
 
 /// The `textDocument/prepareCallHierarchy` feature descriptor.
@@ -914,8 +1078,10 @@ mod tests {
     use lsp_types::request::{
         CallHierarchyIncomingCalls, CallHierarchyOutgoingCalls, CallHierarchyPrepare,
         CodeActionRequest, CodeActionResolveRequest, CodeLensRequest, CodeLensResolve,
-        DocumentDiagnosticRequest, DocumentLinkRequest, DocumentLinkResolve, InlayHintRequest,
-        InlayHintResolveRequest, PrepareRenameRequest, Rename, SemanticTokensFullDeltaRequest,
+        ColorPresentationRequest, DocumentColor, DocumentDiagnosticRequest, DocumentLinkRequest,
+        DocumentLinkResolve, FoldingRangeRequest, Formatting, InlayHintRequest,
+        InlayHintResolveRequest, InlineValueRequest, OnTypeFormatting, PrepareRenameRequest,
+        RangeFormatting, Rename, SelectionRangeRequest, SemanticTokensFullDeltaRequest,
         SemanticTokensFullRequest, SemanticTokensRangeRequest, TypeHierarchyPrepare,
         TypeHierarchySubtypes, TypeHierarchySupertypes, WorkspaceDiagnosticRequest,
     };
@@ -923,17 +1089,190 @@ mod tests {
         CallHierarchyIncomingCall, CallHierarchyIncomingCallsParams, CallHierarchyItem,
         CallHierarchyOutgoingCall, CallHierarchyOutgoingCallsParams, CallHierarchyPrepareParams,
         CodeAction, CodeActionOptions, CodeActionParams, CodeActionResponse, CodeLens,
-        CodeLensOptions, CodeLensParams, CreateFilesParams, DeleteFilesParams, DiagnosticOptions,
-        DidChangeWatchedFilesParams, DocumentDiagnosticParams, DocumentDiagnosticReportResult,
-        DocumentLink, DocumentLinkOptions, DocumentLinkParams, InlayHint, InlayHintOptions,
-        InlayHintParams, PrepareRenameResponse, RenameFilesParams, RenameOptions, RenameParams,
-        SemanticTokensDeltaParams, SemanticTokensFullDeltaResult, SemanticTokensParams,
-        SemanticTokensRangeParams, SemanticTokensRangeResult, SemanticTokensResult,
-        TextDocumentPositionParams, TypeHierarchyItem, TypeHierarchyPrepareParams,
-        TypeHierarchySubtypesParams, TypeHierarchySupertypesParams, WorkspaceDiagnosticParams,
-        WorkspaceDiagnosticReportResult, WorkspaceEdit, WorkspaceSymbol, WorkspaceSymbolParams,
-        WorkspaceSymbolResponse,
+        CodeLensOptions, CodeLensParams, ColorInformation, ColorPresentation,
+        ColorPresentationParams, ColorProviderOptions, CreateFilesParams, DeleteFilesParams,
+        DiagnosticOptions, DidChangeWatchedFilesParams, DocumentColorParams,
+        DocumentDiagnosticParams, DocumentDiagnosticReportResult, DocumentFormattingOptions,
+        DocumentFormattingParams, DocumentLink, DocumentLinkOptions, DocumentLinkParams,
+        DocumentOnTypeFormattingOptions, DocumentOnTypeFormattingParams,
+        DocumentRangeFormattingOptions, DocumentRangeFormattingParams, FoldingProviderOptions,
+        FoldingRange, FoldingRangeParams, InlayHint, InlayHintOptions, InlayHintParams,
+        InlineValue, InlineValueOptions, InlineValueParams, PrepareRenameResponse,
+        RenameFilesParams, RenameOptions, RenameParams, SelectionRange, SelectionRangeOptions,
+        SelectionRangeParams, SemanticTokensDeltaParams, SemanticTokensFullDeltaResult,
+        SemanticTokensParams, SemanticTokensRangeParams, SemanticTokensRangeResult,
+        SemanticTokensResult, TextDocumentPositionParams, TextEdit, TypeHierarchyItem,
+        TypeHierarchyPrepareParams, TypeHierarchySubtypesParams, TypeHierarchySupertypesParams,
+        WorkspaceDiagnosticParams, WorkspaceDiagnosticReportResult, WorkspaceEdit, WorkspaceSymbol,
+        WorkspaceSymbolParams, WorkspaceSymbolResponse,
     };
+
+    fn assert_formatting_descriptor<F: FeatureSpec<Marker = Formatting>>(_: F) {}
+    fn assert_range_formatting_descriptor<F: FeatureSpec<Marker = RangeFormatting>>(_: F) {}
+    fn assert_on_type_formatting_descriptor<F: FeatureSpec<Marker = OnTypeFormatting>>(_: F) {}
+
+    fn assert_formatting_contract<R>()
+    where
+        R: Request<Params = DocumentFormattingParams, Result = Option<Vec<TextEdit>>>,
+    {
+    }
+
+    fn assert_range_formatting_contract<R>()
+    where
+        R: Request<Params = DocumentRangeFormattingParams, Result = Option<Vec<TextEdit>>>,
+    {
+    }
+
+    fn assert_on_type_formatting_contract<R>()
+    where
+        R: Request<Params = DocumentOnTypeFormattingParams, Result = Option<Vec<TextEdit>>>,
+    {
+    }
+
+    #[test]
+    fn formatting_descriptors_fix_the_exact_lsp_types_contracts() {
+        assert_formatting_descriptor(document_formatting(DocumentFormattingOptions::default()));
+        assert_range_formatting_descriptor(range_formatting(DocumentRangeFormattingOptions {
+            work_done_progress_options: Default::default(),
+        }));
+        assert_on_type_formatting_descriptor(on_type_formatting(
+            DocumentOnTypeFormattingOptions::default(),
+        ));
+        assert_formatting_contract::<Formatting>();
+        assert_range_formatting_contract::<RangeFormatting>();
+        assert_on_type_formatting_contract::<OnTypeFormatting>();
+        assert_eq!(<Formatting as Request>::METHOD, "textDocument/formatting");
+        assert_eq!(
+            <RangeFormatting as Request>::METHOD,
+            "textDocument/rangeFormatting"
+        );
+        assert_eq!(
+            <OnTypeFormatting as Request>::METHOD,
+            "textDocument/onTypeFormatting"
+        );
+    }
+
+    fn assert_document_color_descriptor<F: FeatureSpec<Marker = DocumentColor>>(_: F) {}
+    fn assert_color_presentation_descriptor<F: FeatureSpec<Marker = ColorPresentationRequest>>(
+        _: F,
+    ) {
+    }
+    fn assert_folding_range_descriptor<F: FeatureSpec<Marker = FoldingRangeRequest>>(_: F) {}
+    fn assert_selection_range_descriptor<F: FeatureSpec<Marker = SelectionRangeRequest>>(_: F) {}
+    fn assert_inline_value_descriptor<F: FeatureSpec<Marker = InlineValueRequest>>(_: F) {}
+
+    fn assert_document_color_contract<R>()
+    where
+        R: Request<Params = DocumentColorParams, Result = Vec<ColorInformation>>,
+    {
+    }
+
+    fn assert_color_presentation_contract<R>()
+    where
+        R: Request<Params = ColorPresentationParams, Result = Vec<ColorPresentation>>,
+    {
+    }
+
+    fn assert_folding_range_contract<R>()
+    where
+        R: Request<Params = FoldingRangeParams, Result = Option<Vec<FoldingRange>>>,
+    {
+    }
+
+    fn assert_selection_range_contract<R>()
+    where
+        R: Request<Params = SelectionRangeParams, Result = Option<Vec<SelectionRange>>>,
+    {
+    }
+
+    fn assert_inline_value_contract<R>()
+    where
+        R: Request<Params = InlineValueParams, Result = Option<Vec<InlineValue>>>,
+    {
+    }
+
+    #[test]
+    fn presentation_descriptors_fix_the_exact_lsp_types_contracts() {
+        assert_document_color_descriptor(document_color(ColorProviderOptions {}));
+        assert_color_presentation_descriptor(color_presentation());
+        assert_folding_range_descriptor(folding_range(FoldingProviderOptions {}));
+        assert_selection_range_descriptor(selection_range(SelectionRangeOptions::default()));
+        assert_inline_value_descriptor(inline_value(InlineValueOptions::default()));
+        assert_document_color_contract::<DocumentColor>();
+        assert_color_presentation_contract::<ColorPresentationRequest>();
+        assert_folding_range_contract::<FoldingRangeRequest>();
+        assert_selection_range_contract::<SelectionRangeRequest>();
+        assert_inline_value_contract::<InlineValueRequest>();
+        assert_eq!(
+            <DocumentColor as Request>::METHOD,
+            "textDocument/documentColor"
+        );
+        assert_eq!(
+            <ColorPresentationRequest as Request>::METHOD,
+            "textDocument/colorPresentation"
+        );
+        assert_eq!(
+            <FoldingRangeRequest as Request>::METHOD,
+            "textDocument/foldingRange"
+        );
+        assert_eq!(
+            <SelectionRangeRequest as Request>::METHOD,
+            "textDocument/selectionRange"
+        );
+        assert_eq!(
+            <InlineValueRequest as Request>::METHOD,
+            "textDocument/inlineValue"
+        );
+    }
+
+    #[test]
+    fn editing_and_presentation_descriptors_contribute_only_their_capabilities() {
+        let formatting = DocumentFormattingOptions::default();
+        let range = DocumentRangeFormattingOptions {
+            work_done_progress_options: Default::default(),
+        };
+        let on_type = DocumentOnTypeFormattingOptions {
+            first_trigger_character: "}".to_string(),
+            more_trigger_character: Some(vec![";".to_string()]),
+        };
+        let selection = SelectionRangeOptions::default();
+        let inline = InlineValueOptions::default();
+        let mut caps = CapabilityBuilder::default();
+
+        sealed::Sealed::contribute(&document_formatting(formatting.clone()), &mut caps).unwrap();
+        sealed::Sealed::contribute(&range_formatting(range.clone()), &mut caps).unwrap();
+        sealed::Sealed::contribute(&on_type_formatting(on_type.clone()), &mut caps).unwrap();
+        sealed::Sealed::contribute(&document_color(ColorProviderOptions {}), &mut caps).unwrap();
+        sealed::Sealed::contribute(&color_presentation(), &mut caps).unwrap();
+        sealed::Sealed::contribute(&folding_range(FoldingProviderOptions {}), &mut caps).unwrap();
+        sealed::Sealed::contribute(&selection_range(selection.clone()), &mut caps).unwrap();
+        sealed::Sealed::contribute(&inline_value(inline.clone()), &mut caps).unwrap();
+        caps.validate().unwrap();
+
+        assert_eq!(
+            caps.finish(),
+            lsp_types::ServerCapabilities {
+                document_formatting_provider: Some(lsp_types::OneOf::Right(formatting)),
+                document_range_formatting_provider: Some(lsp_types::OneOf::Right(range)),
+                document_on_type_formatting_provider: Some(on_type),
+                color_provider: Some(lsp_types::ColorProviderCapability::ColorProvider(
+                    ColorProviderOptions {},
+                )),
+                folding_range_provider: Some(
+                    lsp_types::FoldingRangeProviderCapability::FoldingProvider(
+                        FoldingProviderOptions {},
+                    ),
+                ),
+                selection_range_provider: Some(
+                    lsp_types::SelectionRangeProviderCapability::Options(selection),
+                ),
+                inline_value_provider: Some(lsp_types::OneOf::Right(
+                    lsp_types::InlineValueServerCapabilities::Options(inline),
+                )),
+                ..lsp_types::ServerCapabilities::default()
+            }
+        );
+    }
 
     fn assert_call_prepare_descriptor<F: FeatureSpec<Marker = CallHierarchyPrepare>>(_: F) {}
     fn assert_call_incoming_descriptor<F: FeatureSpec<Marker = CallHierarchyIncomingCalls>>(_: F) {}
