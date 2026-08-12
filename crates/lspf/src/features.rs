@@ -22,7 +22,7 @@ use lsp_types::request::{
     CodeActionRequest, CodeActionResolveRequest, CodeLensRequest, CodeLensResolve, Completion,
     DocumentDiagnosticRequest, DocumentLinkRequest, DocumentLinkResolve, HoverRequest,
     InlayHintRequest, InlayHintResolveRequest, PrepareRenameRequest, Rename, Request,
-    ResolveCompletionItem, WillCreateFiles, WillDeleteFiles, WillRenameFiles,
+    ResolveCompletionItem, WillCreateFiles, WillDeleteFiles, WillRenameFiles, WillSaveWaitUntil,
     WorkspaceDiagnosticRequest, WorkspaceSymbolRequest, WorkspaceSymbolResolve,
 };
 use lsp_types::{
@@ -80,6 +80,26 @@ pub trait NotificationFeatureSpec: sealed::Sealed {
     /// The notification marker this feature dispatches, fixing its method and
     /// its parameter type.
     type Marker: Notification;
+}
+
+/// The `textDocument/willSaveWaitUntil` request feature descriptor.
+pub struct WillSaveWaitUntilFeature(());
+
+/// Describe the typed pre-save edit request. Its registration contributes
+/// `willSaveWaitUntil: true` to the effective text-document sync options.
+pub fn will_save_wait_until() -> WillSaveWaitUntilFeature {
+    WillSaveWaitUntilFeature(())
+}
+
+#[allow(private_interfaces)]
+impl sealed::Sealed for WillSaveWaitUntilFeature {
+    fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
+        caps.set_will_save_wait_until();
+        Ok(())
+    }
+}
+impl FeatureSpec for WillSaveWaitUntilFeature {
+    type Marker = WillSaveWaitUntil;
 }
 
 /// The `textDocument/hover` feature descriptor. Construct it with [`hover`].
@@ -719,6 +739,17 @@ mod tests {
     };
 
     fn assert_document_descriptor<F: FeatureSpec<Marker = DocumentDiagnosticRequest>>(_: F) {}
+
+    fn assert_will_save_wait_until_descriptor<F: FeatureSpec<Marker = WillSaveWaitUntil>>(_: F) {}
+
+    #[test]
+    fn will_save_wait_until_descriptor_fixes_the_typed_request_contract() {
+        assert_will_save_wait_until_descriptor(will_save_wait_until());
+        assert_eq!(
+            <WillSaveWaitUntil as Request>::METHOD,
+            "textDocument/willSaveWaitUntil"
+        );
+    }
     fn assert_workspace_descriptor<F: FeatureSpec<Marker = WorkspaceDiagnosticRequest>>(_: F) {}
 
     fn assert_document_contract<R>()

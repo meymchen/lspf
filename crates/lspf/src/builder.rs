@@ -21,7 +21,10 @@ use std::sync::Arc;
 
 use lsp_types::notification::Notification;
 use lsp_types::request::Request;
-use lsp_types::{InitializeParams, ServerCapabilities, ServerInfo};
+use lsp_types::{
+    InitializeParams, ServerCapabilities, ServerInfo, TextDocumentSyncCapability,
+    TextDocumentSyncKind, TextDocumentSyncOptions, TextDocumentSyncSaveOptions,
+};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -49,30 +52,31 @@ const RESERVED_METHODS: &[&str] = &[
 /// explicit request handler for this method cannot coexist.
 const EXECUTE_COMMAND_METHOD: &str = "workspace/executeCommand";
 
-/// A notification whose state mutation the protocol engine owns (ADR 0018).
+/// A notification whose validation or state mutation the protocol engine owns.
 ///
 /// A `notification` registration for one of these methods records the
-/// connection's single post-mutation hook rather than a Router route, so a user
-/// handler observes the mutation instead of replacing it. This enum is the one
-/// place that says which methods those are: the builder asks it where a
-/// registration belongs, and the engine asks it which mutation to run.
-///
-/// `textDocument/didSave` is deliberately not a variant: it carries no
-/// framework mutation in 0.2, so it stays an ordinary typed notification route.
+/// connection's single post-validation hook rather than a Router route. When
+/// the notification mutates protocol state, the hook observes that mutation
+/// instead of replacing it. This enum is the one place that says which methods
+/// those are.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ProtocolMutation {
+pub(crate) enum ProtocolNotification {
     Open,
     Change,
     Close,
+    WillSave,
+    Save,
     WorkspaceFolders,
     Configuration,
     Trace,
 }
 
-impl ProtocolMutation {
+impl ProtocolNotification {
     const OPEN_METHOD: &'static str = "textDocument/didOpen";
     const CHANGE_METHOD: &'static str = "textDocument/didChange";
     const CLOSE_METHOD: &'static str = "textDocument/didClose";
+    const WILL_SAVE_METHOD: &'static str = "textDocument/willSave";
+    const SAVE_METHOD: &'static str = "textDocument/didSave";
 
     /// The built-in this wire method names, or `None` when the method is an
     /// ordinary route.
@@ -81,12 +85,20 @@ impl ProtocolMutation {
             Self::OPEN_METHOD => Some(Self::Open),
             Self::CHANGE_METHOD => Some(Self::Change),
             Self::CLOSE_METHOD => Some(Self::Close),
+            Self::WILL_SAVE_METHOD => Some(Self::WillSave),
+            Self::SAVE_METHOD => Some(Self::Save),
             "workspace/didChangeWorkspaceFolders" => Some(Self::WorkspaceFolders),
             "workspace/didChangeConfiguration" => Some(Self::Configuration),
             "$/setTrace" => Some(Self::Trace),
             _ => None,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct DocumentSyncSettings {
+    pub(crate) capability: TextDocumentSyncCapability,
+    pub(crate) options: TextDocumentSyncOptions,
 }
 
 /// The future produced by an erased request or command handler: its decoded,
@@ -216,11 +228,12 @@ where
 pub(crate) struct Registrations<S> {
     requests: HashMap<String, ErasedRequestHandler<S>>,
     notifications: HashMap<String, ErasedNotificationHandler<S>>,
-    /// Post-mutation hooks for protocol-owned notifications, kept apart from
+    /// Post-validation hooks for protocol-owned notifications, kept apart from
     /// `notifications` so no ordinary route can ever shadow a built-in.
     built_in_hooks: HashMap<String, ErasedNotificationHandler<S>>,
     commands: HashMap<String, ErasedCommandHandler<S>>,
     capabilities: CapabilityBuilder,
+    document_sync: Option<TextDocumentSyncOptions>,
 }
 
 impl<S: Send + Sync + 'static> Registrations<S> {
@@ -231,6 +244,7 @@ impl<S: Send + Sync + 'static> Registrations<S> {
             built_in_hooks: HashMap::new(),
             commands: HashMap::new(),
             capabilities: CapabilityBuilder::default(),
+            document_sync: None,
         }
     }
 
@@ -294,7 +308,7 @@ impl<S: Send + Sync + 'static> Registrations<S> {
 
     /// Register a standard notification feature handler and its capability
     /// contribution. Shares [`add_notification`](Self::add_notification)'s
-    /// routing — a protocol-owned method still records a post-mutation hook
+    /// routing — a protocol-owned method still records a post-validation hook
     /// rather than a route.
     fn add_feature_notification<F, H, Fut>(&mut self, spec: F, handler: H) -> Result<(), BuildError>
     where
@@ -309,8 +323,8 @@ impl<S: Send + Sync + 'static> Registrations<S> {
     }
 
     /// Insert an already-erased notification handler under `method`, rejecting
-    /// a reserved method or a duplicate. A protocol-owned mutation records the
-    /// connection's one post-mutation hook; every other method becomes a
+    /// a reserved method or a duplicate. A protocol-owned notification records
+    /// the connection's one post-validation hook; every other method becomes a
     /// Router route.
     fn insert_notification(
         &mut self,
@@ -320,7 +334,7 @@ impl<S: Send + Sync + 'static> Registrations<S> {
         if RESERVED_METHODS.contains(&method.as_str()) {
             return Err(BuildError::ReservedMethod(method));
         }
-        let table = if ProtocolMutation::from_method(&method).is_some() {
+        let table = if ProtocolNotification::from_method(&method).is_some() {
             &mut self.built_in_hooks
         } else {
             &mut self.notifications
@@ -368,6 +382,7 @@ impl<S: Send + Sync + 'static> Registrations<S> {
     /// commits, so a conditional registration cannot smuggle in a conflict.
     fn validate(&self) -> Result<(), BuildError> {
         self.capabilities.validate()?;
+        self.document_sync_settings()?;
         // A command registration and an explicit `workspace/executeCommand`
         // request handler both claim the same method; they cannot coexist.
         if !self.commands.is_empty() && self.requests.contains_key(EXECUTE_COMMAND_METHOD) {
@@ -376,16 +391,103 @@ impl<S: Send + Sync + 'static> Registrations<S> {
         Ok(())
     }
 
+    fn document_sync_settings(&self) -> Result<DocumentSyncSettings, BuildError> {
+        let save_hook = self
+            .built_in_hooks
+            .contains_key(ProtocolNotification::SAVE_METHOD);
+        let will_save_hook = self
+            .built_in_hooks
+            .contains_key(ProtocolNotification::WILL_SAVE_METHOD);
+        let wait_until = self.capabilities.has_will_save_wait_until();
+
+        if let Some(explicit) = &self.document_sync {
+            let save_disabled = matches!(
+                explicit.save,
+                Some(TextDocumentSyncSaveOptions::Supported(false))
+            );
+            if save_hook && save_disabled {
+                return Err(BuildError::ConflictingCapability {
+                    field: "textDocumentSync.save",
+                });
+            }
+            if will_save_hook && explicit.will_save == Some(false) {
+                return Err(BuildError::ConflictingCapability {
+                    field: "textDocumentSync.willSave",
+                });
+            }
+            if wait_until && explicit.will_save_wait_until == Some(false) {
+                return Err(BuildError::ConflictingCapability {
+                    field: "textDocumentSync.willSaveWaitUntil",
+                });
+            }
+            if explicit.change == Some(TextDocumentSyncKind::NONE) {
+                let field = if save_hook {
+                    Some("textDocumentSync.save")
+                } else if will_save_hook {
+                    Some("textDocumentSync.willSave")
+                } else if wait_until {
+                    Some("textDocumentSync.willSaveWaitUntil")
+                } else {
+                    None
+                };
+                if let Some(field) = field {
+                    return Err(BuildError::ConflictingCapability { field });
+                }
+            }
+        }
+
+        let mut options = self.document_sync.clone().unwrap_or_default();
+        options.open_close.get_or_insert(true);
+        options
+            .change
+            .get_or_insert(TextDocumentSyncKind::INCREMENTAL);
+        if save_hook && options.save.is_none() {
+            options.save = Some(true.into());
+        }
+        if will_save_hook && options.will_save.is_none() {
+            options.will_save = Some(true);
+        }
+        if wait_until && options.will_save_wait_until.is_none() {
+            options.will_save_wait_until = Some(true);
+        }
+
+        if options.change == Some(TextDocumentSyncKind::NONE) {
+            options.open_close = Some(false);
+            options.will_save = Some(false);
+            options.will_save_wait_until = Some(false);
+            options.save = Some(false.into());
+            return Ok(DocumentSyncSettings {
+                capability: TextDocumentSyncCapability::Kind(TextDocumentSyncKind::NONE),
+                options,
+            });
+        }
+
+        let capability =
+            if self.document_sync.is_none() && !save_hook && !will_save_hook && !wait_until {
+                TextDocumentSyncCapability::Kind(TextDocumentSyncKind::INCREMENTAL)
+            } else {
+                TextDocumentSyncCapability::Options(options.clone())
+            };
+        Ok(DocumentSyncSettings {
+            capability,
+            options,
+        })
+    }
+
     /// Freeze the registrations into the connection's permanent [`Router`],
     /// computing its capability catalog once from the same registrations used
     /// for dispatch (ADR 0017).
     pub(crate) fn freeze(self) -> Router<S> {
+        let document_sync = self
+            .document_sync_settings()
+            .expect("registrations are validated before freeze");
         Router {
             requests: self.requests,
             notifications: self.notifications,
             built_in_hooks: self.built_in_hooks,
             commands: self.commands,
             capabilities: self.capabilities.finish(),
+            document_sync,
         }
     }
 }
@@ -401,6 +503,7 @@ pub(crate) struct Router<S> {
     /// Capabilities implied by the frozen registrations, computed once at
     /// freeze time from the same registrations used for dispatch.
     capabilities: ServerCapabilities,
+    document_sync: DocumentSyncSettings,
 }
 
 impl<S> Router<S> {
@@ -414,10 +517,10 @@ impl<S> Router<S> {
         self.notifications.get(method)
     }
 
-    /// The erased post-mutation hook registered for a protocol-owned `method`,
-    /// if any (ADR 0018). The protocol engine has already decoded and mutated
-    /// by the time this hook is reached, so it observes — and cannot replace —
-    /// the built-in.
+    /// The erased post-validation hook registered for a protocol-owned `method`,
+    /// if any (ADR 0018, ADR 0023). The protocol engine has already decoded and
+    /// validated by the time this hook is reached. When the built-in mutates
+    /// state, the hook observes that mutation; it cannot replace the built-in.
     pub(crate) fn built_in_hook(&self, method: &str) -> Option<&ErasedNotificationHandler<S>> {
         self.built_in_hooks.get(method)
     }
@@ -440,6 +543,10 @@ impl<S> Router<S> {
     /// protocol-owned negotiated fields separately.
     pub(crate) fn capabilities(&self) -> ServerCapabilities {
         self.capabilities.clone()
+    }
+
+    pub(crate) fn document_sync(&self) -> DocumentSyncSettings {
+        self.document_sync.clone()
     }
 }
 
@@ -468,6 +575,14 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
             concurrency_limit: crate::DEFAULT_CONCURRENCY_LIMIT,
             error: None,
         }
+    }
+
+    /// Configure the connection's protocol-owned text-document synchronization.
+    /// Unspecified open/close and change fields retain the framework defaults;
+    /// save-related fields are inferred from typed registrations.
+    pub fn text_document_sync(mut self, options: TextDocumentSyncOptions) -> Self {
+        self.registrations.document_sync = Some(options);
+        self
     }
 
     /// Register a standard LSP feature and its capability contribution.
@@ -1030,15 +1145,17 @@ mod tests {
 
         assert!(
             router.built_in_hook("textDocument/didOpen").is_some(),
-            "a built-in document notification records a post-mutation hook"
+            "a built-in document notification records a post-validation hook"
         );
         assert!(
             router.notification("textDocument/didOpen").is_none(),
             "the hook is not a Router route, so it cannot shadow the built-in"
         );
-        // didSave has no framework mutation in 0.2, so it stays a plain route.
-        assert!(router.notification("textDocument/didSave").is_some());
-        assert!(router.built_in_hook("textDocument/didSave").is_none());
+        assert!(router.notification("textDocument/didSave").is_none());
+        assert!(
+            router.built_in_hook("textDocument/didSave").is_some(),
+            "didSave is protocol-validated before its typed hook runs"
+        );
     }
 
     #[test]
