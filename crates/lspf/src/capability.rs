@@ -17,12 +17,15 @@
 //! transaction's commit.
 
 use lsp_types::{
-    CodeActionOptions, CodeActionProviderCapability, CodeLensOptions, CompletionOptions,
-    DiagnosticOptions, DiagnosticServerCapabilities, DocumentLinkOptions, ExecuteCommandOptions,
-    FileOperationRegistrationOptions, HoverProviderCapability, InlayHintOptions,
-    InlayHintServerCapabilities, OneOf, RenameOptions, ServerCapabilities,
-    WorkspaceFileOperationsServerCapabilities, WorkspaceServerCapabilities, WorkspaceSymbolOptions,
+    CallHierarchyOptions, CodeActionOptions, CodeActionProviderCapability, CodeLensOptions,
+    CompletionOptions, DiagnosticOptions, DiagnosticServerCapabilities, DocumentLinkOptions,
+    ExecuteCommandOptions, FileOperationRegistrationOptions, HoverProviderCapability,
+    InlayHintOptions, InlayHintServerCapabilities, OneOf, RenameOptions, SemanticTokensFullOptions,
+    SemanticTokensOptions, SemanticTokensServerCapabilities, ServerCapabilities,
+    TypeHierarchyOptions, WorkspaceFileOperationsServerCapabilities, WorkspaceServerCapabilities,
+    WorkspaceSymbolOptions,
 };
+use serde::Serialize;
 
 use crate::error::BuildError;
 
@@ -43,6 +46,9 @@ use crate::error::BuildError;
 pub(crate) struct CapabilityBuilder {
     caps: ServerCapabilities,
     commands: Vec<String>,
+    call_hierarchy: HierarchyFamily<CallHierarchyOptions>,
+    type_hierarchy: HierarchyFamily<TypeHierarchyOptions>,
+    semantic_tokens: SemanticTokensFamily,
     completion: CompletionFamily,
     diagnostics: DiagnosticFamily,
     workspace_symbols: WorkspaceSymbolFamily,
@@ -55,6 +61,159 @@ pub(crate) struct CapabilityBuilder {
     file_rename: FileOperationFamily,
     file_delete: FileOperationFamily,
     will_save_wait_until: bool,
+}
+
+/// The call-hierarchy routes share the provider emitted by the prepare route.
+/// Subordinate routes are tracked so validation can reject a family with no
+/// prepare handler without advertising another capability.
+#[derive(Default)]
+struct HierarchyFamily<Options> {
+    options: Option<Options>,
+    has_subordinate: bool,
+}
+
+impl<Options: PartialEq> HierarchyFamily<Options> {
+    fn contribute_base(&mut self, options: Options, field: &'static str) -> Result<(), BuildError> {
+        match &self.options {
+            Some(existing) if *existing != options => {
+                Err(BuildError::ConflictingCapability { field })
+            }
+            _ => {
+                self.options = Some(options);
+                Ok(())
+            }
+        }
+    }
+
+    fn contribute_subordinate(&mut self) {
+        self.has_subordinate = true;
+    }
+
+    fn validate(&self, field: &'static str) -> Result<(), BuildError> {
+        if self.options.is_none() && self.has_subordinate {
+            return Err(BuildError::ConflictingCapability { field });
+        }
+        Ok(())
+    }
+}
+
+/// The complete capability object frozen from the registration catalog.
+///
+/// `lsp-types` 0.97 omits LSP 3.17's standard `typeHierarchyProvider` field,
+/// so this catalog-owned wrapper adds that field while flattening every field
+/// the dependency does model. Protocol-owned fields are still layered into
+/// `standard` by the engine after the Router freezes this value (ADR 0017).
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GeneratedCapabilities {
+    #[serde(flatten)]
+    pub(crate) standard: ServerCapabilities,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    type_hierarchy_provider: Option<TypeHierarchyOptions>,
+}
+
+impl GeneratedCapabilities {
+    pub(crate) fn standard_mut(&mut self) -> &mut ServerCapabilities {
+        &mut self.standard
+    }
+}
+
+#[derive(Clone, Default)]
+struct SemanticTokensFamily {
+    shared_options: Option<SemanticTokensOptions>,
+    full: bool,
+    delta: bool,
+    range: bool,
+    declared_full: Option<bool>,
+    declared_delta: Option<bool>,
+    declared_range: Option<bool>,
+}
+
+#[derive(Clone, Copy)]
+enum SemanticTokensMode {
+    Full,
+    Delta,
+    Range,
+}
+
+impl SemanticTokensFamily {
+    fn contribute(
+        &mut self,
+        mut options: SemanticTokensOptions,
+        mode: SemanticTokensMode,
+    ) -> Result<(), BuildError> {
+        let (declared_full, declared_delta) = match options.full.take() {
+            None => (None, None),
+            Some(SemanticTokensFullOptions::Bool(value)) => (Some(value), None),
+            Some(SemanticTokensFullOptions::Delta { delta }) => (Some(true), delta),
+        };
+        let declared_range = options.range.take();
+        if self
+            .shared_options
+            .as_ref()
+            .is_some_and(|existing| *existing != options)
+        {
+            return Err(BuildError::ConflictingCapability {
+                field: "semanticTokensProvider",
+            });
+        }
+
+        let mut next = self.clone();
+        next.shared_options = Some(options);
+        Self::merge_declaration(&mut next.declared_full, declared_full)?;
+        Self::merge_declaration(&mut next.declared_delta, declared_delta)?;
+        Self::merge_declaration(&mut next.declared_range, declared_range)?;
+        match mode {
+            SemanticTokensMode::Full => next.full = true,
+            SemanticTokensMode::Delta => next.delta = true,
+            SemanticTokensMode::Range => next.range = true,
+        }
+        *self = next;
+        Ok(())
+    }
+
+    fn merge_declaration(
+        target: &mut Option<bool>,
+        contribution: Option<bool>,
+    ) -> Result<(), BuildError> {
+        match (*target, contribution) {
+            (Some(existing), Some(value)) if existing != value => {
+                Err(BuildError::ConflictingCapability {
+                    field: "semanticTokensProvider",
+                })
+            }
+            (None, Some(value)) => {
+                *target = Some(value);
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn validate(&self) -> Result<(), BuildError> {
+        let modes_match = self.declared_full.is_none_or(|value| value == self.full)
+            && self.declared_delta.is_none_or(|value| value == self.delta)
+            && self.declared_range.is_none_or(|value| value == self.range);
+        if !modes_match || (self.delta && !self.full) {
+            return Err(BuildError::ConflictingCapability {
+                field: "semanticTokensProvider",
+            });
+        }
+        Ok(())
+    }
+
+    fn finish(mut self) -> Option<SemanticTokensOptions> {
+        let mut options = self.shared_options.take()?;
+        options.range = self.range.then_some(true);
+        options.full = if self.delta {
+            Some(SemanticTokensFullOptions::Delta { delta: Some(true) })
+        } else if self.full {
+            Some(SemanticTokensFullOptions::Bool(true))
+        } else {
+            None
+        };
+        Some(options)
+    }
 }
 
 /// The in-progress `completionProvider` capability family (ADR 0017). The
@@ -203,6 +362,63 @@ impl CapabilityBuilder {
     pub(crate) fn has_will_save_wait_until(&self) -> bool {
         self.will_save_wait_until
     }
+
+    pub(crate) fn set_call_hierarchy(
+        &mut self,
+        options: CallHierarchyOptions,
+    ) -> Result<(), BuildError> {
+        self.call_hierarchy
+            .contribute_base(options, "callHierarchyProvider")
+    }
+
+    pub(crate) fn set_call_hierarchy_incoming_calls(&mut self) {
+        self.call_hierarchy.contribute_subordinate();
+    }
+
+    pub(crate) fn set_call_hierarchy_outgoing_calls(&mut self) {
+        self.call_hierarchy.contribute_subordinate();
+    }
+
+    pub(crate) fn set_type_hierarchy(
+        &mut self,
+        options: TypeHierarchyOptions,
+    ) -> Result<(), BuildError> {
+        self.type_hierarchy
+            .contribute_base(options, "typeHierarchyProvider")
+    }
+
+    pub(crate) fn set_type_hierarchy_supertypes(&mut self) {
+        self.type_hierarchy.contribute_subordinate();
+    }
+
+    pub(crate) fn set_type_hierarchy_subtypes(&mut self) {
+        self.type_hierarchy.contribute_subordinate();
+    }
+
+    pub(crate) fn set_semantic_tokens_full(
+        &mut self,
+        options: SemanticTokensOptions,
+    ) -> Result<(), BuildError> {
+        self.semantic_tokens
+            .contribute(options, SemanticTokensMode::Full)
+    }
+
+    pub(crate) fn set_semantic_tokens_full_delta(
+        &mut self,
+        options: SemanticTokensOptions,
+    ) -> Result<(), BuildError> {
+        self.semantic_tokens
+            .contribute(options, SemanticTokensMode::Delta)
+    }
+
+    pub(crate) fn set_semantic_tokens_range(
+        &mut self,
+        options: SemanticTokensOptions,
+    ) -> Result<(), BuildError> {
+        self.semantic_tokens
+            .contribute(options, SemanticTokensMode::Range)
+    }
+
     /// Contribute the hover capability. Hover carries no options, so repeated
     /// contributions are identical and never conflict; the caller already
     /// rejects a duplicate `textDocument/hover` handler before reaching here.
@@ -465,6 +681,10 @@ impl CapabilityBuilder {
     /// static build time and when the initialize transaction commits, so the
     /// rule applies identically to static and conditional registrations.
     pub(crate) fn validate(&self) -> Result<(), BuildError> {
+        self.call_hierarchy.validate("callHierarchyProvider")?;
+        self.type_hierarchy.validate("typeHierarchyProvider")?;
+        self.semantic_tokens.validate()?;
+
         let clash = || BuildError::ConflictingCapability {
             field: "completionProvider",
         };
@@ -580,7 +800,20 @@ impl CapabilityBuilder {
     /// only when at least one command was registered, and its command list
     /// exactly matches the frozen registry: de-duplicated and in registration
     /// order (ADR 0022).
-    pub(crate) fn finish(mut self) -> ServerCapabilities {
+    #[cfg(test)]
+    pub(crate) fn finish(self) -> ServerCapabilities {
+        self.finish_generated().standard
+    }
+
+    pub(crate) fn finish_generated(mut self) -> GeneratedCapabilities {
+        if let Some(options) = self.call_hierarchy.options {
+            self.caps.call_hierarchy_provider = Some(options.into());
+        }
+        if let Some(options) = self.semantic_tokens.finish() {
+            self.caps.semantic_tokens_provider = Some(
+                SemanticTokensServerCapabilities::SemanticTokensOptions(options),
+            );
+        }
         if let Some(mut options) = self.completion.options {
             if self.completion.resolve {
                 options.resolve_provider = Some(true);
@@ -655,14 +888,17 @@ impl CapabilityBuilder {
                 ..WorkspaceServerCapabilities::default()
             });
         }
-        self.caps
+        GeneratedCapabilities {
+            standard: self.caps,
+            type_hierarchy_provider: self.type_hierarchy.options,
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lsp_types::CodeActionKind;
+    use lsp_types::{CallHierarchyServerCapability, CodeActionKind};
 
     #[test]
     fn hover_sets_only_hover_provider() {
@@ -1584,6 +1820,167 @@ mod tests {
             BuildError::ConflictingCapability {
                 field: "inlayHintProvider"
             }
+        );
+    }
+
+    #[test]
+    fn call_hierarchy_routes_merge_into_one_prepare_capability() {
+        let options = CallHierarchyOptions {
+            work_done_progress_options: lsp_types::WorkDoneProgressOptions {
+                work_done_progress: Some(true),
+            },
+        };
+        let mut caps = CapabilityBuilder::default();
+        caps.set_call_hierarchy_incoming_calls();
+        caps.set_call_hierarchy(options).unwrap();
+        caps.set_call_hierarchy_outgoing_calls();
+        caps.validate().unwrap();
+
+        assert_eq!(
+            caps.finish().call_hierarchy_provider,
+            Some(CallHierarchyServerCapability::Options(options))
+        );
+    }
+
+    #[test]
+    fn call_hierarchy_subordinate_without_prepare_conflicts() {
+        let mut caps = CapabilityBuilder::default();
+        caps.set_call_hierarchy_incoming_calls();
+
+        assert_eq!(
+            caps.validate(),
+            Err(BuildError::ConflictingCapability {
+                field: "callHierarchyProvider"
+            })
+        );
+    }
+
+    #[test]
+    fn type_hierarchy_routes_share_the_prepare_options() {
+        let options = TypeHierarchyOptions {
+            work_done_progress_options: lsp_types::WorkDoneProgressOptions {
+                work_done_progress: Some(true),
+            },
+        };
+        let mut caps = CapabilityBuilder::default();
+        caps.set_type_hierarchy_subtypes();
+        caps.set_type_hierarchy(options.clone()).unwrap();
+        caps.set_type_hierarchy_supertypes();
+        caps.validate().unwrap();
+
+        assert_eq!(
+            caps.finish_generated().type_hierarchy_provider,
+            Some(options)
+        );
+    }
+
+    #[test]
+    fn type_hierarchy_subordinate_without_prepare_conflicts() {
+        let mut caps = CapabilityBuilder::default();
+        caps.set_type_hierarchy_supertypes();
+
+        assert_eq!(
+            caps.validate(),
+            Err(BuildError::ConflictingCapability {
+                field: "typeHierarchyProvider"
+            })
+        );
+    }
+
+    fn semantic_options() -> SemanticTokensOptions {
+        SemanticTokensOptions {
+            work_done_progress_options: lsp_types::WorkDoneProgressOptions {
+                work_done_progress: Some(true),
+            },
+            legend: lsp_types::SemanticTokensLegend {
+                token_types: vec![lsp_types::SemanticTokenType::KEYWORD],
+                token_modifiers: vec![],
+            },
+            range: None,
+            full: None,
+        }
+    }
+
+    #[test]
+    fn semantic_token_routes_merge_shared_options_and_modes() {
+        let mut caps = CapabilityBuilder::default();
+        let mut full = semantic_options();
+        full.full = Some(SemanticTokensFullOptions::Bool(true));
+        caps.set_semantic_tokens_full(full).unwrap();
+        let mut delta = semantic_options();
+        delta.full = Some(SemanticTokensFullOptions::Delta { delta: Some(true) });
+        caps.set_semantic_tokens_full_delta(delta).unwrap();
+        let mut range = semantic_options();
+        range.range = Some(true);
+        caps.set_semantic_tokens_range(range).unwrap();
+        caps.validate().unwrap();
+
+        let provider = caps
+            .finish()
+            .semantic_tokens_provider
+            .expect("one semanticTokensProvider");
+        let SemanticTokensServerCapabilities::SemanticTokensOptions(options) = provider else {
+            panic!("static features emit plain semantic-token options")
+        };
+        assert_eq!(options.legend, semantic_options().legend);
+        assert_eq!(options.range, Some(true));
+        assert_eq!(
+            options.full,
+            Some(SemanticTokensFullOptions::Delta { delta: Some(true) })
+        );
+    }
+
+    #[test]
+    fn semantic_token_delta_without_full_conflicts() {
+        let mut caps = CapabilityBuilder::default();
+        caps.set_semantic_tokens_full_delta(semantic_options())
+            .unwrap();
+
+        assert_eq!(
+            caps.validate(),
+            Err(BuildError::ConflictingCapability {
+                field: "semanticTokensProvider"
+            })
+        );
+    }
+
+    #[test]
+    fn semantic_token_legend_mode_and_shared_option_conflicts_are_rejected() {
+        let mut caps = CapabilityBuilder::default();
+        caps.set_semantic_tokens_full(semantic_options()).unwrap();
+        let mut different_legend = semantic_options();
+        different_legend.legend.token_types = vec![lsp_types::SemanticTokenType::STRING];
+        assert_eq!(
+            caps.set_semantic_tokens_range(different_legend),
+            Err(BuildError::ConflictingCapability {
+                field: "semanticTokensProvider"
+            })
+        );
+
+        let mut shared_options = CapabilityBuilder::default();
+        shared_options
+            .set_semantic_tokens_full(semantic_options())
+            .unwrap();
+        let mut different_progress = semantic_options();
+        different_progress
+            .work_done_progress_options
+            .work_done_progress = Some(false);
+        assert_eq!(
+            shared_options.set_semantic_tokens_range(different_progress),
+            Err(BuildError::ConflictingCapability {
+                field: "semanticTokensProvider"
+            })
+        );
+
+        let mut denied = CapabilityBuilder::default();
+        let mut options = semantic_options();
+        options.full = Some(SemanticTokensFullOptions::Bool(false));
+        denied.set_semantic_tokens_full(options).unwrap();
+        assert_eq!(
+            denied.validate(),
+            Err(BuildError::ConflictingCapability {
+                field: "semanticTokensProvider"
+            })
         );
     }
 }
