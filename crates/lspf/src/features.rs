@@ -19,15 +19,19 @@ use lsp_types::notification::{
     DidChangeWatchedFiles, DidCreateFiles, DidDeleteFiles, DidRenameFiles, Notification,
 };
 use lsp_types::request::{
+    CallHierarchyIncomingCalls, CallHierarchyOutgoingCalls, CallHierarchyPrepare,
     CodeActionRequest, CodeActionResolveRequest, CodeLensRequest, CodeLensResolve, Completion,
     DocumentDiagnosticRequest, DocumentLinkRequest, DocumentLinkResolve, HoverRequest,
     InlayHintRequest, InlayHintResolveRequest, PrepareRenameRequest, Rename, Request,
-    ResolveCompletionItem, WillCreateFiles, WillDeleteFiles, WillRenameFiles, WillSaveWaitUntil,
+    ResolveCompletionItem, SemanticTokensFullDeltaRequest, SemanticTokensFullRequest,
+    SemanticTokensRangeRequest, TypeHierarchyPrepare, TypeHierarchySubtypes,
+    TypeHierarchySupertypes, WillCreateFiles, WillDeleteFiles, WillRenameFiles, WillSaveWaitUntil,
     WorkspaceDiagnosticRequest, WorkspaceSymbolRequest, WorkspaceSymbolResolve,
 };
 use lsp_types::{
-    CodeActionOptions, CodeLensOptions, CompletionOptions, DiagnosticOptions, DocumentLinkOptions,
-    FileOperationRegistrationOptions, InlayHintOptions, RenameOptions, WorkspaceSymbolOptions,
+    CallHierarchyOptions, CodeActionOptions, CodeLensOptions, CompletionOptions, DiagnosticOptions,
+    DocumentLinkOptions, FileOperationRegistrationOptions, InlayHintOptions, RenameOptions,
+    SemanticTokensOptions, TypeHierarchyOptions, WorkspaceSymbolOptions,
 };
 
 use crate::capability::CapabilityBuilder;
@@ -120,6 +124,190 @@ impl sealed::Sealed for HoverFeature {
 }
 impl FeatureSpec for HoverFeature {
     type Marker = HoverRequest;
+}
+
+/// The `textDocument/prepareCallHierarchy` feature descriptor.
+pub struct CallHierarchyPrepareFeature {
+    options: CallHierarchyOptions,
+}
+
+/// Describe the call-hierarchy prepare feature and its single provider
+/// capability. Incoming and outgoing call routes depend on this feature.
+pub fn call_hierarchy_prepare(options: CallHierarchyOptions) -> CallHierarchyPrepareFeature {
+    CallHierarchyPrepareFeature { options }
+}
+
+#[allow(private_interfaces)]
+impl sealed::Sealed for CallHierarchyPrepareFeature {
+    fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
+        caps.set_call_hierarchy(self.options)
+    }
+}
+impl FeatureSpec for CallHierarchyPrepareFeature {
+    type Marker = CallHierarchyPrepare;
+}
+
+/// The `callHierarchy/incomingCalls` feature descriptor.
+pub struct CallHierarchyIncomingCallsFeature(());
+
+/// Describe the incoming-call route. It contributes membership to the
+/// call-hierarchy family without emitting a second provider capability.
+pub fn call_hierarchy_incoming_calls() -> CallHierarchyIncomingCallsFeature {
+    CallHierarchyIncomingCallsFeature(())
+}
+
+#[allow(private_interfaces)]
+impl sealed::Sealed for CallHierarchyIncomingCallsFeature {
+    fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
+        caps.set_call_hierarchy_incoming_calls();
+        Ok(())
+    }
+}
+impl FeatureSpec for CallHierarchyIncomingCallsFeature {
+    type Marker = CallHierarchyIncomingCalls;
+}
+
+/// The `callHierarchy/outgoingCalls` feature descriptor.
+pub struct CallHierarchyOutgoingCallsFeature(());
+
+/// Describe the outgoing-call route. It contributes membership to the
+/// call-hierarchy family without emitting a second provider capability.
+pub fn call_hierarchy_outgoing_calls() -> CallHierarchyOutgoingCallsFeature {
+    CallHierarchyOutgoingCallsFeature(())
+}
+
+#[allow(private_interfaces)]
+impl sealed::Sealed for CallHierarchyOutgoingCallsFeature {
+    fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
+        caps.set_call_hierarchy_outgoing_calls();
+        Ok(())
+    }
+}
+impl FeatureSpec for CallHierarchyOutgoingCallsFeature {
+    type Marker = CallHierarchyOutgoingCalls;
+}
+
+/// The `textDocument/prepareTypeHierarchy` feature descriptor.
+pub struct TypeHierarchyPrepareFeature {
+    options: TypeHierarchyOptions,
+}
+
+/// Describe the type-hierarchy prepare feature and its single provider
+/// capability. Supertype and subtype routes depend on this feature.
+pub fn type_hierarchy_prepare(options: TypeHierarchyOptions) -> TypeHierarchyPrepareFeature {
+    TypeHierarchyPrepareFeature { options }
+}
+
+#[allow(private_interfaces)]
+impl sealed::Sealed for TypeHierarchyPrepareFeature {
+    fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
+        caps.set_type_hierarchy(self.options.clone())
+    }
+}
+impl FeatureSpec for TypeHierarchyPrepareFeature {
+    type Marker = TypeHierarchyPrepare;
+}
+
+/// The `typeHierarchy/supertypes` feature descriptor.
+pub struct TypeHierarchySupertypesFeature(());
+
+/// Describe the supertype route without emitting another prepare capability.
+pub fn type_hierarchy_supertypes() -> TypeHierarchySupertypesFeature {
+    TypeHierarchySupertypesFeature(())
+}
+
+#[allow(private_interfaces)]
+impl sealed::Sealed for TypeHierarchySupertypesFeature {
+    fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
+        caps.set_type_hierarchy_supertypes();
+        Ok(())
+    }
+}
+impl FeatureSpec for TypeHierarchySupertypesFeature {
+    type Marker = TypeHierarchySupertypes;
+}
+
+/// The `typeHierarchy/subtypes` feature descriptor.
+pub struct TypeHierarchySubtypesFeature(());
+
+/// Describe the subtype route without emitting another prepare capability.
+pub fn type_hierarchy_subtypes() -> TypeHierarchySubtypesFeature {
+    TypeHierarchySubtypesFeature(())
+}
+
+#[allow(private_interfaces)]
+impl sealed::Sealed for TypeHierarchySubtypesFeature {
+    fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
+        caps.set_type_hierarchy_subtypes();
+        Ok(())
+    }
+}
+impl FeatureSpec for TypeHierarchySubtypesFeature {
+    type Marker = TypeHierarchySubtypes;
+}
+
+/// The `textDocument/semanticTokens/full` feature descriptor.
+pub struct SemanticTokensFullFeature {
+    options: SemanticTokensOptions,
+}
+
+/// Describe full-document semantic tokens. All semantic-token descriptors in
+/// one family must agree on their legend and shared options.
+pub fn semantic_tokens_full(options: SemanticTokensOptions) -> SemanticTokensFullFeature {
+    SemanticTokensFullFeature { options }
+}
+
+#[allow(private_interfaces)]
+impl sealed::Sealed for SemanticTokensFullFeature {
+    fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
+        caps.set_semantic_tokens_full(self.options.clone())
+    }
+}
+impl FeatureSpec for SemanticTokensFullFeature {
+    type Marker = SemanticTokensFullRequest;
+}
+
+/// The `textDocument/semanticTokens/full/delta` feature descriptor.
+pub struct SemanticTokensFullDeltaFeature {
+    options: SemanticTokensOptions,
+}
+
+/// Describe semantic-token deltas, which depend on the full-document route.
+pub fn semantic_tokens_full_delta(
+    options: SemanticTokensOptions,
+) -> SemanticTokensFullDeltaFeature {
+    SemanticTokensFullDeltaFeature { options }
+}
+
+#[allow(private_interfaces)]
+impl sealed::Sealed for SemanticTokensFullDeltaFeature {
+    fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
+        caps.set_semantic_tokens_full_delta(self.options.clone())
+    }
+}
+impl FeatureSpec for SemanticTokensFullDeltaFeature {
+    type Marker = SemanticTokensFullDeltaRequest;
+}
+
+/// The `textDocument/semanticTokens/range` feature descriptor.
+pub struct SemanticTokensRangeFeature {
+    options: SemanticTokensOptions,
+}
+
+/// Describe range semantic tokens and merge them into the family's one
+/// provider capability.
+pub fn semantic_tokens_range(options: SemanticTokensOptions) -> SemanticTokensRangeFeature {
+    SemanticTokensRangeFeature { options }
+}
+
+#[allow(private_interfaces)]
+impl sealed::Sealed for SemanticTokensRangeFeature {
+    fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
+        caps.set_semantic_tokens_range(self.options.clone())
+    }
+}
+impl FeatureSpec for SemanticTokensRangeFeature {
+    type Marker = SemanticTokensRangeRequest;
 }
 
 /// The `textDocument/completion` feature descriptor. Construct it with
@@ -724,19 +912,174 @@ mod tests {
     use super::*;
     use lsp_types::notification::{DidChangeWatchedFiles, DidCreateFiles};
     use lsp_types::request::{
+        CallHierarchyIncomingCalls, CallHierarchyOutgoingCalls, CallHierarchyPrepare,
         CodeActionRequest, CodeActionResolveRequest, CodeLensRequest, CodeLensResolve,
         DocumentDiagnosticRequest, DocumentLinkRequest, DocumentLinkResolve, InlayHintRequest,
-        InlayHintResolveRequest, PrepareRenameRequest, Rename, WorkspaceDiagnosticRequest,
+        InlayHintResolveRequest, PrepareRenameRequest, Rename, SemanticTokensFullDeltaRequest,
+        SemanticTokensFullRequest, SemanticTokensRangeRequest, TypeHierarchyPrepare,
+        TypeHierarchySubtypes, TypeHierarchySupertypes, WorkspaceDiagnosticRequest,
     };
     use lsp_types::{
+        CallHierarchyIncomingCall, CallHierarchyIncomingCallsParams, CallHierarchyItem,
+        CallHierarchyOutgoingCall, CallHierarchyOutgoingCallsParams, CallHierarchyPrepareParams,
         CodeAction, CodeActionOptions, CodeActionParams, CodeActionResponse, CodeLens,
         CodeLensOptions, CodeLensParams, CreateFilesParams, DeleteFilesParams, DiagnosticOptions,
         DidChangeWatchedFilesParams, DocumentDiagnosticParams, DocumentDiagnosticReportResult,
         DocumentLink, DocumentLinkOptions, DocumentLinkParams, InlayHint, InlayHintOptions,
         InlayHintParams, PrepareRenameResponse, RenameFilesParams, RenameOptions, RenameParams,
-        TextDocumentPositionParams, WorkspaceDiagnosticParams, WorkspaceDiagnosticReportResult,
-        WorkspaceEdit, WorkspaceSymbol, WorkspaceSymbolParams, WorkspaceSymbolResponse,
+        SemanticTokensDeltaParams, SemanticTokensFullDeltaResult, SemanticTokensParams,
+        SemanticTokensRangeParams, SemanticTokensRangeResult, SemanticTokensResult,
+        TextDocumentPositionParams, TypeHierarchyItem, TypeHierarchyPrepareParams,
+        TypeHierarchySubtypesParams, TypeHierarchySupertypesParams, WorkspaceDiagnosticParams,
+        WorkspaceDiagnosticReportResult, WorkspaceEdit, WorkspaceSymbol, WorkspaceSymbolParams,
+        WorkspaceSymbolResponse,
     };
+
+    fn assert_call_prepare_descriptor<F: FeatureSpec<Marker = CallHierarchyPrepare>>(_: F) {}
+    fn assert_call_incoming_descriptor<F: FeatureSpec<Marker = CallHierarchyIncomingCalls>>(_: F) {}
+    fn assert_call_outgoing_descriptor<F: FeatureSpec<Marker = CallHierarchyOutgoingCalls>>(_: F) {}
+
+    fn assert_call_prepare_contract<R>()
+    where
+        R: Request<Params = CallHierarchyPrepareParams, Result = Option<Vec<CallHierarchyItem>>>,
+    {
+    }
+
+    fn assert_call_incoming_contract<R>()
+    where
+        R: Request<
+                Params = CallHierarchyIncomingCallsParams,
+                Result = Option<Vec<CallHierarchyIncomingCall>>,
+            >,
+    {
+    }
+
+    fn assert_call_outgoing_contract<R>()
+    where
+        R: Request<
+                Params = CallHierarchyOutgoingCallsParams,
+                Result = Option<Vec<CallHierarchyOutgoingCall>>,
+            >,
+    {
+    }
+
+    #[test]
+    fn call_hierarchy_descriptors_fix_the_exact_lsp_types_contracts() {
+        assert_call_prepare_descriptor(call_hierarchy_prepare(CallHierarchyOptions::default()));
+        assert_call_incoming_descriptor(call_hierarchy_incoming_calls());
+        assert_call_outgoing_descriptor(call_hierarchy_outgoing_calls());
+        assert_call_prepare_contract::<CallHierarchyPrepare>();
+        assert_call_incoming_contract::<CallHierarchyIncomingCalls>();
+        assert_call_outgoing_contract::<CallHierarchyOutgoingCalls>();
+        assert_eq!(
+            <CallHierarchyPrepare as Request>::METHOD,
+            "textDocument/prepareCallHierarchy"
+        );
+        assert_eq!(
+            <CallHierarchyIncomingCalls as Request>::METHOD,
+            "callHierarchy/incomingCalls"
+        );
+        assert_eq!(
+            <CallHierarchyOutgoingCalls as Request>::METHOD,
+            "callHierarchy/outgoingCalls"
+        );
+    }
+
+    fn assert_type_prepare_descriptor<F: FeatureSpec<Marker = TypeHierarchyPrepare>>(_: F) {}
+    fn assert_type_supertypes_descriptor<F: FeatureSpec<Marker = TypeHierarchySupertypes>>(_: F) {}
+    fn assert_type_subtypes_descriptor<F: FeatureSpec<Marker = TypeHierarchySubtypes>>(_: F) {}
+
+    fn assert_type_prepare_contract<R>()
+    where
+        R: Request<Params = TypeHierarchyPrepareParams, Result = Option<Vec<TypeHierarchyItem>>>,
+    {
+    }
+
+    fn assert_type_supertypes_contract<R>()
+    where
+        R: Request<Params = TypeHierarchySupertypesParams, Result = Option<Vec<TypeHierarchyItem>>>,
+    {
+    }
+
+    fn assert_type_subtypes_contract<R>()
+    where
+        R: Request<Params = TypeHierarchySubtypesParams, Result = Option<Vec<TypeHierarchyItem>>>,
+    {
+    }
+
+    #[test]
+    fn type_hierarchy_descriptors_fix_the_exact_lsp_types_contracts() {
+        assert_type_prepare_descriptor(type_hierarchy_prepare(TypeHierarchyOptions::default()));
+        assert_type_supertypes_descriptor(type_hierarchy_supertypes());
+        assert_type_subtypes_descriptor(type_hierarchy_subtypes());
+        assert_type_prepare_contract::<TypeHierarchyPrepare>();
+        assert_type_supertypes_contract::<TypeHierarchySupertypes>();
+        assert_type_subtypes_contract::<TypeHierarchySubtypes>();
+        assert_eq!(
+            <TypeHierarchyPrepare as Request>::METHOD,
+            "textDocument/prepareTypeHierarchy"
+        );
+        assert_eq!(
+            <TypeHierarchySupertypes as Request>::METHOD,
+            "typeHierarchy/supertypes"
+        );
+        assert_eq!(
+            <TypeHierarchySubtypes as Request>::METHOD,
+            "typeHierarchy/subtypes"
+        );
+    }
+
+    fn assert_semantic_full_descriptor<F: FeatureSpec<Marker = SemanticTokensFullRequest>>(_: F) {}
+    fn assert_semantic_delta_descriptor<F: FeatureSpec<Marker = SemanticTokensFullDeltaRequest>>(
+        _: F,
+    ) {
+    }
+    fn assert_semantic_range_descriptor<F: FeatureSpec<Marker = SemanticTokensRangeRequest>>(_: F) {
+    }
+
+    fn assert_semantic_full_contract<R>()
+    where
+        R: Request<Params = SemanticTokensParams, Result = Option<SemanticTokensResult>>,
+    {
+    }
+
+    fn assert_semantic_delta_contract<R>()
+    where
+        R: Request<
+                Params = SemanticTokensDeltaParams,
+                Result = Option<SemanticTokensFullDeltaResult>,
+            >,
+    {
+    }
+
+    fn assert_semantic_range_contract<R>()
+    where
+        R: Request<Params = SemanticTokensRangeParams, Result = Option<SemanticTokensRangeResult>>,
+    {
+    }
+
+    #[test]
+    fn semantic_token_descriptors_fix_the_exact_lsp_types_contracts() {
+        let options = SemanticTokensOptions::default();
+        assert_semantic_full_descriptor(semantic_tokens_full(options.clone()));
+        assert_semantic_delta_descriptor(semantic_tokens_full_delta(options.clone()));
+        assert_semantic_range_descriptor(semantic_tokens_range(options));
+        assert_semantic_full_contract::<SemanticTokensFullRequest>();
+        assert_semantic_delta_contract::<SemanticTokensFullDeltaRequest>();
+        assert_semantic_range_contract::<SemanticTokensRangeRequest>();
+        assert_eq!(
+            <SemanticTokensFullRequest as Request>::METHOD,
+            "textDocument/semanticTokens/full"
+        );
+        assert_eq!(
+            <SemanticTokensFullDeltaRequest as Request>::METHOD,
+            "textDocument/semanticTokens/full/delta"
+        );
+        assert_eq!(
+            <SemanticTokensRangeRequest as Request>::METHOD,
+            "textDocument/semanticTokens/range"
+        );
+    }
 
     fn assert_document_descriptor<F: FeatureSpec<Marker = DocumentDiagnosticRequest>>(_: F) {}
 
