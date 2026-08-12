@@ -38,7 +38,9 @@ use crate::codec::erase_value;
 use crate::context::Context;
 use crate::error::{BuildError, LspError};
 use crate::features::{FeatureSpec, NotificationFeatureSpec};
+use crate::file_provider::{SharedFileProvider, erase};
 use crate::service::{Layer, UserLayer};
+use crate::{FileProvider, MemoryFileProvider};
 
 /// Method names owned by the framework's lifecycle; a custom request or
 /// notification may not shadow one of them.
@@ -562,6 +564,7 @@ impl<S> Router<S> {
 /// [`build`](Self::build); the builder methods stay chainable.
 pub struct ServerBuilder<S> {
     state: Arc<S>,
+    file_provider: SharedFileProvider,
     registrations: Registrations<S>,
     configure_initialize: Option<ConfigureInitialize<S>>,
     on_initialize: Option<OnInitialize<S>>,
@@ -575,6 +578,7 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
     fn new(state: S) -> Self {
         Self {
             state: Arc::new(state),
+            file_provider: erase(MemoryFileProvider::new()),
             registrations: Registrations::new(),
             configure_initialize: None,
             on_initialize: None,
@@ -589,6 +593,13 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
     /// save-related fields are inferred from typed registrations.
     pub fn text_document_sync(mut self, options: TextDocumentSyncOptions) -> Self {
         self.registrations.document_sync = Some(options);
+        self
+    }
+
+    /// Replace the provider used to resolve resources that are not open in
+    /// the editor. The provider is owned by this connection's workspace.
+    pub fn file_provider<P: FileProvider>(mut self, provider: P) -> Self {
+        self.file_provider = erase(provider);
         self
     }
 
@@ -817,6 +828,7 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
         }
         Ok(Server {
             state: self.state,
+            file_provider: self.file_provider,
             registrations: self.registrations,
             configure_initialize: self.configure_initialize,
             on_initialize: self.on_initialize,
@@ -952,6 +964,7 @@ impl<S: Send + Sync + 'static> InitializeRegistrar<S> {
 /// is never shared between servers.
 pub struct Server<S> {
     pub(crate) state: Arc<S>,
+    pub(crate) file_provider: SharedFileProvider,
     pub(crate) registrations: Registrations<S>,
     pub(crate) configure_initialize: Option<ConfigureInitialize<S>>,
     pub(crate) on_initialize: Option<OnInitialize<S>>,
