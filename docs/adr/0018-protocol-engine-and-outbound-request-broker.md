@@ -292,8 +292,9 @@ protocol validity and ordering before the user `Service`; making them
 optional would invalidate the engine invariants.
 
 We rejected replacement registrations for built-in notifications. A
-post-mutation hook preserves extensibility while guaranteeing that framework
-state is current before user code observes the event.
+post-validation hook preserves extensibility while guaranteeing that protocol
+validation has completed; for state-mutating built-ins, framework state is
+current before user code observes the event.
 
 We rejected letting `on_initialize` alter capabilities or register routes.
 ADR 0017 already provides the transactional `configure_initialize` registrar
@@ -314,7 +315,7 @@ correlation, out-of-order completion, and a guarantee that session close wakes
 every caller.
 
 Built-ins are less replaceable than ordinary standard-feature handlers.
-Dedicated post-mutation hooks provide observation and extension without
+Dedicated post-validation hooks provide observation and extension without
 allowing user code to disable validation or corrupt framework-owned state.
 Applications that need different fundamental lifecycle semantics must build
 outside this framework boundary.
@@ -340,7 +341,7 @@ the engine.
 
 User code that previously intended to replace a document, cancellation,
 workspace, trace, or lifecycle notification must use its dedicated
-post-mutation hook. Initialization-dependent feature registration remains in
+post-validation hook. Initialization-dependent feature registration remains in
 `configure_initialize`; non-registration initialization work and optional
 `ServerInfo` move to `on_initialize`.
 
