@@ -48,9 +48,9 @@ use crate::error::BuildError;
 pub(crate) struct CapabilityBuilder {
     caps: ServerCapabilities,
     commands: Vec<String>,
-    call_hierarchy: HierarchyFamily<CallHierarchyOptions>,
-    type_hierarchy: HierarchyFamily<TypeHierarchyOptions>,
-    color: HierarchyFamily<ColorProviderOptions>,
+    call_hierarchy: BaseDependentFamily<CallHierarchyOptions>,
+    type_hierarchy: BaseDependentFamily<TypeHierarchyOptions>,
+    color: BaseDependentFamily<ColorProviderOptions>,
     semantic_tokens: SemanticTokensFamily,
     completion: CompletionFamily,
     diagnostics: DiagnosticFamily,
@@ -66,15 +66,18 @@ pub(crate) struct CapabilityBuilder {
     will_save_wait_until: bool,
 }
 
-/// The call-hierarchy routes share the provider emitted by the prepare route.
-/// Subordinate routes are tracked so validation can reject a family with no
-/// prepare handler without advertising another capability.
-struct HierarchyFamily<Options> {
+/// A capability family with one option-bearing base route and one or more
+/// dependent routes that advertise no separate provider.
+///
+/// Hierarchy prepare routes and document color are bases; hierarchy traversal
+/// and color presentation are their respective dependents. Tracking dependent
+/// presence lets validation reject incomplete families deterministically.
+struct BaseDependentFamily<Options> {
     options: Option<Options>,
     has_subordinate: bool,
 }
 
-impl<Options> Default for HierarchyFamily<Options> {
+impl<Options> Default for BaseDependentFamily<Options> {
     fn default() -> Self {
         Self {
             options: None,
@@ -83,7 +86,7 @@ impl<Options> Default for HierarchyFamily<Options> {
     }
 }
 
-impl<Options: PartialEq> HierarchyFamily<Options> {
+impl<Options: PartialEq> BaseDependentFamily<Options> {
     fn contribute_base(&mut self, options: Options, field: &'static str) -> Result<(), BuildError> {
         match &self.options {
             Some(existing) if *existing != options => {
@@ -105,6 +108,22 @@ impl<Options: PartialEq> HierarchyFamily<Options> {
             return Err(BuildError::ConflictingCapability { field });
         }
         Ok(())
+    }
+}
+
+fn contribute_singular<T: PartialEq>(
+    target: &mut Option<T>,
+    contribution: T,
+    field: &'static str,
+) -> Result<(), BuildError> {
+    match target {
+        Some(existing) if *existing != contribution => {
+            Err(BuildError::ConflictingCapability { field })
+        }
+        _ => {
+            *target = Some(contribution);
+            Ok(())
+        }
     }
 }
 
@@ -434,47 +453,33 @@ impl CapabilityBuilder {
         &mut self,
         options: DocumentFormattingOptions,
     ) -> Result<(), BuildError> {
-        let contribution = OneOf::Right(options);
-        match &self.caps.document_formatting_provider {
-            Some(existing) if *existing != contribution => Err(BuildError::ConflictingCapability {
-                field: "documentFormattingProvider",
-            }),
-            _ => {
-                self.caps.document_formatting_provider = Some(contribution);
-                Ok(())
-            }
-        }
+        contribute_singular(
+            &mut self.caps.document_formatting_provider,
+            OneOf::Right(options),
+            "documentFormattingProvider",
+        )
     }
 
     pub(crate) fn set_range_formatting(
         &mut self,
         options: DocumentRangeFormattingOptions,
     ) -> Result<(), BuildError> {
-        let contribution = OneOf::Right(options);
-        match &self.caps.document_range_formatting_provider {
-            Some(existing) if *existing != contribution => Err(BuildError::ConflictingCapability {
-                field: "documentRangeFormattingProvider",
-            }),
-            _ => {
-                self.caps.document_range_formatting_provider = Some(contribution);
-                Ok(())
-            }
-        }
+        contribute_singular(
+            &mut self.caps.document_range_formatting_provider,
+            OneOf::Right(options),
+            "documentRangeFormattingProvider",
+        )
     }
 
     pub(crate) fn set_on_type_formatting(
         &mut self,
         options: DocumentOnTypeFormattingOptions,
     ) -> Result<(), BuildError> {
-        match &self.caps.document_on_type_formatting_provider {
-            Some(existing) if *existing != options => Err(BuildError::ConflictingCapability {
-                field: "documentOnTypeFormattingProvider",
-            }),
-            _ => {
-                self.caps.document_on_type_formatting_provider = Some(options);
-                Ok(())
-            }
-        }
+        contribute_singular(
+            &mut self.caps.document_on_type_formatting_provider,
+            options,
+            "documentOnTypeFormattingProvider",
+        )
     }
 
     pub(crate) fn set_document_color(
@@ -492,48 +497,33 @@ impl CapabilityBuilder {
         &mut self,
         options: FoldingProviderOptions,
     ) -> Result<(), BuildError> {
-        let contribution = options.into();
-        match &self.caps.folding_range_provider {
-            Some(existing) if *existing != contribution => Err(BuildError::ConflictingCapability {
-                field: "foldingRangeProvider",
-            }),
-            _ => {
-                self.caps.folding_range_provider = Some(contribution);
-                Ok(())
-            }
-        }
+        contribute_singular(
+            &mut self.caps.folding_range_provider,
+            options.into(),
+            "foldingRangeProvider",
+        )
     }
 
     pub(crate) fn set_selection_range(
         &mut self,
         options: SelectionRangeOptions,
     ) -> Result<(), BuildError> {
-        let contribution = options.into();
-        match &self.caps.selection_range_provider {
-            Some(existing) if *existing != contribution => Err(BuildError::ConflictingCapability {
-                field: "selectionRangeProvider",
-            }),
-            _ => {
-                self.caps.selection_range_provider = Some(contribution);
-                Ok(())
-            }
-        }
+        contribute_singular(
+            &mut self.caps.selection_range_provider,
+            options.into(),
+            "selectionRangeProvider",
+        )
     }
 
     pub(crate) fn set_inline_value(
         &mut self,
         options: InlineValueOptions,
     ) -> Result<(), BuildError> {
-        let contribution = OneOf::Right(InlineValueServerCapabilities::Options(options));
-        match &self.caps.inline_value_provider {
-            Some(existing) if *existing != contribution => Err(BuildError::ConflictingCapability {
-                field: "inlineValueProvider",
-            }),
-            _ => {
-                self.caps.inline_value_provider = Some(contribution);
-                Ok(())
-            }
-        }
+        contribute_singular(
+            &mut self.caps.inline_value_provider,
+            OneOf::Right(InlineValueServerCapabilities::Options(options)),
+            "inlineValueProvider",
+        )
     }
 
     /// Contribute the hover capability. Hover carries no options, so repeated
