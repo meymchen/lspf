@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `ServerBuilder::text_document_sync` accepts protocol-owned
+  `TextDocumentSyncOptions`, with incremental synchronization as the default.
+- Typed post-validation hooks for `textDocument/willSave` and
+  `textDocument/didSave`, plus `features::will_save_wait_until()`.
+
+### Changed
+
+- Advertised document-sync capabilities, accepted notifications, document
+  mutations, and hooks now share one effective configuration. Save-related
+  fields are inferred from registrations, while conflicting explicit `false`
+  values fail the build.
+
 ## [0.2.0] - 2026-08-02
 
 `0.2.0` replaces the `LanguageServer` trait with the built `Server`, the typed
