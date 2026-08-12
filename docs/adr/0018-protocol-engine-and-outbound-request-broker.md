@@ -9,7 +9,10 @@ of the unbounded outbound queue selected by
 Status note:
 [ADR 0019](0019-protocol-invariants-and-service-layers.md) supersedes this
 ADR's references to `.no_default_layers()`; there is no all-off switch and
-panic isolation is always installed. The historical body below is unchanged.
+panic isolation is always installed.
+[ADR 0023](0023-configurable-document-synchronization.md) extends the
+protocol-owned document-sync set with `willSave` and `didSave` validation and
+post-validation hooks.
 
 ## Context
 
@@ -93,8 +96,9 @@ built-ins that users cannot replace:
 2. shutdown and exit state transitions;
 3. `$/cancelRequest`;
 4. inbound correlation of responses to outbound requests;
-5. `textDocument/didOpen`, `textDocument/didChange`, and
-   `textDocument/didClose` mutation;
+5. document-sync validation, including `textDocument/willSave` and
+   `textDocument/didSave`, plus `didOpen`, `didChange`, and `didClose`
+   mutation;
 6. workspace-folder mutation;
 7. `$/setTrace`; and
 8. the work-done progress cancellation registry and
@@ -104,7 +108,8 @@ These built-ins remain installed when `.no_default_layers()` disables the
 Default stack. A user registration with the method name of a built-in does not
 replace or shadow the built-in. For protocol-built-in notifications other than
 `exit`, ADR 0017's `.notification::<N>(handler)` registration records the one
-post-mutation hook instead of a Router entry. The three lifecycle hooks use
+post-validation hook instead of a Router entry. Hooks for state-mutating
+notifications observe the completed mutation. The three lifecycle hooks use
 the dedicated builder methods defined below.
 
 ## Interface and behavior
@@ -200,14 +205,16 @@ hook registration is a `BuildError`. Every such notification has fixed
 ordering:
 
 1. decode typed parameters;
-2. perform built-in validation and mutation; and
+2. perform built-in validation and any state mutation; and
 3. invoke the user notification hook.
 
-The hook observes the post-mutation `Context` state. If decoding or built-in
-validation fails, the hook does not run. A hook cannot suppress, roll back, or
-reorder built-in behavior. In particular, document hooks observe the updated
-[[Documents]] state, workspace-folder hooks observe the updated `Workspace`,
-and cancellation and trace hooks observe the updated protocol state.
+The hook runs after validation. If the built-in mutates state, the hook
+observes the post-mutation `Context`; `willSave` and `didSave` instead observe
+the unchanged [[Documents]]. If decoding or built-in validation fails, the hook
+does not run. A hook cannot suppress, roll back, or reorder built-in behavior.
+In particular, open/change/close hooks observe the updated [[Documents]],
+workspace-folder hooks observe the updated `Workspace`, and cancellation and
+trace hooks observe the updated protocol state.
 
 The three lifecycle hooks have dedicated builder methods:
 
@@ -285,8 +292,9 @@ protocol validity and ordering before the user `Service`; making them
 optional would invalidate the engine invariants.
 
 We rejected replacement registrations for built-in notifications. A
-post-mutation hook preserves extensibility while guaranteeing that framework
-state is current before user code observes the event.
+post-validation hook preserves extensibility while guaranteeing that protocol
+validation has completed; for state-mutating built-ins, framework state is
+current before user code observes the event.
 
 We rejected letting `on_initialize` alter capabilities or register routes.
 ADR 0017 already provides the transactional `configure_initialize` registrar
@@ -307,7 +315,7 @@ correlation, out-of-order completion, and a guarantee that session close wakes
 every caller.
 
 Built-ins are less replaceable than ordinary standard-feature handlers.
-Dedicated post-mutation hooks provide observation and extension without
+Dedicated post-validation hooks provide observation and extension without
 allowing user code to disable validation or corrupt framework-owned state.
 Applications that need different fundamental lifecycle semantics must build
 outside this framework boundary.
@@ -333,7 +341,7 @@ the engine.
 
 User code that previously intended to replace a document, cancellation,
 workspace, trace, or lifecycle notification must use its dedicated
-post-mutation hook. Initialization-dependent feature registration remains in
+post-validation hook. Initialization-dependent feature registration remains in
 `configure_initialize`; non-registration initialization work and optional
 `ServerInfo` move to `on_initialize`.
 

@@ -26,8 +26,9 @@ use bytes::Bytes;
 use futures_util::future::{Either, select};
 use lsp_types::{
     DidChangeConfigurationParams, DidChangeTextDocumentParams, DidChangeWorkspaceFoldersParams,
-    DidCloseTextDocumentParams, DidOpenTextDocumentParams, InitializeParams, InitializeResult,
-    OneOf, SetTraceParams, TextDocumentSyncCapability, TextDocumentSyncKind,
+    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
+    InitializeParams, InitializeResult, OneOf, SetTraceParams, TextDocumentSyncKind,
+    TextDocumentSyncOptions, TextDocumentSyncSaveOptions, WillSaveTextDocumentParams,
     WorkspaceFoldersServerCapabilities, WorkspaceServerCapabilities,
 };
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
@@ -35,7 +36,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Span, debug, info_span, warn};
 
 use crate::builder::{
-    ConfigureInitialize, InitializeRegistrar, OnInitialize, ProtocolMutation, Registrations, Server,
+    ConfigureInitialize, InitializeRegistrar, OnInitialize, ProtocolNotification, Registrations,
+    Server,
 };
 use crate::client::{Client, OutboundRegistry};
 use crate::codec::{decode_params, decode_value, encode_body};
@@ -48,6 +50,27 @@ use crate::service::{IncomingCall, ServiceResult, UserLayer, UserService, build_
 use crate::transport::{Transport, TransportError, TransportReader, TransportWriter};
 use crate::workspace::Workspace;
 use crate::{LspError, Result};
+
+fn validate_sync_changes(
+    kind: TextDocumentSyncKind,
+    changes: &[lsp_types::TextDocumentContentChangeEvent],
+) -> std::result::Result<(), LspError> {
+    if kind == TextDocumentSyncKind::INCREMENTAL {
+        return Ok(());
+    }
+    if kind == TextDocumentSyncKind::FULL {
+        return if changes.iter().all(|change| change.range.is_none()) {
+            Ok(())
+        } else {
+            Err(LspError::invalid_request(
+                "range changes require incremental document synchronization",
+            ))
+        };
+    }
+    Err(LspError::invalid_request(
+        "document changes are disabled by the configured synchronization kind",
+    ))
+}
 
 /// How one connection ended.
 ///
@@ -434,6 +457,7 @@ struct ProtocolEngine<S, R> {
     state: Arc<S>,
     documents: Documents,
     workspace: Option<Workspace>,
+    document_sync: TextDocumentSyncOptions,
     lifecycle: Lifecycle<S>,
     inbound: InboundRegistry,
     tasks: TaskGroup<R>,
@@ -466,6 +490,9 @@ where
             state: server.state,
             documents: Documents::new(),
             workspace: None,
+            // Document notifications are processed only after initialize has
+            // replaced this with the validated effective configuration.
+            document_sync: TextDocumentSyncOptions::default(),
             lifecycle: Lifecycle::Uninitialized(Box::new(Pending {
                 registrations: server.registrations,
                 configure_initialize: server.configure_initialize,
@@ -650,18 +677,25 @@ where
                     };
                     let service = Arc::clone(service);
 
-                    // A protocol mutation notification is a built-in (ADR
-                    // 0018): its decode and mutation run here, on the
+                    // A protocol-owned notification is a built-in (ADR 0018):
+                    // its validation and any mutation run here, on the
                     // read-loop, before anything user-registered is reached, so
                     // the hook below — and every later message — observes the
                     // mutated state. A failure reports the notification
                     // error and skips the hook, leaving the connection to
                     // process the next message.
-                    if let Some(built_in) = ProtocolMutation::from_method(other)
-                        && let Err(error) = self.apply_protocol_mutation(built_in, &params)
-                    {
-                        warn!(method = other, %error, "protocol mutation skipped its hook");
-                        return Flow::Continue;
+                    if let Some(built_in) = ProtocolNotification::from_method(other) {
+                        if !self.accepts_protocol_notification(built_in) {
+                            debug!(
+                                method = other,
+                                "document-sync notification disabled and ignored"
+                            );
+                            return Flow::Continue;
+                        }
+                        if let Err(error) = self.process_protocol_notification(built_in, &params) {
+                            warn!(method = other, %error, "protocol validation skipped its hook");
+                            return Flow::Continue;
+                        }
                     }
 
                     // The same bytes decode again into the method-erased value
@@ -675,7 +709,7 @@ where
                         }
                     };
                     // A registered notification — a custom route or a built-in's
-                    // post-mutation hook — dispatches with no response; an
+                    // post-validation hook — dispatches with no response; an
                     // unregistered one is ignored.
                     self.dispatch_notification(service, other, params).await;
                 }
@@ -727,7 +761,7 @@ where
         }
     }
 
-    /// Decode and apply a protocol-owned notification mutation (ADR 0018).
+    /// Validate and, where applicable, mutate for a protocol-owned notification.
     ///
     /// Built-in validation is what the documents themselves can establish: a
     /// change names a document that must already be open, and each of its
@@ -735,25 +769,31 @@ where
     /// is what skips the notification's hook, so nothing partial is left for a
     /// hook to observe: a rejected `didChange` batch leaves the document at the
     /// revision the last accepted notification produced.
-    fn apply_protocol_mutation(
+    fn process_protocol_notification(
         &self,
-        built_in: ProtocolMutation,
+        built_in: ProtocolNotification,
         raw_params: &Bytes,
     ) -> std::result::Result<(), LspError> {
         match built_in {
-            ProtocolMutation::Open => {
+            ProtocolNotification::Open => {
                 let params: DidOpenTextDocumentParams = decode_params(raw_params)?;
                 self.documents.open(params.text_document);
             }
-            ProtocolMutation::Change => {
+            ProtocolNotification::Change => {
                 let params: DidChangeTextDocumentParams = decode_params(raw_params)?;
+                validate_sync_changes(
+                    self.document_sync
+                        .change
+                        .unwrap_or(TextDocumentSyncKind::INCREMENTAL),
+                    &params.content_changes,
+                )?;
                 self.documents.apply_changes(
                     &params.text_document.uri,
                     params.text_document.version,
                     params.content_changes,
                 )?;
             }
-            ProtocolMutation::Close => {
+            ProtocolNotification::Close => {
                 let params: DidCloseTextDocumentParams = decode_params(raw_params)?;
                 // Closing a document that was never opened breaks the LSP's
                 // ordering, but there is nothing to roll back and no response
@@ -766,21 +806,59 @@ where
                     );
                 }
             }
-            ProtocolMutation::WorkspaceFolders => {
+            ProtocolNotification::WillSave => {
+                let _: WillSaveTextDocumentParams = decode_params(raw_params)?;
+            }
+            ProtocolNotification::Save => {
+                let params: DidSaveTextDocumentParams = decode_params(raw_params)?;
+                if matches!(
+                    &self.document_sync.save,
+                    Some(TextDocumentSyncSaveOptions::SaveOptions(options))
+                        if options.include_text == Some(true)
+                ) && params.text.is_none()
+                {
+                    return Err(LspError::invalid_request(
+                        "didSave text is required by textDocumentSync.save.includeText",
+                    ));
+                }
+            }
+            ProtocolNotification::WorkspaceFolders => {
                 let params: DidChangeWorkspaceFoldersParams = decode_params(raw_params)?;
                 self.established_workspace().apply_folder_change(params);
             }
-            ProtocolMutation::Configuration => {
+            ProtocolNotification::Configuration => {
                 let params: DidChangeConfigurationParams = decode_params(raw_params)?;
                 self.established_workspace()
                     .set_configuration(params.settings);
             }
-            ProtocolMutation::Trace => {
+            ProtocolNotification::Trace => {
                 let params: SetTraceParams = decode_params(raw_params)?;
                 self.established_workspace().set_trace(params.value);
             }
         }
         Ok(())
+    }
+
+    fn accepts_protocol_notification(&self, built_in: ProtocolNotification) -> bool {
+        match built_in {
+            ProtocolNotification::WorkspaceFolders
+            | ProtocolNotification::Configuration
+            | ProtocolNotification::Trace => true,
+            _ if self.document_sync.change == Some(TextDocumentSyncKind::NONE) => false,
+            ProtocolNotification::Open | ProtocolNotification::Close => {
+                self.document_sync.open_close == Some(true)
+            }
+            ProtocolNotification::Change => matches!(
+                self.document_sync.change,
+                Some(TextDocumentSyncKind::FULL | TextDocumentSyncKind::INCREMENTAL)
+            ),
+            ProtocolNotification::WillSave => self.document_sync.will_save == Some(true),
+            ProtocolNotification::Save => matches!(
+                self.document_sync.save,
+                Some(TextDocumentSyncSaveOptions::Supported(true))
+                    | Some(TextDocumentSyncSaveOptions::SaveOptions(_))
+            ),
+        }
     }
 
     /// Run the one `initialize` transaction (ADR 0017, ADR 0018).
@@ -882,12 +960,12 @@ where
         // implement, as one more protocol-owned field layered onto the frozen
         // catalog (ADR 0017) beside the negotiated position encoding. A client
         // that sees no `textDocumentSync` sends no document notification at
-        // all, leaving the built-ins and every post-mutation hook unreachable.
+        // all, leaving the built-ins and every post-validation hook unreachable.
         // Nothing user-registered contributes this field, so there is no
         // contribution here to overwrite.
-        capabilities.text_document_sync = Some(TextDocumentSyncCapability::Kind(
-            TextDocumentSyncKind::INCREMENTAL,
-        ));
+        let document_sync = router.document_sync();
+        self.document_sync = document_sync.options;
+        capabilities.text_document_sync = Some(document_sync.capability);
         // Workspace-folder sync is likewise a protocol built-in, so the
         // engine advertises its support itself. Registration-contributed
         // workspace fields (the file-operation families) come from the frozen
@@ -1089,6 +1167,37 @@ fn enqueue_error(out_tx: &UnboundedSender<RawMessage>, id: RequestId, err: LspEr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn content_change(with_range: bool) -> lsp_types::TextDocumentContentChangeEvent {
+        lsp_types::TextDocumentContentChangeEvent {
+            range: with_range.then(|| lsp_types::Range {
+                start: lsp_types::Position::new(0, 0),
+                end: lsp_types::Position::new(0, 1),
+            }),
+            range_length: None,
+            text: "replacement".to_string(),
+        }
+    }
+
+    #[test]
+    fn sync_kind_validation_accepts_only_compatible_change_shapes() {
+        assert!(
+            validate_sync_changes(TextDocumentSyncKind::FULL, &[content_change(false)]).is_ok()
+        );
+        assert!(
+            validate_sync_changes(TextDocumentSyncKind::FULL, &[content_change(true)]).is_err()
+        );
+        assert!(
+            validate_sync_changes(
+                TextDocumentSyncKind::INCREMENTAL,
+                &[content_change(true), content_change(false)],
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_sync_changes(TextDocumentSyncKind::NONE, &[content_change(false)]).is_err()
+        );
+    }
 
     #[test]
     fn the_first_requester_records_the_cause_and_later_ones_do_not_replace_it() {
