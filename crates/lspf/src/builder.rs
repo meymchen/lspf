@@ -228,7 +228,7 @@ where
 pub(crate) struct Registrations<S> {
     requests: HashMap<String, ErasedRequestHandler<S>>,
     notifications: HashMap<String, ErasedNotificationHandler<S>>,
-    /// Post-mutation hooks for protocol-owned notifications, kept apart from
+    /// Post-validation hooks for protocol-owned notifications, kept apart from
     /// `notifications` so no ordinary route can ever shadow a built-in.
     built_in_hooks: HashMap<String, ErasedNotificationHandler<S>>,
     commands: HashMap<String, ErasedCommandHandler<S>>,
@@ -518,9 +518,9 @@ impl<S> Router<S> {
     }
 
     /// The erased post-validation hook registered for a protocol-owned `method`,
-    /// if any (ADR 0018). The protocol engine has already decoded and mutated
-    /// by the time this hook is reached, so it observes — and cannot replace —
-    /// the built-in.
+    /// if any (ADR 0018, ADR 0023). The protocol engine has already decoded and
+    /// validated by the time this hook is reached. When the built-in mutates
+    /// state, the hook observes that mutation; it cannot replace the built-in.
     pub(crate) fn built_in_hook(&self, method: &str) -> Option<&ErasedNotificationHandler<S>> {
         self.built_in_hooks.get(method)
     }

@@ -205,14 +205,16 @@ hook registration is a `BuildError`. Every such notification has fixed
 ordering:
 
 1. decode typed parameters;
-2. perform built-in validation and mutation; and
+2. perform built-in validation and any state mutation; and
 3. invoke the user notification hook.
 
-The hook observes the post-mutation `Context` state. If decoding or built-in
-validation fails, the hook does not run. A hook cannot suppress, roll back, or
-reorder built-in behavior. In particular, document hooks observe the updated
-[[Documents]] state, workspace-folder hooks observe the updated `Workspace`,
-and cancellation and trace hooks observe the updated protocol state.
+The hook runs after validation. If the built-in mutates state, the hook
+observes the post-mutation `Context`; `willSave` and `didSave` instead observe
+the unchanged [[Documents]]. If decoding or built-in validation fails, the hook
+does not run. A hook cannot suppress, roll back, or reorder built-in behavior.
+In particular, open/change/close hooks observe the updated [[Documents]],
+workspace-folder hooks observe the updated `Workspace`, and cancellation and
+trace hooks observe the updated protocol state.
 
 The three lifecycle hooks have dedicated builder methods:
 
