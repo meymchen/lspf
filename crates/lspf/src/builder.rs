@@ -19,11 +19,13 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+#[cfg(test)]
+use lsp_types::ServerCapabilities;
 use lsp_types::notification::Notification;
 use lsp_types::request::Request;
 use lsp_types::{
-    InitializeParams, ServerCapabilities, ServerInfo, TextDocumentSyncCapability,
-    TextDocumentSyncKind, TextDocumentSyncOptions, TextDocumentSyncSaveOptions,
+    InitializeParams, ServerInfo, TextDocumentSyncCapability, TextDocumentSyncKind,
+    TextDocumentSyncOptions, TextDocumentSyncSaveOptions,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -31,7 +33,7 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use crate::capability::CapabilityBuilder;
+use crate::capability::{CapabilityBuilder, GeneratedCapabilities};
 use crate::codec::erase_value;
 use crate::context::Context;
 use crate::error::{BuildError, LspError};
@@ -486,7 +488,7 @@ impl<S: Send + Sync + 'static> Registrations<S> {
             notifications: self.notifications,
             built_in_hooks: self.built_in_hooks,
             commands: self.commands,
-            capabilities: self.capabilities.finish(),
+            capabilities: self.capabilities.finish_generated(),
             document_sync,
         }
     }
@@ -502,7 +504,7 @@ pub(crate) struct Router<S> {
     commands: HashMap<String, ErasedCommandHandler<S>>,
     /// Capabilities implied by the frozen registrations, computed once at
     /// freeze time from the same registrations used for dispatch.
-    capabilities: ServerCapabilities,
+    capabilities: GeneratedCapabilities,
     document_sync: DocumentSyncSettings,
 }
 
@@ -541,7 +543,12 @@ impl<S> Router<S> {
     /// and notifications contribute nothing; standard features and commands
     /// contribute their fields. The protocol engine layers on any
     /// protocol-owned negotiated fields separately.
+    #[cfg(test)]
     pub(crate) fn capabilities(&self) -> ServerCapabilities {
+        self.capabilities.standard.clone()
+    }
+
+    pub(crate) fn generated_capabilities(&self) -> GeneratedCapabilities {
         self.capabilities.clone()
     }
 
