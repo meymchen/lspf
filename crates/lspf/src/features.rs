@@ -93,7 +93,8 @@ pub fn will_save_wait_until() -> WillSaveWaitUntilFeature {
 
 #[allow(private_interfaces)]
 impl sealed::Sealed for WillSaveWaitUntilFeature {
-    fn contribute(&self, _caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
+    fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
+        caps.set_will_save_wait_until();
         Ok(())
     }
 }

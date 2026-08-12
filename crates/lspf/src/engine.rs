@@ -490,11 +490,9 @@ where
             state: server.state,
             documents: Documents::new(),
             workspace: None,
-            document_sync: TextDocumentSyncOptions {
-                open_close: Some(true),
-                change: Some(TextDocumentSyncKind::INCREMENTAL),
-                ..TextDocumentSyncOptions::default()
-            },
+            // Document notifications are processed only after initialize has
+            // replaced this with the validated effective configuration.
+            document_sync: TextDocumentSyncOptions::default(),
             lifecycle: Lifecycle::Uninitialized(Box::new(Pending {
                 registrations: server.registrations,
                 configure_initialize: server.configure_initialize,
@@ -711,7 +709,7 @@ where
                         }
                     };
                     // A registered notification — a custom route or a built-in's
-                    // post-mutation hook — dispatches with no response; an
+                    // post-validation hook — dispatches with no response; an
                     // unregistered one is ignored.
                     self.dispatch_notification(service, other, params).await;
                 }
@@ -962,7 +960,7 @@ where
         // implement, as one more protocol-owned field layered onto the frozen
         // catalog (ADR 0017) beside the negotiated position encoding. A client
         // that sees no `textDocumentSync` sends no document notification at
-        // all, leaving the built-ins and every post-mutation hook unreachable.
+        // all, leaving the built-ins and every post-validation hook unreachable.
         // Nothing user-registered contributes this field, so there is no
         // contribution here to overwrite.
         let document_sync = router.document_sync();

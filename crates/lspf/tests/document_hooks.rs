@@ -1108,3 +1108,28 @@ fn explicit_false_save_fields_conflict_with_typed_registrations() {
         }
     );
 }
+
+#[test]
+fn sync_none_conflicts_with_save_registrations() {
+    let err = Server::builder(AppState {
+        seen: Arc::default(),
+    })
+    .text_document_sync(TextDocumentSyncOptions {
+        change: Some(TextDocumentSyncKind::NONE),
+        ..TextDocumentSyncOptions::default()
+    })
+    .feature(
+        lspf::features::will_save_wait_until(),
+        on_will_save_wait_until,
+    )
+    .build()
+    .err()
+    .expect("no synchronization cannot expose a save request route");
+
+    assert_eq!(
+        err,
+        BuildError::ConflictingCapability {
+            field: "textDocumentSync.willSaveWaitUntil"
+        }
+    );
+}

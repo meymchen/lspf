@@ -15,11 +15,11 @@ _Avoid_: Feature (pygls's term), callback, endpoint.
 **Built-in handler**:
 A handler that the framework ships out of the box. Scope: LSP lifecycle
 (`initialize`, `initialized`, `shutdown`, `exit`), text-document sync
-(`didOpen`, `didChange`, `didClose`), cancellation (`$/cancelRequest`),
-`$/setTrace`, workspace-folder sync, and work-done progress cancellation.
-The protocol built-ins fixed by ADR 0018 cannot be replaced; registering one
-of their notification methods records a post-mutation hook instead (see
-[[User handler]]).
+(`didOpen`, `didChange`, `didClose`, `willSave`, `didSave`), cancellation
+(`$/cancelRequest`), `$/setTrace`, workspace-folder sync, and work-done
+progress cancellation. The protocol built-ins fixed by ADR 0018 and ADR 0023
+cannot be replaced; registering one of their notification methods records a
+post-validation hook instead (see [[User handler]]).
 _Avoid_: Default handler — we standardize on "built-in" because it matches
 how the project describes "what the framework provides by default".
 
@@ -28,8 +28,8 @@ A handler that the user registers. For any LSP method that also has a
 built-in feature handler, the user handler takes priority — override happens
 via registration, not subclassing. Protocol built-ins fixed by ADR 0018 are
 the exception: their validation and mutation cannot be replaced, and a
-notification registration for one of those methods adds a post-mutation user
-hook.
+notification registration for one of those methods adds a post-validation
+user hook. When the built-in mutates state, that hook observes the mutation.
 _Avoid_: Custom handler (less precise), override (the mechanism, not the
 thing being registered).
 

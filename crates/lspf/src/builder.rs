@@ -308,7 +308,7 @@ impl<S: Send + Sync + 'static> Registrations<S> {
 
     /// Register a standard notification feature handler and its capability
     /// contribution. Shares [`add_notification`](Self::add_notification)'s
-    /// routing — a protocol-owned method still records a post-mutation hook
+    /// routing — a protocol-owned method still records a post-validation hook
     /// rather than a route.
     fn add_feature_notification<F, H, Fut>(&mut self, spec: F, handler: H) -> Result<(), BuildError>
     where
@@ -398,7 +398,7 @@ impl<S: Send + Sync + 'static> Registrations<S> {
         let will_save_hook = self
             .built_in_hooks
             .contains_key(ProtocolNotification::WILL_SAVE_METHOD);
-        let wait_until = self.requests.contains_key("textDocument/willSaveWaitUntil");
+        let wait_until = self.capabilities.has_will_save_wait_until();
 
         if let Some(explicit) = &self.document_sync {
             let save_disabled = matches!(
@@ -419,6 +419,20 @@ impl<S: Send + Sync + 'static> Registrations<S> {
                 return Err(BuildError::ConflictingCapability {
                     field: "textDocumentSync.willSaveWaitUntil",
                 });
+            }
+            if explicit.change == Some(TextDocumentSyncKind::NONE) {
+                let field = if save_hook {
+                    Some("textDocumentSync.save")
+                } else if will_save_hook {
+                    Some("textDocumentSync.willSave")
+                } else if wait_until {
+                    Some("textDocumentSync.willSaveWaitUntil")
+                } else {
+                    None
+                };
+                if let Some(field) = field {
+                    return Err(BuildError::ConflictingCapability { field });
+                }
             }
         }
 
@@ -503,7 +517,7 @@ impl<S> Router<S> {
         self.notifications.get(method)
     }
 
-    /// The erased post-mutation hook registered for a protocol-owned `method`,
+    /// The erased post-validation hook registered for a protocol-owned `method`,
     /// if any (ADR 0018). The protocol engine has already decoded and mutated
     /// by the time this hook is reached, so it observes — and cannot replace —
     /// the built-in.
@@ -1131,7 +1145,7 @@ mod tests {
 
         assert!(
             router.built_in_hook("textDocument/didOpen").is_some(),
-            "a built-in document notification records a post-mutation hook"
+            "a built-in document notification records a post-validation hook"
         );
         assert!(
             router.notification("textDocument/didOpen").is_none(),

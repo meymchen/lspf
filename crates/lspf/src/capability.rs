@@ -54,6 +54,7 @@ pub(crate) struct CapabilityBuilder {
     file_create: FileOperationFamily,
     file_rename: FileOperationFamily,
     file_delete: FileOperationFamily,
+    will_save_wait_until: bool,
 }
 
 /// The in-progress `completionProvider` capability family (ADR 0017). The
@@ -193,6 +194,15 @@ impl FileOperationFamily {
 }
 
 impl CapabilityBuilder {
+    /// Record the typed `textDocument/willSaveWaitUntil` contribution. The
+    /// protocol engine folds this into its protocol-owned sync options.
+    pub(crate) fn set_will_save_wait_until(&mut self) {
+        self.will_save_wait_until = true;
+    }
+
+    pub(crate) fn has_will_save_wait_until(&self) -> bool {
+        self.will_save_wait_until
+    }
     /// Contribute the hover capability. Hover carries no options, so repeated
     /// contributions are identical and never conflict; the caller already
     /// rejects a duplicate `textDocument/hover` handler before reaching here.
