@@ -7,8 +7,8 @@
 //! transport and prove the hook observes post-mutation state through the
 //! read-only `DocumentsView`, cannot suppress or roll back the built-in, and is
 //! skipped — without ending the connection — when decode or built-in validation
-//! fails. `didSave` has no built-in mutation in 0.2, so it stays an ordinary
-//! typed notification route.
+//! fails. `willSave` and `didSave` have no document mutation, but still pass
+//! through protocol-owned configuration and validation before their hooks.
 
 use std::borrow::Cow;
 use std::str::FromStr;
@@ -22,11 +22,14 @@ use tokio::sync::mpsc;
 
 use lspf::types::notification::{
     DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, DidSaveTextDocument,
+    WillSaveTextDocument,
 };
 use lspf::types::request::Request;
 use lspf::types::{
     DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-    DidSaveTextDocumentParams, Position, Uri,
+    DidSaveTextDocumentParams, Position, SaveOptions, TextDocumentSyncKind,
+    TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TextEdit, Uri,
+    WillSaveTextDocumentParams,
 };
 use lspf::{
     BuildError, CancellationToken, Context, LspError, RawMessage, RequestId, Server, Transport,
@@ -52,6 +55,10 @@ enum Seen {
         still_present: bool,
     },
     Save {
+        still_present: bool,
+        text: Option<String>,
+    },
+    WillSave {
         still_present: bool,
     },
 }
@@ -93,11 +100,28 @@ async fn on_did_close(state: Arc<AppState>, ctx: Context, params: DidCloseTextDo
 
 async fn on_did_save(state: Arc<AppState>, ctx: Context, params: DidSaveTextDocumentParams) {
     let still_present = ctx.documents().get(&params.text_document.uri).is_some();
+    state.seen.lock().unwrap().push(Seen::Save {
+        still_present,
+        text: params.text,
+    });
+}
+
+async fn on_will_save(state: Arc<AppState>, ctx: Context, params: WillSaveTextDocumentParams) {
+    let still_present = ctx.documents().get(&params.text_document.uri).is_some();
     state
         .seen
         .lock()
         .unwrap()
-        .push(Seen::Save { still_present });
+        .push(Seen::WillSave { still_present });
+}
+
+async fn on_will_save_wait_until(
+    _state: Arc<AppState>,
+    _ctx: Context,
+    _params: WillSaveTextDocumentParams,
+    _ct: CancellationToken,
+) -> Result<Option<Vec<TextEdit>>, LspError> {
+    Ok(Some(Vec::new()))
 }
 
 // --- A custom request that reads the documents through the view --------------
@@ -262,6 +286,16 @@ fn did_change(uri: &str, version: i32, start: u32, end: u32, text: &str) -> RawM
     )
 }
 
+fn did_change_full(uri: &str, version: i32, text: &str) -> RawMessage {
+    notification(
+        "textDocument/didChange",
+        json!({
+            "textDocument": { "uri": uri, "version": version },
+            "contentChanges": [{ "text": text }]
+        }),
+    )
+}
+
 fn did_close(uri: &str) -> RawMessage {
     notification(
         "textDocument/didClose",
@@ -273,6 +307,20 @@ fn did_save(uri: &str) -> RawMessage {
     notification(
         "textDocument/didSave",
         json!({ "textDocument": { "uri": uri } }),
+    )
+}
+
+fn did_save_with_text(uri: &str, text: &str) -> RawMessage {
+    notification(
+        "textDocument/didSave",
+        json!({ "textDocument": { "uri": uri }, "text": text }),
+    )
+}
+
+fn will_save(uri: &str) -> RawMessage {
+    notification(
+        "textDocument/willSave",
+        json!({ "textDocument": { "uri": uri }, "reason": 1 }),
     )
 }
 
@@ -379,10 +427,11 @@ async fn each_document_hook_observes_the_post_mutation_documents() {
                 text: Some("hello lspf".to_string()),
                 version: Some(2),
             },
-            // didSave has no built-in mutation in 0.2, so the document is
-            // untouched and still open when the ordinary route runs.
+            // didSave has no document mutation, so the document is untouched
+            // and still open when the post-validation hook runs.
             Seen::Save {
-                still_present: true
+                still_present: true,
+                text: None,
             },
             Seen::Close {
                 still_present: false
@@ -740,6 +789,33 @@ async fn initialize_advertises_the_built_in_incremental_document_sync() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn initialize_advertises_configured_full_document_sync() {
+    let server = Server::builder(AppState {
+        seen: Arc::default(),
+    })
+    .text_document_sync(TextDocumentSyncOptions {
+        open_close: Some(true),
+        change: Some(TextDocumentSyncKind::FULL),
+        will_save: Some(false),
+        will_save_wait_until: Some(false),
+        save: Some(false.into()),
+    })
+    .build()
+    .expect("full document synchronization is a valid configuration");
+
+    let outbox = drive(server, vec![initialize_request(1)]).await;
+    let wire = serde_json::to_string_pretty(
+        &ok_result::<serde_json::Value>(&outbox, 1)["capabilities"]["textDocumentSync"],
+    )
+    .expect("the capability serializes");
+    assert_eq!(
+        wire,
+        include_str!("fixtures/full_document_sync_capability.json").trim_end(),
+        "configured full synchronization stays byte-stable"
+    );
+}
+
 #[test]
 fn duplicate_document_hook_registration_fails_during_build() {
     let err = Server::builder(AppState {
@@ -753,5 +829,282 @@ fn duplicate_document_hook_registration_fails_during_build() {
     assert_eq!(
         err,
         BuildError::DuplicateMethod("textDocument/didOpen".to_string())
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sync_none_ignores_document_notifications_and_keeps_the_session_running() {
+    let seen: Log = Arc::default();
+    let server = Server::builder(AppState {
+        seen: Arc::clone(&seen),
+    })
+    .text_document_sync(TextDocumentSyncOptions {
+        change: Some(TextDocumentSyncKind::NONE),
+        ..TextDocumentSyncOptions::default()
+    })
+    .notification::<DidOpenTextDocument, _, _>(on_did_open)
+    .notification::<DidChangeTextDocument, _, _>(on_did_change)
+    .notification::<DidCloseTextDocument, _, _>(on_did_close)
+    .request::<Probe, _, _>(probe)
+    .build()
+    .expect("hooks may be registered even when synchronization is disabled");
+
+    let outbox = drive(
+        server,
+        vec![
+            initialize_request(1),
+            did_open("file:///none.txt", "before"),
+            did_change("file:///none.txt", 2, 0, 1, "X"),
+            did_close("file:///none.txt"),
+            probe_request(2, "file:///none.txt"),
+        ],
+    )
+    .await;
+
+    assert!(seen.lock().unwrap().is_empty(), "disabled hooks never run");
+    assert_eq!(probed(&outbox, 2).text, None, "no document was mutated");
+    let init: lspf::types::InitializeResult = ok_result(&outbox, 1);
+    assert_eq!(
+        init.capabilities.text_document_sync,
+        Some(lspf::types::TextDocumentSyncCapability::Kind(
+            TextDocumentSyncKind::NONE
+        ))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn full_sync_rejects_a_range_batch_atomically_and_skips_the_hook() {
+    let seen: Log = Arc::default();
+    let server = Server::builder(AppState {
+        seen: Arc::clone(&seen),
+    })
+    .text_document_sync(TextDocumentSyncOptions {
+        change: Some(TextDocumentSyncKind::FULL),
+        ..TextDocumentSyncOptions::default()
+    })
+    .notification::<DidOpenTextDocument, _, _>(on_did_open)
+    .notification::<DidChangeTextDocument, _, _>(on_did_change)
+    .request::<Probe, _, _>(probe)
+    .build()
+    .expect("full synchronization builds");
+
+    let outbox = drive(
+        server,
+        vec![
+            initialize_request(1),
+            did_open("file:///full.txt", "before"),
+            did_change("file:///full.txt", 2, 0, 1, "X"),
+            probe_request(2, "file:///full.txt"),
+            did_change_full("file:///full.txt", 3, "after"),
+            probe_request(3, "file:///full.txt"),
+        ],
+    )
+    .await;
+
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec![
+            Seen::Open {
+                text: Some("before".to_string()),
+                version: Some(1),
+            },
+            Seen::Change {
+                text: Some("after".to_string()),
+                version: Some(3),
+            },
+        ],
+        "the rejected change hook is skipped"
+    );
+    let document = probed(&outbox, 2);
+    assert_eq!(document.text.as_deref(), Some("before"));
+    assert_eq!(document.version, Some(1));
+    let replaced = probed(&outbox, 3);
+    assert_eq!(replaced.text.as_deref(), Some("after"));
+    assert_eq!(replaced.version, Some(3));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn incremental_sync_accepts_full_replacements() {
+    let seen: Log = Arc::default();
+    let outbox = drive(
+        observing_server(&seen),
+        vec![
+            initialize_request(1),
+            did_open("file:///replace.txt", "before"),
+            did_change_full("file:///replace.txt", 2, "after"),
+            probe_request(2, "file:///replace.txt"),
+        ],
+    )
+    .await;
+    let document = probed(&outbox, 2);
+    assert_eq!(document.text.as_deref(), Some("after"));
+    assert_eq!(document.version, Some(2));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn open_close_false_skips_built_ins_even_when_a_hook_is_registered() {
+    let seen: Log = Arc::default();
+    let server = Server::builder(AppState {
+        seen: Arc::clone(&seen),
+    })
+    .text_document_sync(TextDocumentSyncOptions {
+        open_close: Some(false),
+        ..TextDocumentSyncOptions::default()
+    })
+    .notification::<DidOpenTextDocument, _, _>(on_did_open)
+    .notification::<DidCloseTextDocument, _, _>(on_did_close)
+    .request::<Probe, _, _>(probe)
+    .build()
+    .expect("open/close may be disabled with a dormant hook");
+    let outbox = drive(
+        server,
+        vec![
+            initialize_request(1),
+            did_open("file:///closed.txt", "ignored"),
+            did_close("file:///closed.txt"),
+            probe_request(2, "file:///closed.txt"),
+        ],
+    )
+    .await;
+    assert!(seen.lock().unwrap().is_empty());
+    assert_eq!(probed(&outbox, 2).text, None);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn save_hooks_are_validated_then_run_and_are_inferred_into_capabilities() {
+    let seen: Log = Arc::default();
+    let server = Server::builder(AppState {
+        seen: Arc::clone(&seen),
+    })
+    .text_document_sync(TextDocumentSyncOptions {
+        save: Some(TextDocumentSyncSaveOptions::SaveOptions(SaveOptions {
+            include_text: Some(true),
+        })),
+        ..TextDocumentSyncOptions::default()
+    })
+    .notification::<WillSaveTextDocument, _, _>(on_will_save)
+    .notification::<DidSaveTextDocument, _, _>(on_did_save)
+    .build()
+    .expect("typed save hooks agree with the configured options");
+    let outbox = drive(
+        server,
+        vec![
+            initialize_request(1),
+            did_open("file:///save.txt", "saved"),
+            will_save("file:///save.txt"),
+            did_save("file:///save.txt"),
+            did_save_with_text("file:///save.txt", "saved"),
+        ],
+    )
+    .await;
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec![
+            Seen::WillSave {
+                still_present: true
+            },
+            Seen::Save {
+                still_present: true,
+                text: Some("saved".to_string()),
+            },
+        ]
+    );
+    let init: lspf::types::InitializeResult = ok_result(&outbox, 1);
+    let lspf::types::TextDocumentSyncCapability::Options(options) = init
+        .capabilities
+        .text_document_sync
+        .expect("sync capability")
+    else {
+        panic!("save hooks require the options capability form");
+    };
+    assert_eq!(options.will_save, Some(true));
+    assert_eq!(
+        options.save,
+        Some(TextDocumentSyncSaveOptions::SaveOptions(SaveOptions {
+            include_text: Some(true),
+        }))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn will_save_wait_until_descriptor_contributes_the_sync_capability() {
+    let server = Server::builder(AppState {
+        seen: Arc::default(),
+    })
+    .feature(
+        lspf::features::will_save_wait_until(),
+        on_will_save_wait_until,
+    )
+    .build()
+    .expect("the typed willSaveWaitUntil feature builds");
+    let outbox = drive(server, vec![initialize_request(1)]).await;
+    let init: lspf::types::InitializeResult = ok_result(&outbox, 1);
+    let lspf::types::TextDocumentSyncCapability::Options(options) = init
+        .capabilities
+        .text_document_sync
+        .expect("sync capability")
+    else {
+        panic!("willSaveWaitUntil requires the options capability form");
+    };
+    assert_eq!(options.will_save_wait_until, Some(true));
+}
+
+#[test]
+fn explicit_false_save_fields_conflict_with_typed_registrations() {
+    let save = Server::builder(AppState {
+        seen: Arc::default(),
+    })
+    .text_document_sync(TextDocumentSyncOptions {
+        save: Some(false.into()),
+        ..TextDocumentSyncOptions::default()
+    })
+    .notification::<DidSaveTextDocument, _, _>(on_did_save)
+    .build()
+    .err()
+    .expect("didSave conflicts with save: false");
+    assert_eq!(
+        save,
+        BuildError::ConflictingCapability {
+            field: "textDocumentSync.save"
+        }
+    );
+
+    let will_save = Server::builder(AppState {
+        seen: Arc::default(),
+    })
+    .text_document_sync(TextDocumentSyncOptions {
+        will_save: Some(false),
+        ..TextDocumentSyncOptions::default()
+    })
+    .notification::<WillSaveTextDocument, _, _>(on_will_save)
+    .build()
+    .err()
+    .expect("willSave conflicts with willSave: false");
+    assert_eq!(
+        will_save,
+        BuildError::ConflictingCapability {
+            field: "textDocumentSync.willSave"
+        }
+    );
+
+    let wait_until = Server::builder(AppState {
+        seen: Arc::default(),
+    })
+    .text_document_sync(TextDocumentSyncOptions {
+        will_save_wait_until: Some(false),
+        ..TextDocumentSyncOptions::default()
+    })
+    .feature(
+        lspf::features::will_save_wait_until(),
+        on_will_save_wait_until,
+    )
+    .build()
+    .err()
+    .expect("willSaveWaitUntil conflicts with its explicit false field");
+    assert_eq!(
+        wait_until,
+        BuildError::ConflictingCapability {
+            field: "textDocumentSync.willSaveWaitUntil"
+        }
     );
 }
