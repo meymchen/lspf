@@ -77,7 +77,7 @@ async fn on_did_open(state: Arc<AppState>, ctx: Context, params: DidOpenTextDocu
     let doc = ctx.documents().get(&params.text_document.uri);
     state.seen.lock().unwrap().push(Seen::Open {
         text: doc.as_ref().map(|d| d.text()),
-        version: doc.as_ref().map(|d| d.version()),
+        version: doc.as_ref().and_then(|d| d.version()),
     });
 }
 
@@ -85,7 +85,7 @@ async fn on_did_change(state: Arc<AppState>, ctx: Context, params: DidChangeText
     let doc = ctx.documents().get(&params.text_document.uri);
     state.seen.lock().unwrap().push(Seen::Change {
         text: doc.as_ref().map(|d| d.text()),
-        version: doc.as_ref().map(|d| d.version()),
+        version: doc.as_ref().and_then(|d| d.version()),
     });
 }
 
@@ -164,7 +164,7 @@ async fn probe(
     let doc = documents.get(&uri);
     Ok(ProbeResult {
         text: doc.as_ref().map(|d| d.text()),
-        version: doc.as_ref().map(|d| d.version()),
+        version: doc.as_ref().and_then(|d| d.version()),
         offset: params
             .position
             .and_then(|position| documents.position_to_offset(&uri, position)),

@@ -12,6 +12,7 @@ mod documents;
 mod engine;
 mod error;
 pub mod features;
+mod file_provider;
 mod raw;
 mod runtime;
 mod service;
@@ -47,12 +48,15 @@ pub use documents::{Document, DocumentsView, PositionEncoding};
 pub use engine::Outcome;
 pub use error::{BuildError, ClientError, Error, LspError, Result};
 pub use features::{FeatureSpec, NotificationFeatureSpec};
+pub use file_provider::{FileProvider, MemoryFileProvider};
 pub use raw::{JsonRpcError, RawMessage, RequestId};
+#[doc(hidden)]
+pub use runtime::TaskSend;
 pub use service::{CallKind, IncomingCall, Layer, Next, ServiceFuture, ServiceResult};
 #[cfg(not(target_arch = "wasm32"))]
 pub use transport::{StdioBuilder, StdioReader, StdioTransport, StdioWriter, stdio};
 pub use transport::{Transport, TransportError, TransportReader, TransportWriter};
-pub use workspace::Workspace;
+pub use workspace::{Workspace, WorkspaceError};
 
 /// Cancellation primitive passed to every request handler (ADR 0007).
 pub use tokio_util::sync::CancellationToken;
