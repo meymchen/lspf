@@ -46,6 +46,7 @@ use crate::codec::{decode_params, decode_value, encode_body};
 use crate::context::Context;
 use crate::documents::Documents;
 use crate::error::Error;
+use crate::file_provider::SharedFileProvider;
 use crate::raw::{JsonRpcError, RawMessage, RequestId};
 use crate::runtime::{Runtime, TaskHandle, TaskSend, default_runtime};
 use crate::service::{IncomingCall, ServiceResult, UserLayer, UserService, build_service_stack};
@@ -442,6 +443,7 @@ async fn send_loop<W: TransportWriter>(
 /// the transaction consumes it once, so it need not be `Clone`.
 struct Pending<S> {
     registrations: Registrations<S>,
+    file_provider: SharedFileProvider,
     configure_initialize: Option<ConfigureInitialize<S>>,
     on_initialize: Option<OnInitialize<S>>,
     layers: Vec<UserLayer<S>>,
@@ -506,6 +508,7 @@ where
             document_sync: TextDocumentSyncOptions::default(),
             lifecycle: Lifecycle::Uninitialized(Box::new(Pending {
                 registrations: server.registrations,
+                file_provider: server.file_provider,
                 configure_initialize: server.configure_initialize,
                 on_initialize: server.on_initialize,
                 layers: server.layers,
@@ -916,6 +919,7 @@ where
         };
         let Pending {
             registrations,
+            file_provider,
             configure_initialize,
             on_initialize,
             layers,
@@ -959,7 +963,8 @@ where
         // (step 5). The Workspace takes ownership of the connection's
         // Documents handle; the engine keeps its own clone for the built-in
         // document-sync mutations.
-        let established = Workspace::from_params(&params, self.documents.clone());
+        let established =
+            Workspace::from_params_with_provider(&params, self.documents.clone(), file_provider);
         self.workspace = Some(established.clone());
 
         let position_encoding = self.documents.negotiate_position_encoding(&params);

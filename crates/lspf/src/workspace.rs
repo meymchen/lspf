@@ -19,7 +19,8 @@ use lsp_types::{
 };
 use serde_json::Value;
 
-use crate::documents::{Documents, DocumentsView};
+use crate::documents::{Document, Documents, DocumentsView};
+use crate::file_provider::SharedFileProvider;
 use crate::uri_key::{UriKey, percent_decode};
 
 /// Cloneable handle to the connection's workspace state (ADR 0017).
@@ -33,7 +34,6 @@ pub struct Workspace {
     inner: Arc<WorkspaceState>,
 }
 
-#[derive(Debug)]
 struct WorkspaceState {
     client_info: Option<ClientInfo>,
     capabilities: ClientCapabilities,
@@ -43,6 +43,31 @@ struct WorkspaceState {
     configuration: RwLock<Option<Value>>,
     trace: RwLock<TraceValue>,
     documents: Documents,
+    file_provider: SharedFileProvider,
+}
+
+/// Failure to resolve a document through the connection's workspace.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum WorkspaceError {
+    #[error("resource not found")]
+    NotFound,
+}
+
+impl std::fmt::Debug for WorkspaceState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("WorkspaceState")
+            .field("client_info", &self.client_info)
+            .field("capabilities", &self.capabilities)
+            .field("initialization_options", &self.initialization_options)
+            .field("root_uri", &self.root_uri)
+            .field("folders", &self.folders)
+            .field("configuration", &self.configuration)
+            .field("trace", &self.trace)
+            .field("documents", &self.documents)
+            .field("file_provider", &"<FileProvider>")
+            .finish()
+    }
 }
 
 impl Workspace {
@@ -53,7 +78,20 @@ impl Workspace {
     /// all verbatim, folder order included; an absent `workspaceFolders` list
     /// yields no folders. `documents` is the connection's document store,
     /// which the workspace owns from here on.
+    #[cfg(test)]
     pub(crate) fn from_params(params: &InitializeParams, documents: Documents) -> Self {
+        Self::from_params_with_provider(
+            params,
+            documents,
+            crate::file_provider::erase(crate::MemoryFileProvider::new()),
+        )
+    }
+
+    pub(crate) fn from_params_with_provider(
+        params: &InitializeParams,
+        documents: Documents,
+        file_provider: SharedFileProvider,
+    ) -> Self {
         #[allow(deprecated)] // `root_uri` is deprecated in LSP but still the input we echo.
         let root_uri = params.root_uri.clone();
         Self {
@@ -66,6 +104,7 @@ impl Workspace {
                 configuration: RwLock::new(None),
                 trace: RwLock::new(TraceValue::Off),
                 documents,
+                file_provider,
             }),
         }
     }
@@ -147,6 +186,20 @@ impl Workspace {
         self.inner.documents.view()
     }
 
+    /// Resolve a document snapshot, preferring editor-open text over the
+    /// configured provider for unopened resources.
+    pub async fn text_document(&self, uri: &Uri) -> Result<Document, WorkspaceError> {
+        if let Some(document) = self.inner.documents.get(uri) {
+            return Ok(document);
+        }
+        self.inner
+            .file_provider
+            .read_text(uri)
+            .await
+            .map(|text| Document::provider_snapshot(uri.clone(), text))
+            .ok_or(WorkspaceError::NotFound)
+    }
+
     pub(crate) fn apply_folder_change(&self, params: DidChangeWorkspaceFoldersParams) {
         let mut folders = self.inner.folders.write().unwrap();
         for removed in params.event.removed {
@@ -195,6 +248,8 @@ mod tests {
 
     use super::*;
     use crate::documents::Documents;
+    use crate::file_provider::erase;
+    use crate::{MemoryFileProvider, WorkspaceError};
 
     fn uri(spelling: &str) -> Uri {
         Uri::from_str(spelling).expect("the test URI parses")
@@ -417,6 +472,72 @@ mod tests {
             workspace.clone().folders(),
             vec![folder("file:///after", "after")],
             "a cloned handle observes mutation made through the shared workspace"
+        );
+    }
+
+    #[tokio::test]
+    async fn text_document_prefers_an_open_document_over_the_provider() {
+        let documents = Documents::new();
+        let provider = MemoryFileProvider::new();
+        let requested = uri("file:///workspace/main.rs");
+        provider.insert(requested.clone(), "provider");
+        documents.open(TextDocumentItem {
+            uri: requested.clone(),
+            language_id: "rust".to_string(),
+            version: 7,
+            text: "editor".to_string(),
+        });
+        let workspace = Workspace::from_params_with_provider(
+            &InitializeParams::default(),
+            documents,
+            erase(provider),
+        );
+
+        let document = workspace.text_document(&requested).await.unwrap();
+
+        assert_eq!(document.text(), "editor");
+        assert_eq!(document.version(), Some(7));
+    }
+
+    #[tokio::test]
+    async fn provider_snapshots_are_versionless_not_cached_and_not_opened() {
+        let documents = Documents::new();
+        let provider = MemoryFileProvider::new();
+        let inserted = uri("file:///workspace/%61.rs");
+        let requested = uri("FILE:///workspace/a.rs");
+        provider.insert(inserted.clone(), "first");
+        let workspace = Workspace::from_params_with_provider(
+            &InitializeParams::default(),
+            documents.clone(),
+            erase(provider.clone()),
+        );
+
+        let first = workspace.text_document(&requested).await.unwrap();
+        assert_eq!(first.uri(), &requested);
+        assert_eq!(first.text(), "first");
+        assert_eq!(first.version(), None);
+        assert!(documents.get(&requested).is_none());
+
+        provider.insert(inserted, "second");
+        assert_eq!(
+            workspace.text_document(&requested).await.unwrap().text(),
+            "second",
+            "an unopened lookup consults the provider every time"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_missing_provider_resource_is_not_found() {
+        let requested = uri("file:///workspace/missing.rs");
+        let workspace = Workspace::from_params_with_provider(
+            &InitializeParams::default(),
+            Documents::new(),
+            erase(MemoryFileProvider::new()),
+        );
+
+        assert_eq!(
+            workspace.text_document(&requested).await.unwrap_err(),
+            WorkspaceError::NotFound
         );
     }
 }

@@ -16,13 +16,15 @@ mod sealed {
 /// Native tasks can move between Tokio worker threads, whereas a future WASM
 /// runtime will keep them on the worker thread that spawned them.
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) trait TaskSend: sealed::Sealed + Send {}
+#[doc(hidden)]
+pub trait TaskSend: sealed::Sealed + Send {}
 
 #[cfg(not(target_arch = "wasm32"))]
 impl<T: Send + ?Sized> TaskSend for T {}
 
 #[cfg(target_arch = "wasm32")]
-pub(crate) trait TaskSend: sealed::Sealed {}
+#[doc(hidden)]
+pub trait TaskSend: sealed::Sealed {}
 
 #[cfg(target_arch = "wasm32")]
 impl<T: ?Sized> TaskSend for T {}
