@@ -6,9 +6,13 @@
 //! generate capabilities, establish the connection's [`Workspace`],
 //! [`Documents`], and negotiated position encoding, and run the
 //! `on_initialize` lifecycle hook — all without exposing partial state
-//! (ADR 0017, ADR 0018). Inbound requests reserve their IDs before user work
-//! is spawned; the engine's atomic completion gate then arbitrates success,
-//! errors, and cancellation.
+//! (ADR 0017, ADR 0018). The later lifecycle notifications carry the remaining
+//! hooks: the client's `initialized` runs `on_initialized` once, in the
+//! running state only, and the peer's `exit` runs `on_exit` before the engine
+//! computes the exit outcome (ADR 0024) — the hook resolves to `()`, so it
+//! cannot change the exit code the lifecycle implies. Inbound
+//! requests reserve their IDs before user work is spawned; the engine's atomic
+//! completion gate then arbitrates success, errors, and cancellation.
 //!
 //! Every way a connection can end — reader EOF, a reader error, a writer send
 //! or shutdown failure, `exit`, and the fatal termination a failed initialize
@@ -27,7 +31,7 @@ use futures_util::future::{Either, select};
 use lsp_types::{
     DidChangeConfigurationParams, DidChangeTextDocumentParams, DidChangeWorkspaceFoldersParams,
     DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
-    InitializeParams, OneOf, ServerInfo, SetTraceParams, TextDocumentSyncKind,
+    InitializeParams, InitializedParams, OneOf, ServerInfo, SetTraceParams, TextDocumentSyncKind,
     TextDocumentSyncOptions, TextDocumentSyncSaveOptions, WillSaveTextDocumentParams,
     WorkspaceFoldersServerCapabilities, WorkspaceServerCapabilities,
 };
@@ -37,8 +41,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Span, debug, info_span, warn};
 
 use crate::builder::{
-    ConfigureInitialize, InitializeRegistrar, OnInitialize, ProtocolNotification, Registrations,
-    Server,
+    ConfigureInitialize, InitializeRegistrar, OnExit, OnInitialize, OnInitialized,
+    ProtocolNotification, Registrations, Server,
 };
 use crate::capability::GeneratedCapabilities;
 use crate::client::{Client, OutboundRegistry};
@@ -82,6 +86,23 @@ fn validate_sync_changes(
     Err(LspError::invalid_request(
         "document changes are disabled by the configured synchronization kind",
     ))
+}
+
+/// Decode the client's `initialized` notification params.
+///
+/// LSP 3.17 defines `InitializedParams` as an empty object, and clients send
+/// either `{}` or no params at all (JSON-RPC `null`). The `lsp-types` 0.97
+/// type is a unit struct, so its derived deserializer accepts only `null`;
+/// accepting the empty object too keeps the typed hook reachable from every
+/// real client.
+fn decode_initialized_params(raw: &Bytes) -> std::result::Result<InitializedParams, LspError> {
+    match serde_json::from_slice::<serde_json::Value>(raw) {
+        Ok(serde_json::Value::Null) => Ok(InitializedParams {}),
+        Ok(serde_json::Value::Object(map)) if map.is_empty() => Ok(InitializedParams {}),
+        _ => Err(LspError::invalid_params(
+            "initialized params must be an empty object",
+        )),
+    }
 }
 
 /// How one connection ended.
@@ -446,6 +467,8 @@ struct Pending<S> {
     file_provider: SharedFileProvider,
     configure_initialize: Option<ConfigureInitialize<S>>,
     on_initialize: Option<OnInitialize<S>>,
+    on_initialized: Option<OnInitialized<S>>,
+    on_exit: Option<OnExit<S>>,
     layers: Vec<UserLayer<S>>,
     concurrency_limit: usize,
 }
@@ -472,6 +495,14 @@ struct ProtocolEngine<S, R> {
     workspace: Option<Workspace>,
     document_sync: TextDocumentSyncOptions,
     lifecycle: Lifecycle<S>,
+    /// The `on_initialized` hook awaiting the client's `initialized`
+    /// notification. Lifted out of [`Pending`] when the initialize transaction
+    /// succeeds, and taken by the first running-state `initialized` message.
+    on_initialized: Option<OnInitialized<S>>,
+    /// The `on_exit` hook awaiting the peer's `exit` notification. Lifted out
+    /// of [`Pending`] when the initialize transaction succeeds; an `exit`
+    /// received earlier closes without a Workspace to hand it.
+    on_exit: Option<OnExit<S>>,
     inbound: InboundRegistry,
     tasks: TaskGroup<R>,
     out_tx: UnboundedSender<RawMessage>,
@@ -511,9 +542,13 @@ where
                 file_provider: server.file_provider,
                 configure_initialize: server.configure_initialize,
                 on_initialize: server.on_initialize,
+                on_initialized: server.on_initialized,
+                on_exit: server.on_exit,
                 layers: server.layers,
                 concurrency_limit: server.concurrency_limit,
             })),
+            on_initialized: None,
+            on_exit: None,
             inbound: InboundRegistry::default(),
             tasks: TaskGroup::new(runtime),
             out_tx,
@@ -663,6 +698,26 @@ where
             }
             RawMessage::Notification { method, params } => match method.as_ref() {
                 "exit" => {
+                    // The exit hook observes the ending first (ADR 0018,
+                    // ADR 0024): it runs after a successful initialize
+                    // transaction, before the engine computes the exit
+                    // outcome. It resolves to `()`, so it cannot change that
+                    // outcome — the LSP exit code below derives from
+                    // protocol-owned lifecycle state alone, and the hook
+                    // receives only the shared state and a live `Context`.
+                    if matches!(
+                        self.lifecycle,
+                        Lifecycle::Running(_) | Lifecycle::ShuttingDown
+                    ) && let Some(hook) = self.on_exit.take()
+                    {
+                        let span = info_span!("notification", method = "exit");
+                        let ctx = Context::for_notification(
+                            span,
+                            self.client.clone(),
+                            self.established_workspace(),
+                        );
+                        hook(Arc::clone(&self.state), ctx).await;
+                    }
                     // The LSP exit code comes from protocol-owned lifecycle
                     // state: 0 only when `shutdown` completed first.
                     let code = match self.lifecycle {
@@ -680,11 +735,41 @@ where
                         }
                     }
                 }
+                "initialized" => {
+                    // The initialized hook runs at most once, and only after a
+                    // successful initialize transaction: outside the running
+                    // state there is no Workspace for its Context, and the
+                    // notification is ignored without consuming the hook, so a
+                    // later, valid `initialized` still runs it. The params are
+                    // decoded before the hook is taken, so a malformed
+                    // notification leaves it in place too.
+                    let Lifecycle::Running(_) = &self.lifecycle else {
+                        debug!("initialized notification outside the running state ignored");
+                        return Flow::Continue;
+                    };
+                    let params = match decode_initialized_params(&params) {
+                        Ok(params) => params,
+                        Err(error) => {
+                            warn!(%error, "dropping initialized notification with malformed params");
+                            return Flow::Continue;
+                        }
+                    };
+                    let Some(hook) = self.on_initialized.take() else {
+                        return Flow::Continue;
+                    };
+                    let span = info_span!("notification", method = "initialized");
+                    let ctx = Context::for_notification(
+                        span,
+                        self.client.clone(),
+                        self.established_workspace(),
+                    );
+                    hook(Arc::clone(&self.state), ctx, params).await;
+                }
                 other => {
-                    // Outside the running state only the completion and exit
-                    // notifications handled above are processed: before
-                    // `initialize` there is no Router, and after `shutdown` the
-                    // connection accepts no further user work.
+                    // Outside the running state only the lifecycle and
+                    // completion notifications handled above are processed:
+                    // before `initialize` there is no Router, and after
+                    // `shutdown` the connection accepts no further user work.
                     let Lifecycle::Running(service) = &self.lifecycle else {
                         debug!(method = other, "notification outside running state ignored");
                         return Flow::Continue;
@@ -880,11 +965,12 @@ where
     /// In order: validate and consume the sole `initialize`; run
     /// `configure_initialize` against a transactional registrar; on success
     /// commit and permanently freeze the Router; establish the `Workspace`,
-    /// `Documents` encoding, and generated capabilities; run `on_initialize`
-    /// for optional `ServerInfo`; then enter the running state and reply. Any
-    /// configuration, validation, or `on_initialize` failure enqueues the fixed
-    /// error and requests the terminal close rather than returning to
-    /// uninitialized.
+    /// `Documents` encoding, and generated capabilities; park the
+    /// `on_initialized` and `on_exit` hooks for the running state; run
+    /// `on_initialize` for optional `ServerInfo`; then enter the running state
+    /// and reply. Any configuration, validation, or `on_initialize` failure
+    /// enqueues the fixed error and requests the terminal close rather than
+    /// returning to uninitialized.
     async fn initialize(&mut self, span: &Span, reservation: Reservation, params: Bytes) -> Flow {
         // A second `initialize` after the transaction has run is invalid.
         if !matches!(self.lifecycle, Lifecycle::Uninitialized(_)) {
@@ -922,6 +1008,8 @@ where
             file_provider,
             configure_initialize,
             on_initialize,
+            on_initialized,
+            on_exit,
             layers,
             concurrency_limit,
         } = pending;
@@ -955,6 +1043,12 @@ where
         // Commit: permanently freeze the Router before any capability is
         // generated.
         let router = Arc::new(registrations.freeze());
+
+        // The post-initialize lifecycle hooks become reachable only through
+        // dispatch in the running state, which the transaction enters at its
+        // end; they stay parked here until then.
+        self.on_initialized = on_initialized;
+        self.on_exit = on_exit;
 
         // Establish Workspace, Documents encoding, and generated capabilities
         // from InitializeParams before `on_initialize` observes them. Per
