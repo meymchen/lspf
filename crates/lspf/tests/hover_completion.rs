@@ -259,6 +259,50 @@ async fn completion_advertises_supplied_options_and_routes_results() {
     }
 }
 
+/// A server that registers hover and nothing else must advertise one minimal,
+/// byte-stable capability object: the negotiated encoding, engine-owned
+/// document sync, the hover provider, and workspace-folder support.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn minimal_hover_advertises_a_byte_stable_capability_snapshot() {
+    let (in_tx, in_rx) = mpsc::unbounded_channel::<RawMessage>();
+    let (out_tx, mut out_rx) = mpsc::unbounded_channel::<RawMessage>();
+    let transport = ChannelTransport { in_rx, out_tx };
+
+    let server = Server::builder(AppState)
+        .feature(lspf::features::hover(), hover)
+        .build()
+        .expect("a lone hover feature builds");
+
+    let handle = tokio::spawn(async move { server.serve(transport).await });
+    in_tx.send(initialize_request(1)).unwrap();
+    let response = tokio::time::timeout(Duration::from_secs(2), out_rx.recv())
+        .await
+        .expect("initialize response within 2s")
+        .expect("outgoing channel open");
+    let wire = match response {
+        RawMessage::Response {
+            result: Ok(bytes), ..
+        } => String::from_utf8(bytes.to_vec()).unwrap(),
+        other => panic!("expected a successful initialize response, got {other:?}"),
+    };
+    in_tx.send(exit()).unwrap();
+    drop(in_tx);
+    tokio::time::timeout(Duration::from_secs(2), handle)
+        .await
+        .expect("serve returned within 2s")
+        .expect("server task did not panic")
+        .expect("serve ended cleanly");
+
+    // Compare against the raw wire bytes, not a re-serialized typed value, so
+    // an added, renamed, or reordered field in the emitted object breaks here.
+    let fixture = include_str!("fixtures/minimal_hover_capabilities.json").trim_end();
+    assert_eq!(
+        wire, fixture,
+        "the minimal-hover capability snapshot must stay byte-stable; \
+         update the fixture only with a deliberate capability change"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn features_advertise_no_unrelated_capabilities() {
     let outbox = drive(vec![initialize_request(1), exit()]).await;

@@ -7,19 +7,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+`0.3` completes the typed registration surface the 0.2 `Server` started. A
+server registers standard features through the sealed descriptor catalog in
+[`lspf::features`](https://docs.rs/lspf/latest/lspf/features/): each
+descriptor fixes the wire method, the typed parameters and result, and the
+capability contribution at once, and `ServerCapabilities` are generated from
+the same registrations that dispatch — no handwritten capability object and
+no framework modification. The
+[features, capabilities, and the workspace][guide-features] guide and the
+[`lspf-hello`][hello] template server walk the complete journey, and
+[`crates/lspf-hello/tests/e2e.rs`][hello-e2e] verifies it over a real stdio
+connection.
+
 ### Added
 
-- `ServerBuilder::text_document_sync` accepts protocol-owned
-  `TextDocumentSyncOptions`, with incremental synchronization as the default.
+- The sealed feature catalog under `lspf::features`, covering the stable LSP
+  3.17 features: navigation (declaration, definition, type definition,
+  implementation, references, document highlight, document symbol, workspace
+  symbol, call and type hierarchies, moniker, linked editing range),
+  presentation (signature help, formatting, on-type formatting, document
+  color, color presentation, folding range, selection range, inline value,
+  inlay hints), semantic tokens (full, delta, and range), diagnostics
+  (document and workspace), file operations (will/did create, rename, and
+  delete), and watched files. Each request feature registers through
+  `ServerBuilder::feature`, each notification feature through
+  `ServerBuilder::feature_notification`.
+- Typed Commands beneath `workspace/executeCommand`, registered through
+  `ServerBuilder::command`. Each registered name merges into one
+  de-duplicated `executeCommandProvider` whose `commands` list preserves
+  registration order (ADR 0022).
+- The multi-root `Workspace` handle: client info, client capabilities,
+  initialization options, root URI, and workspace folders — verbatim and
+  order-preserving — plus the latest raw configuration settings and the
+  trace level, reachable through `Context::workspace()`.
+- `Workspace::text_document`, resolving a document snapshot from editor-open
+  text first and then the connection's configured `FileProvider`;
+  `MemoryFileProvider` for virtual resources and tests, and `OsFileProvider`
+  (with a byte-limit builder) for `file:` URIs on native targets.
+- The lifecycle hooks `on_initialize`, `on_initialized`, and `on_exit`.
+- `ServerBuilder::configure_initialize`, the single initialization-dependent
+  registration transaction: the callback sees read-only `InitializeParams`
+  and a transactional `InitializeRegistrar`, and either the whole
+  transaction commits or initialization fails.
+- `ServerBuilder::text_document_sync`, accepting protocol-owned
+  `TextDocumentSyncOptions`, with incremental synchronization as the
+  default.
 - Typed post-validation hooks for `textDocument/willSave` and
   `textDocument/didSave`, plus `features::will_save_wait_until()`.
 
 ### Changed
 
+- Capability derivation is now strict. Families that share one singular
+  capability field (diagnostics, semantic tokens, file operations, each
+  resolve/prepare family) merge their contributions under that field;
+  contributions that disagree, or a dependent feature registered without its
+  base (a dangling `resolveProvider` or `prepareProvider`), fail the build
+  with `BuildError::ConflictingCapability` instead of resolving by
+  registration order.
+- Command registration and an explicit `workspace/executeCommand` request
+  handler are a `BuildError::ExecuteCommandConflict` — the method routes
+  either to the command table or to the handler, never both.
 - Advertised document-sync capabilities, accepted notifications, document
   mutations, and hooks now share one effective configuration. Save-related
-  fields are inferred from registrations, while conflicting explicit `false`
-  values fail the build.
+  fields are inferred from registrations, while conflicting explicit
+  `false` values fail the build.
+- The connection's `Workspace` now owns the document store; handlers reach
+  it through the read-only `DocumentsView` from `ctx.documents()`, and the
+  workspace's later mutations (folder and configuration changes, trace
+  updates) land before user hooks observe them.
+
+[guide-features]: https://github.com/meymchen/lspf/blob/main/docs/guides/features-and-workspace.md
+[hello]: https://github.com/meymchen/lspf/blob/main/crates/lspf-hello/src/main.rs
+[hello-e2e]: https://github.com/meymchen/lspf/blob/main/crates/lspf-hello/tests/e2e.rs
 
 ## [0.2.0] - 2026-08-02
 
