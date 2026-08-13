@@ -74,6 +74,19 @@ impl UriKey {
 /// and `c:` the same key. Lossy UTF-8 keeps even a pathologically encoded
 /// path deterministic.
 pub(crate) fn percent_decode(s: &str) -> String {
+    String::from_utf8_lossy(&percent_decode_bytes(s)).into_owned()
+}
+
+/// Decode like [`percent_decode`], but fail on bytes that are not valid
+/// UTF-8. The strict form is for places where the decoded string must name a
+/// real resource — a native file path — rather than merely compare equal to
+/// another spelling.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn percent_decode_strict(s: &str) -> Option<String> {
+    String::from_utf8(percent_decode_bytes(s)).ok()
+}
+
+fn percent_decode_bytes(s: &str) -> Vec<u8> {
     let bytes = s.as_bytes();
     let mut decoded = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -89,7 +102,7 @@ pub(crate) fn percent_decode(s: &str) -> String {
             i += 1;
         }
     }
-    String::from_utf8_lossy(&decoded).into_owned()
+    decoded
 }
 
 fn hex_value(byte: u8) -> Option<u8> {
@@ -197,6 +210,14 @@ mod tests {
     fn distinct_documents_stay_distinct() {
         assert_ne!(key("file:///a.rs"), key("file:///b.rs"));
         assert_ne!(key("file:///a.rs"), key("untitled:///a.rs"));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn strict_decode_rejects_non_utf8_and_keeps_malformed_triplets() {
+        assert_eq!(percent_decode_strict("a%20b").as_deref(), Some("a b"));
+        assert_eq!(percent_decode_strict("%FF").as_deref(), None);
+        assert_eq!(percent_decode_strict("a%zzb").as_deref(), Some("a%zzb"));
     }
 
     #[test]
