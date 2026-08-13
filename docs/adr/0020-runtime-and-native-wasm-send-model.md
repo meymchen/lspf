@@ -1,5 +1,10 @@
 # Runtime and the native/WASM Send model
 
+Status note: `OsFileProvider` (issue #80) is a native-only adapter in the
+same class as the native Transport adapters: its `tokio::fs` usage is
+confined to a `#[cfg(not(target_arch = "wasm32"))]` module, so the portable
+protocol kernel still names no tokio I/O.
+
 Status: Accepted. Fixes the interface of the `Runtime` ownership boundary
 named by [ADR 0017](0017-typed-router-and-capability-catalog.md) and the
 execution seam for the task group and close path that `ProtocolEngine` owns
