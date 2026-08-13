@@ -8,11 +8,15 @@
 //! against a transactional [`InitializeRegistrar`], then the [`on_initialize`]
 //! lifecycle hook. This surface wires typed custom requests and notifications,
 //! typed commands beneath `workspace/executeCommand`, the standard features
-//! with sealed descriptors in [`lspf::features`](crate::features), and the two
-//! initialize-time hooks.
+//! with sealed descriptors in [`lspf::features`](crate::features), and the
+//! lifecycle hooks: [`on_initialize`], [`on_initialized`] (which runs once the
+//! client acknowledges initialization), and [`on_exit`] (which observes the
+//! connection's ending without being able to change its [`Outcome`]).
 //!
 //! [`configure_initialize`]: ServerBuilder::configure_initialize
 //! [`on_initialize`]: ServerBuilder::on_initialize
+//! [`on_initialized`]: ServerBuilder::on_initialized
+//! [`on_exit`]: ServerBuilder::on_exit
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -24,8 +28,8 @@ use lsp_types::ServerCapabilities;
 use lsp_types::notification::Notification;
 use lsp_types::request::Request;
 use lsp_types::{
-    InitializeParams, ServerInfo, TextDocumentSyncCapability, TextDocumentSyncKind,
-    TextDocumentSyncOptions, TextDocumentSyncSaveOptions,
+    InitializeParams, InitializedParams, ServerInfo, TextDocumentSyncCapability,
+    TextDocumentSyncKind, TextDocumentSyncOptions, TextDocumentSyncSaveOptions,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -163,6 +167,19 @@ pub(crate) type OnInitialize<S> = Box<
         + Send
         + Sync,
 >;
+
+/// The erased `on_initialized` lifecycle hook. It has the notification handler
+/// shape — the client's `initialized` notification carries no response — so it
+/// resolves to `()`. The engine invokes it at most once, only after the
+/// initialize transaction succeeded.
+pub(crate) type OnInitialized<S> =
+    Box<dyn Fn(Arc<S>, Context, InitializedParams) -> NotificationFuture + Send + Sync>;
+
+/// The erased `on_exit` lifecycle hook. `exit` carries no parameters, so the
+/// typed hook receives only the shared state and a [`Context`]; it resolves to
+/// `()`, which is what keeps the engine's lifecycle-derived [`Outcome`] beyond
+/// its reach.
+pub(crate) type OnExit<S> = Box<dyn Fn(Arc<S>, Context) -> NotificationFuture + Send + Sync>;
 
 /// Wrap a typed request handler in the erased closure the [`Router`] stores.
 /// Shared by [`ServerBuilder::request`] and [`ServerBuilder::feature`], which
@@ -568,6 +585,8 @@ pub struct ServerBuilder<S> {
     registrations: Registrations<S>,
     configure_initialize: Option<ConfigureInitialize<S>>,
     on_initialize: Option<OnInitialize<S>>,
+    on_initialized: Option<OnInitialized<S>>,
+    on_exit: Option<OnExit<S>>,
     layers: Vec<UserLayer<S>>,
     concurrency_limit: usize,
     /// First registration error seen, if any. Reported by `build`.
@@ -582,6 +601,8 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
             registrations: Registrations::new(),
             configure_initialize: None,
             on_initialize: None,
+            on_initialized: None,
+            on_exit: None,
             layers: Vec::new(),
             concurrency_limit: crate::DEFAULT_CONCURRENCY_LIMIT,
             error: None,
@@ -791,6 +812,60 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
         self
     }
 
+    /// Register the `on_initialized` lifecycle hook (ADR 0024).
+    ///
+    /// The hook runs at most once, and only after a successful initialize
+    /// transaction: when the client's `initialized` notification arrives while
+    /// the connection is running. It receives the shared application state, a
+    /// [`Context`], and the typed [`InitializedParams`]. A notification has no
+    /// response, so the hook resolves to `()`. An `initialized` notification
+    /// received before `initialize` or after `shutdown` is ignored without
+    /// consuming the hook, and malformed parameters are dropped.
+    ///
+    /// Supplying `on_initialized` more than once is a
+    /// [`BuildError::DuplicateLifecycleHook`] reported by [`build`](Self::build).
+    pub fn on_initialized<H, Fut>(mut self, hook: H) -> Self
+    where
+        H: Fn(Arc<S>, Context, InitializedParams) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        if self.on_initialized.is_some() {
+            self.record(BuildError::DuplicateLifecycleHook("on_initialized"));
+        } else {
+            self.on_initialized = Some(Box::new(move |state, ctx, params| {
+                Box::pin(hook(state, ctx, params))
+            }));
+        }
+        self
+    }
+
+    /// Register the `on_exit` lifecycle hook (ADR 0018, ADR 0024).
+    ///
+    /// The hook runs when the peer's `exit` notification arrives after a
+    /// successful initialize transaction, before the protocol engine computes
+    /// the exit outcome. It receives the shared application state and a
+    /// [`Context`] — the notification-handler shape; `exit` carries no
+    /// parameters — and resolves to `()`, so it cannot override the
+    /// lifecycle-derived outcome: the reported LSP exit code is still 0 after
+    /// a successful `shutdown` and 1 otherwise. An `exit` received before
+    /// `initialize` closes the connection with code 1 without running the
+    /// hook — no [`Workspace`](crate::Workspace) exists to hand it.
+    ///
+    /// Supplying `on_exit` more than once is a
+    /// [`BuildError::DuplicateLifecycleHook`] reported by [`build`](Self::build).
+    pub fn on_exit<H, Fut>(mut self, hook: H) -> Self
+    where
+        H: Fn(Arc<S>, Context) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        if self.on_exit.is_some() {
+            self.record(BuildError::DuplicateLifecycleHook("on_exit"));
+        } else {
+            self.on_exit = Some(Box::new(move |state, ctx| Box::pin(hook(state, ctx))));
+        }
+        self
+    }
+
     /// Register a user Layer around normalized user dispatch.
     ///
     /// The last registered Layer is outermost among user Layers. Framework
@@ -832,6 +907,8 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
             registrations: self.registrations,
             configure_initialize: self.configure_initialize,
             on_initialize: self.on_initialize,
+            on_initialized: self.on_initialized,
+            on_exit: self.on_exit,
             layers: self.layers,
             concurrency_limit: self.concurrency_limit,
         })
@@ -958,16 +1035,19 @@ impl<S: Send + Sync + 'static> InitializeRegistrar<S> {
 }
 
 /// Owns exactly one LSP connection: its application state, the static
-/// registrations awaiting the initialize transaction, and the optional
-/// initialization-dependent callback and `on_initialize` hook (ADR 0017,
-/// ADR 0018). A second connection requires a second `Server`; connection state
-/// is never shared between servers.
+/// registrations awaiting the initialize transaction, the optional
+/// initialization-dependent callback, and the lifecycle hooks (`on_initialize`,
+/// `on_initialized`, `on_exit`) (ADR 0017, ADR 0018). A second connection
+/// requires a second `Server`; connection state is never shared between
+/// servers.
 pub struct Server<S> {
     pub(crate) state: Arc<S>,
     pub(crate) file_provider: SharedFileProvider,
     pub(crate) registrations: Registrations<S>,
     pub(crate) configure_initialize: Option<ConfigureInitialize<S>>,
     pub(crate) on_initialize: Option<OnInitialize<S>>,
+    pub(crate) on_initialized: Option<OnInitialized<S>>,
+    pub(crate) on_exit: Option<OnExit<S>>,
     pub(crate) layers: Vec<UserLayer<S>>,
     pub(crate) concurrency_limit: usize,
 }
@@ -1441,6 +1521,68 @@ mod tests {
             .err()
             .expect("supplying on_initialize twice must fail");
         assert_eq!(err, BuildError::DuplicateLifecycleHook("on_initialize"));
+    }
+
+    async fn noop_on_initialized(
+        _state: Arc<DummyState>,
+        _ctx: Context,
+        _params: lsp_types::InitializedParams,
+    ) {
+    }
+
+    async fn noop_on_exit(_state: Arc<DummyState>, _ctx: Context) {}
+
+    #[test]
+    fn duplicate_on_initialized_is_a_build_error() {
+        let err = Server::builder(DummyState)
+            .on_initialized(noop_on_initialized)
+            .on_initialized(noop_on_initialized)
+            .build()
+            .err()
+            .expect("supplying on_initialized twice must fail");
+        assert_eq!(err, BuildError::DuplicateLifecycleHook("on_initialized"));
+    }
+
+    #[test]
+    fn duplicate_on_exit_is_a_build_error() {
+        let err = Server::builder(DummyState)
+            .on_exit(noop_on_exit)
+            .on_exit(noop_on_exit)
+            .build()
+            .err()
+            .expect("supplying on_exit twice must fail");
+        assert_eq!(err, BuildError::DuplicateLifecycleHook("on_exit"));
+    }
+
+    #[test]
+    fn lifecycle_hooks_contribute_no_catalog_capabilities() {
+        let server = Server::builder(DummyState)
+            .on_initialized(noop_on_initialized)
+            .on_exit(noop_on_exit)
+            .build()
+            .expect("a server with only lifecycle hooks builds");
+        let router = server.into_router();
+        assert!(
+            router.notification("initialized").is_none(),
+            "initialized is not a Router route; it is a reserved lifecycle notification"
+        );
+        assert_eq!(
+            router.capabilities(),
+            ServerCapabilities::default(),
+            "lifecycle hooks contribute nothing to the capability catalog"
+        );
+    }
+
+    #[test]
+    fn initialized_is_a_reserved_notification_method() {
+        let err = Server::builder(DummyState)
+            .notification::<lsp_types::notification::Initialized, _, _>(
+                |_s, _c, _p: lsp_types::InitializedParams| async {},
+            )
+            .build()
+            .err()
+            .expect("initialized is framework-reserved");
+        assert_eq!(err, BuildError::ReservedMethod("initialized".to_string()));
     }
 
     async fn ok_workspace_symbol(
