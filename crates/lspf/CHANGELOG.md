@@ -33,7 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Establish the complete Workspace snapshot and normalized URI identity ([#83](https://github.com/meymchen/lspf/pull/83))
 - release v0.2.0 ([#53](https://github.com/meymchen/lspf/pull/53))
 
-## [0.2.0](https://github.com/meymchen/lspf/compare/v0.1.3...v0.2.0) - 2026-08-02
+## [0.2.0](https://github.com/meymchen/lspf/releases/tag/v0.2.0) - 2026-08-02
 
 ### Added
 
@@ -60,9 +60,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Send typed Client notifications from handlers ([#60](https://github.com/meymchen/lspf/pull/60))
 - Run user dispatch through the fixed Service stack ([#59](https://github.com/meymchen/lspf/pull/59))
 - Guarantee exactly-once inbound request completion ([#58](https://github.com/meymchen/lspf/pull/58))
-
-## [0.1.3](https://github.com/meymchen/lspf/compare/v0.1.2...v0.1.3) - 2026-07-22
-
-### Other
-
-- automate releases with release-plz ([#28](https://github.com/meymchen/lspf/pull/28))
