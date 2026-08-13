@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/meymchen/lspf/compare/v0.2.1...v0.3.0) - 2026-08-14
+
+### Other
+
+- Ship the 0.3 examples, guides, and stdio verification ([#82](https://github.com/meymchen/lspf/pull/82)) ([#98](https://github.com/meymchen/lspf/pull/98))
+- Complete lifecycle hooks and enforce the stable catalog boundary ([#81](https://github.com/meymchen/lspf/pull/81)) ([#97](https://github.com/meymchen/lspf/pull/97))
+- Read file URIs through OsFileProvider ([#80](https://github.com/meymchen/lspf/pull/80)) ([#96](https://github.com/meymchen/lspf/pull/96))
+- Add navigation and lookup feature descriptors ([#79](https://github.com/meymchen/lspf/pull/79)) ([#95](https://github.com/meymchen/lspf/pull/95))
+- Resolve workspace documents through file providers ([#78](https://github.com/meymchen/lspf/pull/78)) ([#94](https://github.com/meymchen/lspf/pull/94))
+- Add editing and presentation feature descriptors ([#93](https://github.com/meymchen/lspf/pull/93))
+- Add hierarchy and semantic token feature families ([#76](https://github.com/meymchen/lspf/pull/76)) ([#92](https://github.com/meymchen/lspf/pull/92))
+- Configure document synchronization end to end ([#91](https://github.com/meymchen/lspf/pull/91))
+- Add resolve and prepare text-document feature families ([#74](https://github.com/meymchen/lspf/pull/74)) ([#90](https://github.com/meymchen/lspf/pull/90))
+- Serve workspace requests and file-operation routes ([#73](https://github.com/meymchen/lspf/pull/73)) ([#89](https://github.com/meymchen/lspf/pull/89))
+- Merge document and workspace diagnostics ([#87](https://github.com/meymchen/lspf/pull/87))
+
 ## [0.2.1](https://github.com/meymchen/lspf/compare/v0.2.0...v0.2.1) - 2026-08-10
 
 ### Other
