@@ -29,9 +29,9 @@ pub mod types {
 }
 
 /// Compiles the Rust in the repository's user-facing Markdown as doc-tests, so
-/// a quickstart or a migration example cannot drift from the surface it
-/// documents. The module exists only under `cargo test --doc`; nothing here is
-/// part of the public API.
+/// a quickstart or a guide example cannot drift from the surface it documents.
+/// The module exists only under `cargo test --doc`; nothing here is part of
+/// the public API.
 #[cfg(doctest)]
 mod markdown {
     #[doc = include_str!("../../../README.md")]
@@ -39,9 +39,6 @@ mod markdown {
 
     #[doc = include_str!("../../../README.zh-CN.md")]
     pub struct ReadmeZhCn;
-
-    #[doc = include_str!("../../../docs/migrations/0.1-to-0.2.md")]
-    pub struct MigrationGuide;
 
     #[doc = include_str!("../../../docs/guides/features-and-workspace.md")]
     pub struct FeaturesAndWorkspaceGuide;
