@@ -3,73 +3,20 @@
 //! notification, a stdout stream carrying nothing but LSP frames, and the LSP
 //! exit codes the binary maps its `Outcome` onto.
 
-use std::path::PathBuf;
-use std::process::Stdio;
+mod common;
+
 use std::time::Duration;
 
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{ChildStdin, ChildStdout, Command};
+use tokio::io::{AsyncReadExt, BufReader};
 
-fn hello_binary() -> PathBuf {
-    // Cargo builds the binary target before running integration tests and
-    // exposes its path through this env var, so the test always drives the
-    // freshly compiled `lspf-hello`.
-    PathBuf::from(env!("CARGO_BIN_EXE_lspf-hello"))
-}
-
-/// The freshly built server with all three streams piped, ready to spawn.
-///
-/// `kill_on_drop` keeps a test that fails mid-session from leaving the process
-/// behind; every stream is piped so nothing the server writes can reach the
-/// test runner's own console. Returned unspawned for the one test that also
-/// sets an environment variable.
-fn hello_command() -> Command {
-    let mut command = Command::new(hello_binary());
-    command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    command
-}
-
-/// Spawn the server, so a test only has to describe the session it drives.
-fn spawn_hello() -> tokio::process::Child {
-    hello_command().spawn().expect("spawn hello")
-}
+use common::{hello_command, read_framed, spawn_hello, write_framed};
 
 /// The `initialize` request the fixture describes — a real editor's payload.
 fn initialize_request(id: i32) -> Value {
     let params: Value = serde_json::from_str(include_str!("fixtures/initialize-params.json"))
         .expect("fixture parses");
     json!({ "jsonrpc": "2.0", "id": id, "method": "initialize", "params": params })
-}
-
-async fn write_framed(stdin: &mut ChildStdin, body: &[u8]) {
-    let header = format!("Content-Length: {}\r\n\r\n", body.len());
-    stdin.write_all(header.as_bytes()).await.unwrap();
-    stdin.write_all(body).await.unwrap();
-    stdin.flush().await.unwrap();
-}
-
-async fn read_framed(stdout: &mut BufReader<ChildStdout>) -> Value {
-    let mut content_length: Option<usize> = None;
-    loop {
-        let mut line = String::new();
-        let n = stdout.read_line(&mut line).await.unwrap();
-        assert!(n > 0, "server closed stdout before sending a header");
-        if line == "\r\n" {
-            break;
-        }
-        if let Some(rest) = line.strip_prefix("Content-Length: ") {
-            content_length = Some(rest.trim().parse().unwrap());
-        }
-    }
-    let length = content_length.expect("missing Content-Length header");
-    let mut body = vec![0u8; length];
-    stdout.read_exact(&mut body).await.unwrap();
-    serde_json::from_slice(&body).expect("body is valid JSON")
 }
 
 #[tokio::test]

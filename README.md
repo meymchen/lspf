@@ -14,55 +14,82 @@ language server in very little code. You register typed handlers on a
 lifecycle, document synchronization, cancellation, bounded concurrency,
 `tracing` spans, and typed server-to-client traffic through `Client`.
 
-> **Status:** early-stage. **0.2** is the current surface — the built `Server`,
-> the typed `Router`, post-mutation document hooks, and the `Client` handle —
-> which the examples below use. It removes the `0.1.x` `LanguageServer` trait
-> outright, with no adapter and no deprecation cycle; the
-> [0.1-to-0.2 migration guide](./docs/migrations/0.1-to-0.2.md) maps one onto
-> the other. Hover, completion, and commands are the standard features
-> implemented so far; the rest of the capability catalog and the first-party
-> TCP, WebSocket, and WASM worker transports are planned but not available yet.
+> **Status:** early-stage. **0.3** is the current surface of this repository
+> — the sealed feature catalog covering the stable LSP 3.17 features, Commands,
+> the multi-root `Workspace`, `FileProvider`-backed unopened-file lookup, and
+> configurable document synchronization — which the examples below use. It is
+> not published yet: crates.io still carries **0.2**, and the
+> [changelog](./CHANGELOG.md) records what 0.3 adds on top of it. Hover,
+> completion, and commands were the standard features implemented in 0.2; the
+> first-party TCP, WebSocket, and WASM worker transports are still planned.
 
 ## Quick start
 
 ```rust,no_run
 use std::sync::Arc;
 
-use lspf::types::notification::{DidOpenTextDocument, PublishDiagnostics};
 use lspf::types::{
-    Diagnostic, DiagnosticSeverity, DidOpenTextDocumentParams, Position,
-    PublishDiagnosticsParams, Range,
+    CompletionItem, CompletionItemKind, CompletionOptions, CompletionParams, CompletionResponse,
+    Hover, HoverContents, HoverParams, MarkedString,
 };
-use lspf::{Context, Server};
+use lspf::{CancellationToken, Context, LspError, OsFileProvider, Server};
 
 /// Only your own application state — the framework owns the documents, the
 /// workspace, and the client, and hands them to handlers through `Context`.
 struct State;
 
-/// A post-mutation hook for the built-in `textDocument/didOpen`: the framework
-/// has already opened the document, so `ctx.documents()` sees it here.
-async fn on_did_open(_state: Arc<State>, ctx: Context, params: DidOpenTextDocumentParams) {
-    let uri = params.text_document.uri;
+/// A standard typed feature. The `features::hover()` descriptor fixes the
+/// wire method, this handler's parameter and result types, and the
+/// `hoverProvider` capability the server will advertise — all at once.
+async fn hover(
+    _state: Arc<State>,
+    ctx: Context,
+    params: HoverParams,
+    _ct: CancellationToken,
+) -> Result<Option<Hover>, LspError> {
+    let uri = params.text_document_position_params.text_document.uri;
     let Some(document) = ctx.documents().get(&uri) else {
-        return;
+        return Ok(None);
     };
-    let result = ctx.client().notify::<PublishDiagnostics>(PublishDiagnosticsParams {
-        uri,
-        version: document.version(),
-        diagnostics: vec![Diagnostic {
-            range: Range {
-                start: Position { line: 0, character: 0 },
-                end:   Position { line: 0, character: 0 },
-            },
-            severity: Some(DiagnosticSeverity::INFORMATION),
-            source: Some("lspf-hello".into()),
-            message: "lspf saw this document open".into(),
-            ..Diagnostic::default()
-        }],
-    });
-    if let Err(error) = result {
-        tracing::warn!(%error, "publishing the open diagnostic failed");
-    }
+    Ok(Some(Hover {
+        contents: HoverContents::Scalar(MarkedString::String(format!(
+            "{} words",
+            document.text().split_whitespace().count()
+        ))),
+        range: None,
+    }))
+}
+
+/// A second typed feature; the options supplied here are exactly what the
+/// generated `completionProvider` advertises.
+async fn complete(
+    _state: Arc<State>,
+    _ctx: Context,
+    _params: CompletionParams,
+    _ct: CancellationToken,
+) -> Result<Option<CompletionResponse>, LspError> {
+    Ok(Some(CompletionResponse::Array(vec![CompletionItem {
+        label: "hello".into(),
+        kind: Some(CompletionItemKind::TEXT),
+        ..CompletionItem::default()
+    }])))
+}
+
+/// A typed Command, dispatched by name beneath `workspace/executeCommand`.
+/// Registering it adds the name to the generated `executeCommandProvider`,
+/// in registration order.
+async fn roots(
+    _state: Arc<State>,
+    ctx: Context,
+    _args: Vec<String>,
+    _ct: CancellationToken,
+) -> Result<Vec<(String, String)>, LspError> {
+    Ok(ctx
+        .workspace()
+        .roots()
+        .into_iter()
+        .map(|folder| (folder.uri.as_str().to_string(), folder.name))
+        .collect())
 }
 
 #[tokio::main]
@@ -74,7 +101,17 @@ async fn main() -> lspf::Result<()> {
         .init();
 
     let server = Server::builder(State)
-        .notification::<DidOpenTextDocument, _, _>(on_did_open)
+        // Unopened `file:` URIs resolve from disk through this provider.
+        .file_provider(OsFileProvider::new())
+        .feature(lspf::features::hover(), hover)
+        .feature(
+            lspf::features::completion(CompletionOptions {
+                trigger_characters: Some(vec![".".to_string()]),
+                ..CompletionOptions::default()
+            }),
+            complete,
+        )
+        .command("hello.roots", roots)
         .build()
         .expect("the static registrations are valid");
     // Serving reports how the connection ended; the binary decides what that
@@ -84,9 +121,15 @@ async fn main() -> lspf::Result<()> {
 }
 ```
 
-A runnable copy lives at
-[`crates/lspf-hello/src/main.rs`](./crates/lspf-hello/src/main.rs) — the
-installable template server described under [Editor setup](#editor-setup).
+No handwritten `ServerCapabilities` and no framework change are involved:
+the capabilities come from the registrations themselves. A runnable copy of
+the complete journey — hover, completion plus resolve, Commands, document
+synchronization, multi-root workspace state, and unopened-file lookup — lives
+at [`crates/lspf-hello/src/main.rs`](./crates/lspf-hello/src/main.rs), the
+installable template server described under [Editor setup](#editor-setup),
+with an end-to-end stdio test beside it. The
+[features, capabilities, and the workspace](./docs/guides/features-and-workspace.md)
+guide walks through each piece.
 
 ## Install
 
@@ -96,6 +139,15 @@ lspf = "0.2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+```
+
+`0.2` is the latest published release; the quickstart above targets the 0.3
+surface this repository carries. Until 0.3 ships, depend on the repository
+directly for it:
+
+```toml
+[dependencies]
+lspf = { git = "https://github.com/meymchen/lspf" }
 ```
 
 `0.1.x` is the older `LanguageServer` trait API, which 0.2 removes; the
@@ -116,9 +168,14 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
   to the concurrency-safe, rope-backed `Documents` the framework owns before
   your hook runs; handlers read them through a `DocumentsView` that has no
   mutation operation.
+- **A multi-root `Workspace`.** Client announcements — folders, root URI,
+  configuration, trace level — live in one cloneable handle, mutated only by
+  the protocol and read through `Context`; unopened files resolve through a
+  configurable `FileProvider`.
 - **Capabilities that cannot drift.** `ServerCapabilities` are generated from
   the same registrations that dispatch, so what the server advertises is what
-  it serves.
+  it serves; conflicting registrations are build errors, never silent
+  last-write-wins.
 - **Safe concurrent dispatch.** Requests and notifications run with a
   configurable concurrency limit (64 by default); `$/cancelRequest`
   propagates through a `CancellationToken`.
@@ -143,6 +200,8 @@ the docs.
 | `Command`           | A user closure dispatched by name on `workspace/executeCommand`.                                         |
 | `Document`          | A text resource tracked by the framework: URI, language id, version, and rope-backed contents.           |
 | `DocumentsView`     | The read-only document handle a handler reaches through `ctx.documents()`.                               |
+| `Workspace`         | The cloneable handle to the connection's workspace state: folders, configuration, and documents.         |
+| `FileProvider`      | The configurable resolver for resources that are not open in the editor.                                 |
 | `Context`           | The cheap-to-clone framework-state handle every handler receives: documents, workspace, client, scope.   |
 | `Client`            | The typed handle for server-to-client notifications and requests (`ctx.client()`).                       |
 | `CancellationToken` | The cancellation signal passed to request handlers.                                                      |
@@ -154,22 +213,29 @@ the docs.
 The full design lives next to the code:
 
 - [`CONTEXT.md`](./CONTEXT.md) — domain language and shared vocabulary.
-- [`docs/adr/`](./docs/adr/) — 20 architecture decision records covering
+- [`docs/adr/`](./docs/adr/) — 24 architecture decision records covering
   the async-only runtime, the typed Router and capability catalog, the
   protocol engine and outbound request broker, the cancellation model, the
   transport shape, the `Layer`/`Service` stack, position encoding, and more.
   ADRs describe architectural direction as well as shipped behavior; an
   accepted ADR does not by itself mean the feature has been implemented.
+- [`docs/guides/features-and-workspace.md`](./docs/guides/features-and-workspace.md)
+  — how to register features, where capabilities come from, who owns the
+  workspace and documents, how Commands dispatch, and how `FileProvider`
+  configuration works. Every example in it compiles as a doctest.
 
 ## Roadmap
 
 Available today:
 
 - `stdio` plus the public custom-transport interface.
-- The built `Server`: typed requests, notifications, commands, hover and
-  completion, user `Layer`s, and the one `configure_initialize` transaction.
-- Lifecycle and incremental text-document synchronization, with
+- The built `Server`: typed requests, notifications, commands, the sealed
+  feature catalog covering the stable LSP 3.17 features, user `Layer`s, and
+  the one `configure_initialize` transaction.
+- Lifecycle, incremental or full text-document synchronization, and the
   post-mutation document hooks.
+- The multi-root `Workspace`, latest configuration settings, and
+  `FileProvider`-backed unopened-file lookup.
 - Typed server-to-client notifications and correlated requests through
   `Client`.
 - Concurrent dispatch, bounded concurrency, request cancellation, and
@@ -178,8 +244,6 @@ Available today:
 
 Planned, without a committed release number:
 
-- The remaining standard features in the capability catalog.
-- The remaining lifecycle hooks and outgoing helpers.
 - First-party TCP, WebSocket, and WASM worker transports.
 
 ## Examples
@@ -191,8 +255,11 @@ LSP-aware tool at the spawned process:
 cargo run -p lspf-hello
 ```
 
+It is the complete typed journey — hover, completion plus resolve, Commands,
+document synchronization, multi-root workspace state, and unopened-file
+lookup — verified end to end by
+[`crates/lspf-hello/tests/e2e.rs`](./crates/lspf-hello/tests/e2e.rs).
 To wire it into a real editor instead, see [Editor setup](#editor-setup).
-More examples land as the framework grows.
 
 ## Editor setup
 
@@ -201,8 +268,11 @@ This repository is a Cargo workspace with two members:
 - [`crates/lspf`](./crates/lspf) — the framework library you depend on
   (`lspf = "0.2"`).
 - [`crates/lspf-hello`](./crates/lspf-hello) — an installable **template
-  server**. It builds a `lspf-hello` binary that speaks LSP over stdio and,
-  on every `textDocument/didOpen`, publishes an informational diagnostic
+  server**. It builds a `lspf-hello` binary that speaks LSP over stdio: it
+  answers hover and completion (with resolve), dispatches the
+  `lspf-hello.workspaceRoots` and `lspf-hello.readFile` Commands, reads
+  unopened files through an `OsFileProvider`, and — on every
+  `textDocument/didOpen` — publishes an informational diagnostic
   ("lspf saw this document open"). Fork it as the starting point for your
   own language server.
 
