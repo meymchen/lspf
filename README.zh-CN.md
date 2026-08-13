@@ -126,22 +126,13 @@ async fn main() -> lspf::Result<()> {
 
 ```toml
 [dependencies]
-lspf = "0.2"
+lspf = "0.3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ```
 
-`0.2` 是最新的已发布版本；上面的快速开始针对本仓库当前的 0.3 接口。
-在 0.3 发布之前，可以直接依赖仓库：
-
-```toml
-[dependencies]
-lspf = { git = "https://github.com/meymchen/lspf" }
-```
-
-`0.1.x` 是旧的 `LanguageServer` trait 接口，已被 0.2 移除，两者的对应关系
-参见[迁移指南](./docs/migrations/0.1-to-0.2.md)。
+`0.3` 是最新的已发布版本，上面的快速开始针对它。
 
 `lspf` 的 `Cargo.toml` 已经引入 `lsp-types`、`tokio`、`tracing`、`serde`
 等运行时依赖，因此你的应用只需为直接使用的 `tokio` 功能选择相应 feature。
