@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-14
+
 `0.3` completes the typed registration surface the 0.2 `Server` started. A
 server registers standard features through the sealed descriptor catalog in
 [`lspf::features`](https://docs.rs/lspf/latest/lspf/features/): each
@@ -86,12 +88,7 @@ connection.
 `Router`, the `Service`/`Layer` stack, and the connection-owned protocol engine.
 It is a **breaking release with no adapter and no deprecation cycle**: the 0.1
 surface is removed rather than phased out, and no feature flag or runtime
-setting restores it. The
-[0.1-to-0.2 migration guide][migration-0.1-to-0.2] maps every 0.1 construct
-onto its 0.2 replacement, and each of its `0.2` examples is compiled as a
-doc-test against this release.
-
-[migration-0.1-to-0.2]: https://github.com/meymchen/lspf/blob/main/docs/migrations/0.1-to-0.2.md
+setting restores it.
 
 ### Removed
 
@@ -157,50 +154,6 @@ doc-test against this release.
 - Session close now completes every pending outbound request with
   `ClientError::Cancelled` instead of a generic session-closed error.
 
-## [0.1.2] - 2026-06-22
-
-### Fixed
-
-- Include `README.md` in the `lspf` crate package by adding the `readme`
-  field to `crates/lspf/Cargo.toml` so it renders on crates.io.
-
-## [0.1.1] - 2026-06-22
-
-### Changed
-
-- Bump release version from `0.1.0-alpha.3` to `0.1.1` and publish `lspf` to
-  crates.io.
-
-## [0.1.0-alpha.3] - 2026-06-17
-
-### Added
-
-- `cargo coverage` alias in `.cargo/config.toml` for local HTML coverage reports.
-- CI coverage job that generates and uploads HTML/LCOV reports as artifacts.
-- Documentation: test coverage glossary entry in `CONTEXT.md` and coverage
-  instructions in `README.md`.
-
-## [0.1.0-alpha.2] - 2026-06-12
-
-### Added
-
-- Walking skeleton: `stdio` transport and lifecycle dispatcher (`src/` core
-  with `server` trait, `dispatcher`, `context`, `stdio` transport, `error`,
-  `raw`).
-- Outgoing helpers: per-request `Context` send channel and
-  `publish_diagnostics`.
-- `examples/hello` runnable example and `tests/smoke.rs` integration test.
-- Domain documentation: `CONTEXT.md` glossary and 14 architecture decision
-  records under `docs/adr/` (ADRs 0001–0014, including ADR 0014 covering
-  protocol types sourced from the `lsp-types` crate).
-- Project documentation and agent configuration: `README.md`, `CLAUDE.md`,
-  and the `tools/` directory.
-- Toolchain pinning and lint configuration: `rust-toolchain.toml`,
-  `rustfmt.toml`, `clippy.toml`.
-
-[Unreleased]: https://github.com/meymchen/lspf/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/meymchen/lspf/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/meymchen/lspf/releases/tag/v0.3.0
 [0.2.0]: https://github.com/meymchen/lspf/releases/tag/v0.2.0
-[0.1.2]: https://github.com/meymchen/lspf/releases/tag/v0.1.2
-[0.1.1]: https://github.com/meymchen/lspf/releases/tag/v0.1.1
-[0.1.0-alpha.3]: https://github.com/meymchen/lspf/releases/tag/v0.1.0-alpha.3
-[0.1.0-alpha.2]: https://github.com/meymchen/lspf/releases/tag/v0.1.0-alpha.2

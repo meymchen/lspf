@@ -135,23 +135,13 @@ guide walks through each piece.
 
 ```toml
 [dependencies]
-lspf = "0.2"
+lspf = "0.3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ```
 
-`0.2` is the latest published release; the quickstart above targets the 0.3
-surface this repository carries. Until 0.3 ships, depend on the repository
-directly for it:
-
-```toml
-[dependencies]
-lspf = { git = "https://github.com/meymchen/lspf" }
-```
-
-`0.1.x` is the older `LanguageServer` trait API, which 0.2 removes; the
-[migration guide](./docs/migrations/0.1-to-0.2.md) maps one onto the other.
+`0.3` is the latest published release, and the quickstart above targets it.
 
 `lspf`'s own `Cargo.toml` already pulls in `lsp-types`, `tokio`, `tracing`,
 `serde`, and the rest of the runtime stack, so you only need to opt in to the
