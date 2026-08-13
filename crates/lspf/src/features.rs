@@ -22,21 +22,25 @@ use lsp_types::request::{
     CallHierarchyIncomingCalls, CallHierarchyOutgoingCalls, CallHierarchyPrepare,
     CodeActionRequest, CodeActionResolveRequest, CodeLensRequest, CodeLensResolve,
     ColorPresentationRequest, Completion, DocumentColor, DocumentDiagnosticRequest,
-    DocumentLinkRequest, DocumentLinkResolve, FoldingRangeRequest, Formatting, HoverRequest,
-    InlayHintRequest, InlayHintResolveRequest, InlineValueRequest, OnTypeFormatting,
-    PrepareRenameRequest, RangeFormatting, Rename, Request, ResolveCompletionItem,
-    SelectionRangeRequest, SemanticTokensFullDeltaRequest, SemanticTokensFullRequest,
-    SemanticTokensRangeRequest, TypeHierarchyPrepare, TypeHierarchySubtypes,
-    TypeHierarchySupertypes, WillCreateFiles, WillDeleteFiles, WillRenameFiles, WillSaveWaitUntil,
+    DocumentHighlightRequest, DocumentLinkRequest, DocumentLinkResolve, DocumentSymbolRequest,
+    FoldingRangeRequest, Formatting, GotoDeclaration, GotoDefinition, GotoImplementation,
+    GotoTypeDefinition, HoverRequest, InlayHintRequest, InlayHintResolveRequest,
+    InlineValueRequest, LinkedEditingRange, MonikerRequest, OnTypeFormatting, PrepareRenameRequest,
+    RangeFormatting, References, Rename, Request, ResolveCompletionItem, SelectionRangeRequest,
+    SemanticTokensFullDeltaRequest, SemanticTokensFullRequest, SemanticTokensRangeRequest,
+    SignatureHelpRequest, TypeHierarchyPrepare, TypeHierarchySubtypes, TypeHierarchySupertypes,
+    WillCreateFiles, WillDeleteFiles, WillRenameFiles, WillSaveWaitUntil,
     WorkspaceDiagnosticRequest, WorkspaceSymbolRequest, WorkspaceSymbolResolve,
 };
 use lsp_types::{
     CallHierarchyOptions, CodeActionOptions, CodeLensOptions, ColorProviderOptions,
-    CompletionOptions, DiagnosticOptions, DocumentFormattingOptions, DocumentLinkOptions,
-    DocumentOnTypeFormattingOptions, DocumentRangeFormattingOptions,
+    CompletionOptions, DeclarationOptions, DefinitionOptions, DiagnosticOptions,
+    DocumentFormattingOptions, DocumentHighlightOptions, DocumentLinkOptions,
+    DocumentOnTypeFormattingOptions, DocumentRangeFormattingOptions, DocumentSymbolOptions,
     FileOperationRegistrationOptions, FoldingProviderOptions, InlayHintOptions, InlineValueOptions,
-    RenameOptions, SelectionRangeOptions, SemanticTokensOptions, TypeHierarchyOptions,
-    WorkspaceSymbolOptions,
+    LinkedEditingRangeOptions, MonikerOptions, ReferencesOptions, RenameOptions,
+    SelectionRangeOptions, SemanticTokensOptions, SignatureHelpOptions,
+    StaticTextDocumentRegistrationOptions, TypeHierarchyOptions, WorkspaceSymbolOptions,
 };
 
 use crate::capability::CapabilityBuilder;
@@ -129,6 +133,243 @@ impl sealed::Sealed for HoverFeature {
 }
 impl FeatureSpec for HoverFeature {
     type Marker = HoverRequest;
+}
+
+/// The `textDocument/signatureHelp` feature descriptor. Construct it with
+/// [`signature_help`].
+pub struct SignatureHelpFeature {
+    options: SignatureHelpOptions,
+}
+
+/// Describe the standard signature-help feature: it dispatches the lsp-types
+/// [`SignatureHelpRequest`] marker — typed
+/// [`SignatureHelpParams`](lsp_types::SignatureHelpParams) in, optional
+/// [`SignatureHelp`](lsp_types::SignatureHelp) out — and advertises the
+/// supplied [`SignatureHelpOptions`] as `signatureHelpProvider`.
+pub fn signature_help(options: SignatureHelpOptions) -> SignatureHelpFeature {
+    SignatureHelpFeature { options }
+}
+
+#[allow(private_interfaces)]
+impl sealed::Sealed for SignatureHelpFeature {
+    fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
+        caps.set_signature_help(self.options.clone())
+    }
+}
+impl FeatureSpec for SignatureHelpFeature {
+    type Marker = SignatureHelpRequest;
+}
+
+/// The `textDocument/declaration` feature descriptor. Construct it with
+/// [`declaration`].
+pub struct DeclarationFeature {
+    options: DeclarationOptions,
+}
+
+/// Describe the standard declaration feature: it dispatches the lsp-types
+/// [`GotoDeclaration`] marker and advertises the supplied [`DeclarationOptions`]
+/// as the singular `declarationProvider` capability.
+pub fn declaration(options: DeclarationOptions) -> DeclarationFeature {
+    DeclarationFeature { options }
+}
+
+#[allow(private_interfaces)]
+impl sealed::Sealed for DeclarationFeature {
+    fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
+        caps.set_declaration(self.options.clone())
+    }
+}
+impl FeatureSpec for DeclarationFeature {
+    type Marker = GotoDeclaration;
+}
+
+/// The `textDocument/definition` feature descriptor. Construct it with
+/// [`definition`].
+pub struct DefinitionFeature {
+    options: DefinitionOptions,
+}
+
+/// Describe the standard definition feature: it dispatches the lsp-types
+/// [`GotoDefinition`] marker and advertises the supplied [`DefinitionOptions`]
+/// as the singular `definitionProvider` capability.
+pub fn definition(options: DefinitionOptions) -> DefinitionFeature {
+    DefinitionFeature { options }
+}
+
+#[allow(private_interfaces)]
+impl sealed::Sealed for DefinitionFeature {
+    fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
+        caps.set_definition(self.options.clone())
+    }
+}
+impl FeatureSpec for DefinitionFeature {
+    type Marker = GotoDefinition;
+}
+
+/// The `textDocument/typeDefinition` feature descriptor. Construct it with
+/// [`type_definition`].
+pub struct TypeDefinitionFeature {
+    options: StaticTextDocumentRegistrationOptions,
+}
+
+/// Describe the standard type-definition feature: it dispatches the lsp-types
+/// [`GotoTypeDefinition`] marker and advertises the supplied
+/// [`StaticTextDocumentRegistrationOptions`] as the singular
+/// `typeDefinitionProvider` capability.
+pub fn type_definition(options: StaticTextDocumentRegistrationOptions) -> TypeDefinitionFeature {
+    TypeDefinitionFeature { options }
+}
+
+#[allow(private_interfaces)]
+impl sealed::Sealed for TypeDefinitionFeature {
+    fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
+        caps.set_type_definition(self.options.clone())
+    }
+}
+impl FeatureSpec for TypeDefinitionFeature {
+    type Marker = GotoTypeDefinition;
+}
+
+/// The `textDocument/implementation` feature descriptor. Construct it with
+/// [`implementation`].
+pub struct ImplementationFeature {
+    options: StaticTextDocumentRegistrationOptions,
+}
+
+/// Describe the standard implementation feature: it dispatches the lsp-types
+/// [`GotoImplementation`] marker and advertises the supplied
+/// [`StaticTextDocumentRegistrationOptions`] as the singular
+/// `implementationProvider` capability.
+pub fn implementation(options: StaticTextDocumentRegistrationOptions) -> ImplementationFeature {
+    ImplementationFeature { options }
+}
+
+#[allow(private_interfaces)]
+impl sealed::Sealed for ImplementationFeature {
+    fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
+        caps.set_implementation(self.options.clone())
+    }
+}
+impl FeatureSpec for ImplementationFeature {
+    type Marker = GotoImplementation;
+}
+
+/// The `textDocument/references` feature descriptor. Construct it with
+/// [`references`].
+pub struct ReferencesFeature {
+    options: ReferencesOptions,
+}
+
+/// Describe the standard references feature: it dispatches the lsp-types
+/// [`References`] marker and advertises the supplied [`ReferencesOptions`] as
+/// the singular `referencesProvider` capability.
+pub fn references(options: ReferencesOptions) -> ReferencesFeature {
+    ReferencesFeature { options }
+}
+
+#[allow(private_interfaces)]
+impl sealed::Sealed for ReferencesFeature {
+    fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
+        caps.set_references(self.options.clone())
+    }
+}
+impl FeatureSpec for ReferencesFeature {
+    type Marker = References;
+}
+
+/// The `textDocument/documentHighlight` feature descriptor. Construct it with
+/// [`document_highlight`].
+pub struct DocumentHighlightFeature {
+    options: DocumentHighlightOptions,
+}
+
+/// Describe the standard document-highlight feature: it dispatches the
+/// lsp-types [`DocumentHighlightRequest`] marker and advertises the supplied
+/// [`DocumentHighlightOptions`] as the singular `documentHighlightProvider`
+/// capability.
+pub fn document_highlight(options: DocumentHighlightOptions) -> DocumentHighlightFeature {
+    DocumentHighlightFeature { options }
+}
+
+#[allow(private_interfaces)]
+impl sealed::Sealed for DocumentHighlightFeature {
+    fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
+        caps.set_document_highlight(self.options.clone())
+    }
+}
+impl FeatureSpec for DocumentHighlightFeature {
+    type Marker = DocumentHighlightRequest;
+}
+
+/// The `textDocument/documentSymbol` feature descriptor. Construct it with
+/// [`document_symbol`].
+pub struct DocumentSymbolFeature {
+    options: DocumentSymbolOptions,
+}
+
+/// Describe the standard document-symbol feature: it dispatches the lsp-types
+/// [`DocumentSymbolRequest`] marker and advertises the supplied
+/// [`DocumentSymbolOptions`] as the singular `documentSymbolProvider`
+/// capability.
+pub fn document_symbol(options: DocumentSymbolOptions) -> DocumentSymbolFeature {
+    DocumentSymbolFeature { options }
+}
+
+#[allow(private_interfaces)]
+impl sealed::Sealed for DocumentSymbolFeature {
+    fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
+        caps.set_document_symbol(self.options.clone())
+    }
+}
+impl FeatureSpec for DocumentSymbolFeature {
+    type Marker = DocumentSymbolRequest;
+}
+
+/// The `textDocument/linkedEditingRange` feature descriptor. Construct it with
+/// [`linked_editing_range`].
+pub struct LinkedEditingRangeFeature {
+    options: LinkedEditingRangeOptions,
+}
+
+/// Describe the standard linked-editing-range feature: it dispatches the
+/// lsp-types [`LinkedEditingRange`] marker and advertises the supplied
+/// [`LinkedEditingRangeOptions`] as the singular `linkedEditingRangeProvider`
+/// capability.
+pub fn linked_editing_range(options: LinkedEditingRangeOptions) -> LinkedEditingRangeFeature {
+    LinkedEditingRangeFeature { options }
+}
+
+#[allow(private_interfaces)]
+impl sealed::Sealed for LinkedEditingRangeFeature {
+    fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
+        caps.set_linked_editing_range(self.options.clone())
+    }
+}
+impl FeatureSpec for LinkedEditingRangeFeature {
+    type Marker = LinkedEditingRange;
+}
+
+/// The `textDocument/moniker` feature descriptor. Construct it with
+/// [`moniker`].
+pub struct MonikerFeature {
+    options: MonikerOptions,
+}
+
+/// Describe the standard moniker feature: it dispatches the lsp-types
+/// [`MonikerRequest`] marker and advertises the supplied [`MonikerOptions`] as
+/// the singular `monikerProvider` capability.
+pub fn moniker(options: MonikerOptions) -> MonikerFeature {
+    MonikerFeature { options }
+}
+
+#[allow(private_interfaces)]
+impl sealed::Sealed for MonikerFeature {
+    fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
+        caps.set_moniker(self.options.clone())
+    }
+}
+impl FeatureSpec for MonikerFeature {
+    type Marker = MonikerRequest;
 }
 
 /// The `textDocument/formatting` feature descriptor.
@@ -1078,33 +1319,43 @@ mod tests {
     use lsp_types::request::{
         CallHierarchyIncomingCalls, CallHierarchyOutgoingCalls, CallHierarchyPrepare,
         CodeActionRequest, CodeActionResolveRequest, CodeLensRequest, CodeLensResolve,
-        ColorPresentationRequest, DocumentColor, DocumentDiagnosticRequest, DocumentLinkRequest,
-        DocumentLinkResolve, FoldingRangeRequest, Formatting, InlayHintRequest,
-        InlayHintResolveRequest, InlineValueRequest, OnTypeFormatting, PrepareRenameRequest,
-        RangeFormatting, Rename, SelectionRangeRequest, SemanticTokensFullDeltaRequest,
-        SemanticTokensFullRequest, SemanticTokensRangeRequest, TypeHierarchyPrepare,
-        TypeHierarchySubtypes, TypeHierarchySupertypes, WorkspaceDiagnosticRequest,
+        ColorPresentationRequest, DocumentColor, DocumentDiagnosticRequest,
+        DocumentHighlightRequest, DocumentLinkRequest, DocumentLinkResolve, DocumentSymbolRequest,
+        FoldingRangeRequest, Formatting, GotoDeclaration, GotoDeclarationParams,
+        GotoDeclarationResponse, GotoDefinition, GotoImplementation, GotoImplementationParams,
+        GotoImplementationResponse, GotoTypeDefinition, GotoTypeDefinitionParams,
+        GotoTypeDefinitionResponse, InlayHintRequest, InlayHintResolveRequest, InlineValueRequest,
+        LinkedEditingRange, MonikerRequest, OnTypeFormatting, PrepareRenameRequest,
+        RangeFormatting, References, Rename, SelectionRangeRequest, SemanticTokensFullDeltaRequest,
+        SemanticTokensFullRequest, SemanticTokensRangeRequest, SignatureHelpRequest,
+        TypeHierarchyPrepare, TypeHierarchySubtypes, TypeHierarchySupertypes,
+        WorkspaceDiagnosticRequest,
     };
     use lsp_types::{
         CallHierarchyIncomingCall, CallHierarchyIncomingCallsParams, CallHierarchyItem,
         CallHierarchyOutgoingCall, CallHierarchyOutgoingCallsParams, CallHierarchyPrepareParams,
         CodeAction, CodeActionOptions, CodeActionParams, CodeActionResponse, CodeLens,
         CodeLensOptions, CodeLensParams, ColorInformation, ColorPresentation,
-        ColorPresentationParams, ColorProviderOptions, CreateFilesParams, DeleteFilesParams,
-        DiagnosticOptions, DidChangeWatchedFilesParams, DocumentColorParams,
-        DocumentDiagnosticParams, DocumentDiagnosticReportResult, DocumentFormattingOptions,
-        DocumentFormattingParams, DocumentLink, DocumentLinkOptions, DocumentLinkParams,
-        DocumentOnTypeFormattingOptions, DocumentOnTypeFormattingParams,
-        DocumentRangeFormattingOptions, DocumentRangeFormattingParams, FoldingProviderOptions,
-        FoldingRange, FoldingRangeParams, InlayHint, InlayHintOptions, InlayHintParams,
-        InlineValue, InlineValueOptions, InlineValueParams, PrepareRenameResponse,
-        RenameFilesParams, RenameOptions, RenameParams, SelectionRange, SelectionRangeOptions,
-        SelectionRangeParams, SemanticTokensDeltaParams, SemanticTokensFullDeltaResult,
-        SemanticTokensParams, SemanticTokensRangeParams, SemanticTokensRangeResult,
-        SemanticTokensResult, TextDocumentPositionParams, TextEdit, TypeHierarchyItem,
-        TypeHierarchyPrepareParams, TypeHierarchySubtypesParams, TypeHierarchySupertypesParams,
-        WorkspaceDiagnosticParams, WorkspaceDiagnosticReportResult, WorkspaceEdit, WorkspaceSymbol,
-        WorkspaceSymbolParams, WorkspaceSymbolResponse,
+        ColorPresentationParams, ColorProviderOptions, CreateFilesParams, DeclarationOptions,
+        DefinitionOptions, DeleteFilesParams, DiagnosticOptions, DidChangeWatchedFilesParams,
+        DocumentColorParams, DocumentDiagnosticParams, DocumentDiagnosticReportResult,
+        DocumentFormattingOptions, DocumentFormattingParams, DocumentHighlight,
+        DocumentHighlightOptions, DocumentHighlightParams, DocumentLink, DocumentLinkOptions,
+        DocumentLinkParams, DocumentOnTypeFormattingOptions, DocumentOnTypeFormattingParams,
+        DocumentRangeFormattingOptions, DocumentRangeFormattingParams, DocumentSymbolOptions,
+        DocumentSymbolParams, DocumentSymbolResponse, FoldingProviderOptions, FoldingRange,
+        FoldingRangeParams, GotoDefinitionParams, GotoDefinitionResponse, InlayHint,
+        InlayHintOptions, InlayHintParams, InlineValue, InlineValueOptions, InlineValueParams,
+        LinkedEditingRangeOptions, LinkedEditingRangeParams, LinkedEditingRanges, Location,
+        Moniker, MonikerOptions, MonikerParams, PrepareRenameResponse, ReferenceParams,
+        ReferencesOptions, RenameFilesParams, RenameOptions, RenameParams, SelectionRange,
+        SelectionRangeOptions, SelectionRangeParams, SemanticTokensDeltaParams,
+        SemanticTokensFullDeltaResult, SemanticTokensParams, SemanticTokensRangeParams,
+        SemanticTokensRangeResult, SemanticTokensResult, SignatureHelp, SignatureHelpOptions,
+        SignatureHelpParams, StaticTextDocumentRegistrationOptions, TextDocumentPositionParams,
+        TextEdit, TypeHierarchyItem, TypeHierarchyPrepareParams, TypeHierarchySubtypesParams,
+        TypeHierarchySupertypesParams, WorkspaceDiagnosticParams, WorkspaceDiagnosticReportResult,
+        WorkspaceEdit, WorkspaceSymbol, WorkspaceSymbolParams, WorkspaceSymbolResponse,
     };
 
     fn assert_formatting_descriptor<F: FeatureSpec<Marker = Formatting>>(_: F) {}
@@ -1749,6 +2000,247 @@ mod tests {
         assert_eq!(
             <InlayHintResolveRequest as Request>::METHOD,
             "inlayHint/resolve"
+        );
+    }
+
+    fn assert_signature_help_descriptor<F: FeatureSpec<Marker = SignatureHelpRequest>>(_: F) {}
+    fn assert_declaration_descriptor<F: FeatureSpec<Marker = GotoDeclaration>>(_: F) {}
+    fn assert_definition_descriptor<F: FeatureSpec<Marker = GotoDefinition>>(_: F) {}
+    fn assert_type_definition_descriptor<F: FeatureSpec<Marker = GotoTypeDefinition>>(_: F) {}
+    fn assert_implementation_descriptor<F: FeatureSpec<Marker = GotoImplementation>>(_: F) {}
+    fn assert_references_descriptor<F: FeatureSpec<Marker = References>>(_: F) {}
+    fn assert_document_highlight_descriptor<F: FeatureSpec<Marker = DocumentHighlightRequest>>(
+        _: F,
+    ) {
+    }
+    fn assert_document_symbol_descriptor<F: FeatureSpec<Marker = DocumentSymbolRequest>>(_: F) {}
+    fn assert_linked_editing_range_descriptor<F: FeatureSpec<Marker = LinkedEditingRange>>(_: F) {}
+    fn assert_moniker_descriptor<F: FeatureSpec<Marker = MonikerRequest>>(_: F) {}
+
+    fn assert_signature_help_contract<R>()
+    where
+        R: Request<Params = SignatureHelpParams, Result = Option<SignatureHelp>>,
+    {
+    }
+
+    fn assert_declaration_contract<R>()
+    where
+        R: Request<Params = GotoDeclarationParams, Result = Option<GotoDeclarationResponse>>,
+    {
+    }
+
+    fn assert_definition_contract<R>()
+    where
+        R: Request<Params = GotoDefinitionParams, Result = Option<GotoDefinitionResponse>>,
+    {
+    }
+
+    fn assert_type_definition_contract<R>()
+    where
+        R: Request<Params = GotoTypeDefinitionParams, Result = Option<GotoTypeDefinitionResponse>>,
+    {
+    }
+
+    fn assert_implementation_contract<R>()
+    where
+        R: Request<Params = GotoImplementationParams, Result = Option<GotoImplementationResponse>>,
+    {
+    }
+
+    fn assert_references_contract<R>()
+    where
+        R: Request<Params = ReferenceParams, Result = Option<Vec<Location>>>,
+    {
+    }
+
+    fn assert_document_highlight_contract<R>()
+    where
+        R: Request<Params = DocumentHighlightParams, Result = Option<Vec<DocumentHighlight>>>,
+    {
+    }
+
+    fn assert_document_symbol_contract<R>()
+    where
+        R: Request<Params = DocumentSymbolParams, Result = Option<DocumentSymbolResponse>>,
+    {
+    }
+
+    fn assert_linked_editing_range_contract<R>()
+    where
+        R: Request<Params = LinkedEditingRangeParams, Result = Option<LinkedEditingRanges>>,
+    {
+    }
+
+    fn assert_moniker_contract<R>()
+    where
+        R: Request<Params = MonikerParams, Result = Option<Vec<Moniker>>>,
+    {
+    }
+
+    fn progress(value: Option<bool>) -> lsp_types::WorkDoneProgressOptions {
+        lsp_types::WorkDoneProgressOptions {
+            work_done_progress: value,
+        }
+    }
+
+    fn static_text_document_registration_options() -> StaticTextDocumentRegistrationOptions {
+        StaticTextDocumentRegistrationOptions {
+            document_selector: None,
+            id: Some("nav".to_string()),
+        }
+    }
+
+    #[test]
+    fn navigation_and_lookup_descriptors_fix_the_exact_lsp_types_contracts() {
+        assert_signature_help_descriptor(signature_help(SignatureHelpOptions::default()));
+        assert_declaration_descriptor(declaration(DeclarationOptions {
+            work_done_progress_options: progress(Some(true)),
+        }));
+        assert_definition_descriptor(definition(DefinitionOptions {
+            work_done_progress_options: progress(Some(true)),
+        }));
+        assert_type_definition_descriptor(type_definition(
+            static_text_document_registration_options(),
+        ));
+        assert_implementation_descriptor(implementation(
+            static_text_document_registration_options(),
+        ));
+        assert_references_descriptor(references(ReferencesOptions {
+            work_done_progress_options: progress(Some(true)),
+        }));
+        assert_document_highlight_descriptor(document_highlight(DocumentHighlightOptions {
+            work_done_progress_options: progress(Some(true)),
+        }));
+        assert_document_symbol_descriptor(document_symbol(DocumentSymbolOptions {
+            label: Some("outline".to_string()),
+            work_done_progress_options: progress(Some(true)),
+        }));
+        assert_linked_editing_range_descriptor(linked_editing_range(LinkedEditingRangeOptions {
+            work_done_progress_options: progress(Some(true)),
+        }));
+        assert_moniker_descriptor(moniker(MonikerOptions {
+            work_done_progress_options: progress(Some(true)),
+        }));
+        assert_signature_help_contract::<SignatureHelpRequest>();
+        assert_declaration_contract::<GotoDeclaration>();
+        assert_definition_contract::<GotoDefinition>();
+        assert_type_definition_contract::<GotoTypeDefinition>();
+        assert_implementation_contract::<GotoImplementation>();
+        assert_references_contract::<References>();
+        assert_document_highlight_contract::<DocumentHighlightRequest>();
+        assert_document_symbol_contract::<DocumentSymbolRequest>();
+        assert_linked_editing_range_contract::<LinkedEditingRange>();
+        assert_moniker_contract::<MonikerRequest>();
+        assert_eq!(
+            <SignatureHelpRequest as Request>::METHOD,
+            "textDocument/signatureHelp"
+        );
+        assert_eq!(
+            <GotoDeclaration as Request>::METHOD,
+            "textDocument/declaration"
+        );
+        assert_eq!(
+            <GotoDefinition as Request>::METHOD,
+            "textDocument/definition"
+        );
+        assert_eq!(
+            <GotoTypeDefinition as Request>::METHOD,
+            "textDocument/typeDefinition"
+        );
+        assert_eq!(
+            <GotoImplementation as Request>::METHOD,
+            "textDocument/implementation"
+        );
+        assert_eq!(<References as Request>::METHOD, "textDocument/references");
+        assert_eq!(
+            <DocumentHighlightRequest as Request>::METHOD,
+            "textDocument/documentHighlight"
+        );
+        assert_eq!(
+            <DocumentSymbolRequest as Request>::METHOD,
+            "textDocument/documentSymbol"
+        );
+        assert_eq!(
+            <LinkedEditingRange as Request>::METHOD,
+            "textDocument/linkedEditingRange"
+        );
+        assert_eq!(<MonikerRequest as Request>::METHOD, "textDocument/moniker");
+    }
+
+    #[test]
+    fn navigation_and_lookup_descriptors_contribute_only_their_capabilities() {
+        let signature_options = SignatureHelpOptions {
+            trigger_characters: Some(vec!["(".to_string()]),
+            retrigger_characters: None,
+            work_done_progress_options: Default::default(),
+        };
+        let declaration_options = DeclarationOptions {
+            work_done_progress_options: progress(Some(true)),
+        };
+        let definition_options = DefinitionOptions {
+            work_done_progress_options: progress(Some(true)),
+        };
+        let type_definition_options = static_text_document_registration_options();
+        let implementation_options = static_text_document_registration_options();
+        let references_options = ReferencesOptions {
+            work_done_progress_options: progress(Some(true)),
+        };
+        let highlight_options = DocumentHighlightOptions {
+            work_done_progress_options: progress(Some(true)),
+        };
+        let symbols_options = DocumentSymbolOptions {
+            label: Some("outline".to_string()),
+            work_done_progress_options: progress(Some(true)),
+        };
+        let linked_options = LinkedEditingRangeOptions {
+            work_done_progress_options: progress(Some(true)),
+        };
+        let moniker_options = MonikerOptions {
+            work_done_progress_options: progress(Some(true)),
+        };
+        let mut caps = CapabilityBuilder::default();
+
+        sealed::Sealed::contribute(&signature_help(signature_options.clone()), &mut caps).unwrap();
+        sealed::Sealed::contribute(&declaration(declaration_options.clone()), &mut caps).unwrap();
+        sealed::Sealed::contribute(&definition(definition_options.clone()), &mut caps).unwrap();
+        sealed::Sealed::contribute(&type_definition(type_definition_options.clone()), &mut caps)
+            .unwrap();
+        sealed::Sealed::contribute(&implementation(implementation_options.clone()), &mut caps)
+            .unwrap();
+        sealed::Sealed::contribute(&references(references_options.clone()), &mut caps).unwrap();
+        sealed::Sealed::contribute(&document_highlight(highlight_options.clone()), &mut caps)
+            .unwrap();
+        sealed::Sealed::contribute(&document_symbol(symbols_options.clone()), &mut caps).unwrap();
+        sealed::Sealed::contribute(&linked_editing_range(linked_options.clone()), &mut caps)
+            .unwrap();
+        sealed::Sealed::contribute(&moniker(moniker_options.clone()), &mut caps).unwrap();
+        caps.validate().unwrap();
+
+        assert_eq!(
+            caps.finish(),
+            lsp_types::ServerCapabilities {
+                signature_help_provider: Some(signature_options),
+                declaration_provider: Some(lsp_types::DeclarationCapability::Options(
+                    declaration_options
+                )),
+                definition_provider: Some(lsp_types::OneOf::Right(definition_options)),
+                type_definition_provider: Some(
+                    lsp_types::TypeDefinitionProviderCapability::Options(type_definition_options)
+                ),
+                implementation_provider: Some(
+                    lsp_types::ImplementationProviderCapability::Options(implementation_options)
+                ),
+                references_provider: Some(lsp_types::OneOf::Right(references_options)),
+                document_highlight_provider: Some(lsp_types::OneOf::Right(highlight_options)),
+                document_symbol_provider: Some(lsp_types::OneOf::Right(symbols_options)),
+                linked_editing_range_provider: Some(
+                    lsp_types::LinkedEditingRangeServerCapabilities::Options(linked_options),
+                ),
+                moniker_provider: Some(lsp_types::OneOf::Right(
+                    lsp_types::MonikerServerCapabilities::Options(moniker_options),
+                )),
+                ..lsp_types::ServerCapabilities::default()
+            }
         );
     }
 
