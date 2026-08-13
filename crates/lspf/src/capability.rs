@@ -18,14 +18,19 @@
 
 use lsp_types::{
     CallHierarchyOptions, CodeActionOptions, CodeActionProviderCapability, CodeLensOptions,
-    ColorProviderOptions, CompletionOptions, DiagnosticOptions, DiagnosticServerCapabilities,
-    DocumentFormattingOptions, DocumentLinkOptions, DocumentOnTypeFormattingOptions,
-    DocumentRangeFormattingOptions, ExecuteCommandOptions, FileOperationRegistrationOptions,
-    FoldingProviderOptions, HoverProviderCapability, InlayHintOptions, InlayHintServerCapabilities,
-    InlineValueOptions, InlineValueServerCapabilities, OneOf, RenameOptions, SelectionRangeOptions,
-    SemanticTokensFullOptions, SemanticTokensOptions, SemanticTokensServerCapabilities,
-    ServerCapabilities, TypeHierarchyOptions, WorkspaceFileOperationsServerCapabilities,
-    WorkspaceServerCapabilities, WorkspaceSymbolOptions,
+    ColorProviderOptions, CompletionOptions, DeclarationCapability, DeclarationOptions,
+    DefinitionOptions, DiagnosticOptions, DiagnosticServerCapabilities, DocumentFormattingOptions,
+    DocumentHighlightOptions, DocumentLinkOptions, DocumentOnTypeFormattingOptions,
+    DocumentRangeFormattingOptions, DocumentSymbolOptions, ExecuteCommandOptions,
+    FileOperationRegistrationOptions, FoldingProviderOptions, HoverProviderCapability,
+    ImplementationProviderCapability, InlayHintOptions, InlayHintServerCapabilities,
+    InlineValueOptions, InlineValueServerCapabilities, LinkedEditingRangeOptions,
+    LinkedEditingRangeServerCapabilities, MonikerOptions, MonikerServerCapabilities, OneOf,
+    ReferencesOptions, RenameOptions, SelectionRangeOptions, SemanticTokensFullOptions,
+    SemanticTokensOptions, SemanticTokensServerCapabilities, ServerCapabilities,
+    SignatureHelpOptions, StaticTextDocumentRegistrationOptions, TypeDefinitionProviderCapability,
+    TypeHierarchyOptions, WorkspaceFileOperationsServerCapabilities, WorkspaceServerCapabilities,
+    WorkspaceSymbolOptions,
 };
 use serde::Serialize;
 
@@ -534,6 +539,147 @@ impl CapabilityBuilder {
         Ok(())
     }
 
+    /// Contribute the supplied signature-help options as the singular
+    /// `signatureHelpProvider`. Two signature-help features that advertise
+    /// different options cannot both be honored, so a mismatch is a
+    /// [`BuildError::ConflictingCapability`] rather than a silent overwrite.
+    pub(crate) fn set_signature_help(
+        &mut self,
+        options: SignatureHelpOptions,
+    ) -> Result<(), BuildError> {
+        contribute_singular(
+            &mut self.caps.signature_help_provider,
+            options,
+            "signatureHelpProvider",
+        )
+    }
+
+    /// Contribute the supplied declaration options as the singular
+    /// `declarationProvider`. Two declaration features that advertise
+    /// different options cannot both be honored, so a mismatch is a
+    /// [`BuildError::ConflictingCapability`] rather than a silent overwrite.
+    pub(crate) fn set_declaration(
+        &mut self,
+        options: DeclarationOptions,
+    ) -> Result<(), BuildError> {
+        contribute_singular(
+            &mut self.caps.declaration_provider,
+            DeclarationCapability::Options(options),
+            "declarationProvider",
+        )
+    }
+
+    /// Contribute the supplied definition options as the singular
+    /// `definitionProvider`. Two definition features that advertise different
+    /// options cannot both be honored, so a mismatch is a
+    /// [`BuildError::ConflictingCapability`] rather than a silent overwrite.
+    pub(crate) fn set_definition(&mut self, options: DefinitionOptions) -> Result<(), BuildError> {
+        contribute_singular(
+            &mut self.caps.definition_provider,
+            OneOf::Right(options),
+            "definitionProvider",
+        )
+    }
+
+    /// Contribute the supplied registration options as the singular
+    /// `typeDefinitionProvider`. Two type-definition features that advertise
+    /// different options cannot both be honored, so a mismatch is a
+    /// [`BuildError::ConflictingCapability`] rather than a silent overwrite.
+    pub(crate) fn set_type_definition(
+        &mut self,
+        options: StaticTextDocumentRegistrationOptions,
+    ) -> Result<(), BuildError> {
+        contribute_singular(
+            &mut self.caps.type_definition_provider,
+            TypeDefinitionProviderCapability::Options(options),
+            "typeDefinitionProvider",
+        )
+    }
+
+    /// Contribute the supplied registration options as the singular
+    /// `implementationProvider`. Two implementation features that advertise
+    /// different options cannot both be honored, so a mismatch is a
+    /// [`BuildError::ConflictingCapability`] rather than a silent overwrite.
+    pub(crate) fn set_implementation(
+        &mut self,
+        options: StaticTextDocumentRegistrationOptions,
+    ) -> Result<(), BuildError> {
+        contribute_singular(
+            &mut self.caps.implementation_provider,
+            ImplementationProviderCapability::Options(options),
+            "implementationProvider",
+        )
+    }
+
+    /// Contribute the supplied references options as the singular
+    /// `referencesProvider`. Two references features that advertise different
+    /// options cannot both be honored, so a mismatch is a
+    /// [`BuildError::ConflictingCapability`] rather than a silent overwrite.
+    pub(crate) fn set_references(&mut self, options: ReferencesOptions) -> Result<(), BuildError> {
+        contribute_singular(
+            &mut self.caps.references_provider,
+            OneOf::Right(options),
+            "referencesProvider",
+        )
+    }
+
+    /// Contribute the supplied document-highlight options as the singular
+    /// `documentHighlightProvider`. Two document-highlight features that
+    /// advertise different options cannot both be honored, so a mismatch is a
+    /// [`BuildError::ConflictingCapability`] rather than a silent overwrite.
+    pub(crate) fn set_document_highlight(
+        &mut self,
+        options: DocumentHighlightOptions,
+    ) -> Result<(), BuildError> {
+        contribute_singular(
+            &mut self.caps.document_highlight_provider,
+            OneOf::Right(options),
+            "documentHighlightProvider",
+        )
+    }
+
+    /// Contribute the supplied document-symbol options as the singular
+    /// `documentSymbolProvider`. Two document-symbol features that advertise
+    /// different options cannot both be honored, so a mismatch is a
+    /// [`BuildError::ConflictingCapability`] rather than a silent overwrite.
+    pub(crate) fn set_document_symbol(
+        &mut self,
+        options: DocumentSymbolOptions,
+    ) -> Result<(), BuildError> {
+        contribute_singular(
+            &mut self.caps.document_symbol_provider,
+            OneOf::Right(options),
+            "documentSymbolProvider",
+        )
+    }
+
+    /// Contribute the supplied linked-editing-range options as the singular
+    /// `linkedEditingRangeProvider`. Two linked-editing-range features that
+    /// advertise different options cannot both be honored, so a mismatch is a
+    /// [`BuildError::ConflictingCapability`] rather than a silent overwrite.
+    pub(crate) fn set_linked_editing_range(
+        &mut self,
+        options: LinkedEditingRangeOptions,
+    ) -> Result<(), BuildError> {
+        contribute_singular(
+            &mut self.caps.linked_editing_range_provider,
+            LinkedEditingRangeServerCapabilities::Options(options),
+            "linkedEditingRangeProvider",
+        )
+    }
+
+    /// Contribute the supplied moniker options as the singular
+    /// `monikerProvider`. Two moniker features that advertise different
+    /// options cannot both be honored, so a mismatch is a
+    /// [`BuildError::ConflictingCapability`] rather than a silent overwrite.
+    pub(crate) fn set_moniker(&mut self, options: MonikerOptions) -> Result<(), BuildError> {
+        contribute_singular(
+            &mut self.caps.moniker_provider,
+            OneOf::Right(MonikerServerCapabilities::Options(options)),
+            "monikerProvider",
+        )
+    }
+
     /// Contribute the supplied completion options as the base of the
     /// completion family. Two completion features that advertise different
     /// options cannot both be honored, so a mismatch is a
@@ -1011,8 +1157,13 @@ mod tests {
     use super::*;
     use lsp_types::{
         CallHierarchyServerCapability, CodeActionKind, ColorProviderCapability,
-        DocumentOnTypeFormattingOptions, FoldingRangeProviderCapability,
-        SelectionRangeProviderCapability, WorkDoneProgressOptions,
+        DeclarationCapability, DeclarationOptions, DefinitionOptions, DocumentHighlightOptions,
+        DocumentOnTypeFormattingOptions, DocumentSymbolOptions, FoldingRangeProviderCapability,
+        ImplementationProviderCapability, LinkedEditingRangeOptions,
+        LinkedEditingRangeServerCapabilities, MonikerOptions, MonikerServerCapabilities,
+        ReferencesOptions, SelectionRangeProviderCapability, SignatureHelpOptions,
+        StaticTextDocumentRegistrationOptions, TypeDefinitionProviderCapability,
+        WorkDoneProgressOptions,
     };
 
     fn progress(value: Option<bool>) -> WorkDoneProgressOptions {
@@ -2295,6 +2446,303 @@ mod tests {
             denied.validate(),
             Err(BuildError::ConflictingCapability {
                 field: "semanticTokensProvider"
+            })
+        );
+    }
+
+    fn signature_options(trigger: &str) -> SignatureHelpOptions {
+        SignatureHelpOptions {
+            trigger_characters: Some(vec![trigger.to_string()]),
+            retrigger_characters: None,
+            work_done_progress_options: Default::default(),
+        }
+    }
+
+    fn declaration_options() -> DeclarationOptions {
+        DeclarationOptions {
+            work_done_progress_options: progress(Some(true)),
+        }
+    }
+
+    fn definition_options() -> DefinitionOptions {
+        DefinitionOptions {
+            work_done_progress_options: progress(Some(true)),
+        }
+    }
+
+    fn registration_options(id: &str) -> StaticTextDocumentRegistrationOptions {
+        StaticTextDocumentRegistrationOptions {
+            document_selector: None,
+            id: Some(id.to_string()),
+        }
+    }
+
+    fn references_options() -> ReferencesOptions {
+        ReferencesOptions {
+            work_done_progress_options: progress(Some(true)),
+        }
+    }
+
+    fn document_highlight_options() -> DocumentHighlightOptions {
+        DocumentHighlightOptions {
+            work_done_progress_options: progress(Some(true)),
+        }
+    }
+
+    fn document_symbol_options(label: &str) -> DocumentSymbolOptions {
+        DocumentSymbolOptions {
+            label: Some(label.to_string()),
+            work_done_progress_options: progress(Some(true)),
+        }
+    }
+
+    fn linked_editing_range_options() -> LinkedEditingRangeOptions {
+        LinkedEditingRangeOptions {
+            work_done_progress_options: progress(Some(true)),
+        }
+    }
+
+    fn moniker_options() -> MonikerOptions {
+        MonikerOptions {
+            work_done_progress_options: progress(Some(true)),
+        }
+    }
+
+    #[test]
+    fn navigation_features_set_only_their_provider_fields() {
+        let signature = signature_options("(");
+        let mut caps = CapabilityBuilder::default();
+        caps.set_signature_help(signature.clone()).unwrap();
+        assert_eq!(
+            caps.finish(),
+            ServerCapabilities {
+                signature_help_provider: Some(signature),
+                ..ServerCapabilities::default()
+            }
+        );
+
+        let declaration = declaration_options();
+        let mut caps = CapabilityBuilder::default();
+        caps.set_declaration(declaration.clone()).unwrap();
+        assert_eq!(
+            caps.finish(),
+            ServerCapabilities {
+                declaration_provider: Some(DeclarationCapability::Options(declaration)),
+                ..ServerCapabilities::default()
+            }
+        );
+
+        let definition = definition_options();
+        let mut caps = CapabilityBuilder::default();
+        caps.set_definition(definition.clone()).unwrap();
+        assert_eq!(
+            caps.finish(),
+            ServerCapabilities {
+                definition_provider: Some(OneOf::Right(definition)),
+                ..ServerCapabilities::default()
+            }
+        );
+
+        let type_definition = registration_options("type");
+        let mut caps = CapabilityBuilder::default();
+        caps.set_type_definition(type_definition.clone()).unwrap();
+        assert_eq!(
+            caps.finish(),
+            ServerCapabilities {
+                type_definition_provider: Some(TypeDefinitionProviderCapability::Options(
+                    type_definition
+                )),
+                ..ServerCapabilities::default()
+            }
+        );
+
+        let implementation = registration_options("impl");
+        let mut caps = CapabilityBuilder::default();
+        caps.set_implementation(implementation.clone()).unwrap();
+        assert_eq!(
+            caps.finish(),
+            ServerCapabilities {
+                implementation_provider: Some(ImplementationProviderCapability::Options(
+                    implementation
+                )),
+                ..ServerCapabilities::default()
+            }
+        );
+    }
+
+    #[test]
+    fn lookup_features_set_only_their_provider_fields() {
+        let references = references_options();
+        let mut caps = CapabilityBuilder::default();
+        caps.set_references(references.clone()).unwrap();
+        assert_eq!(
+            caps.finish(),
+            ServerCapabilities {
+                references_provider: Some(OneOf::Right(references)),
+                ..ServerCapabilities::default()
+            }
+        );
+
+        let highlight = document_highlight_options();
+        let mut caps = CapabilityBuilder::default();
+        caps.set_document_highlight(highlight.clone()).unwrap();
+        assert_eq!(
+            caps.finish(),
+            ServerCapabilities {
+                document_highlight_provider: Some(OneOf::Right(highlight)),
+                ..ServerCapabilities::default()
+            }
+        );
+
+        let symbols = document_symbol_options("outline");
+        let mut caps = CapabilityBuilder::default();
+        caps.set_document_symbol(symbols.clone()).unwrap();
+        assert_eq!(
+            caps.finish(),
+            ServerCapabilities {
+                document_symbol_provider: Some(OneOf::Right(symbols)),
+                ..ServerCapabilities::default()
+            }
+        );
+
+        let linked = linked_editing_range_options();
+        let mut caps = CapabilityBuilder::default();
+        caps.set_linked_editing_range(linked.clone()).unwrap();
+        assert_eq!(
+            caps.finish(),
+            ServerCapabilities {
+                linked_editing_range_provider: Some(LinkedEditingRangeServerCapabilities::Options(
+                    linked
+                )),
+                ..ServerCapabilities::default()
+            }
+        );
+
+        let monikers = moniker_options();
+        let mut caps = CapabilityBuilder::default();
+        caps.set_moniker(monikers.clone()).unwrap();
+        assert_eq!(
+            caps.finish(),
+            ServerCapabilities {
+                moniker_provider: Some(OneOf::Right(MonikerServerCapabilities::Options(monikers))),
+                ..ServerCapabilities::default()
+            }
+        );
+    }
+
+    #[test]
+    fn navigation_and_lookup_singular_options_never_use_last_write_wins() {
+        let mut signature = CapabilityBuilder::default();
+        signature
+            .set_signature_help(signature_options("("))
+            .unwrap();
+        assert_eq!(
+            signature.set_signature_help(signature_options("[")),
+            Err(BuildError::ConflictingCapability {
+                field: "signatureHelpProvider"
+            })
+        );
+
+        let mut declaration = CapabilityBuilder::default();
+        declaration.set_declaration(declaration_options()).unwrap();
+        assert_eq!(
+            declaration.set_declaration(DeclarationOptions {
+                work_done_progress_options: progress(Some(false)),
+            }),
+            Err(BuildError::ConflictingCapability {
+                field: "declarationProvider"
+            })
+        );
+
+        let mut definition = CapabilityBuilder::default();
+        definition.set_definition(definition_options()).unwrap();
+        assert_eq!(
+            definition.set_definition(DefinitionOptions {
+                work_done_progress_options: progress(Some(false)),
+            }),
+            Err(BuildError::ConflictingCapability {
+                field: "definitionProvider"
+            })
+        );
+
+        let mut type_definition = CapabilityBuilder::default();
+        type_definition
+            .set_type_definition(registration_options("type"))
+            .unwrap();
+        assert_eq!(
+            type_definition.set_type_definition(registration_options("other")),
+            Err(BuildError::ConflictingCapability {
+                field: "typeDefinitionProvider"
+            })
+        );
+
+        let mut implementation = CapabilityBuilder::default();
+        implementation
+            .set_implementation(registration_options("impl"))
+            .unwrap();
+        assert_eq!(
+            implementation.set_implementation(registration_options("other")),
+            Err(BuildError::ConflictingCapability {
+                field: "implementationProvider"
+            })
+        );
+
+        let mut references = CapabilityBuilder::default();
+        references.set_references(references_options()).unwrap();
+        assert_eq!(
+            references.set_references(ReferencesOptions {
+                work_done_progress_options: progress(Some(false)),
+            }),
+            Err(BuildError::ConflictingCapability {
+                field: "referencesProvider"
+            })
+        );
+
+        let mut highlight = CapabilityBuilder::default();
+        highlight
+            .set_document_highlight(document_highlight_options())
+            .unwrap();
+        assert_eq!(
+            highlight.set_document_highlight(DocumentHighlightOptions {
+                work_done_progress_options: progress(Some(false)),
+            }),
+            Err(BuildError::ConflictingCapability {
+                field: "documentHighlightProvider"
+            })
+        );
+
+        let mut symbols = CapabilityBuilder::default();
+        symbols
+            .set_document_symbol(document_symbol_options("outline"))
+            .unwrap();
+        assert_eq!(
+            symbols.set_document_symbol(document_symbol_options("other")),
+            Err(BuildError::ConflictingCapability {
+                field: "documentSymbolProvider"
+            })
+        );
+
+        let mut linked = CapabilityBuilder::default();
+        linked
+            .set_linked_editing_range(linked_editing_range_options())
+            .unwrap();
+        assert_eq!(
+            linked.set_linked_editing_range(LinkedEditingRangeOptions {
+                work_done_progress_options: progress(Some(false)),
+            }),
+            Err(BuildError::ConflictingCapability {
+                field: "linkedEditingRangeProvider"
+            })
+        );
+
+        let mut moniker = CapabilityBuilder::default();
+        moniker.set_moniker(moniker_options()).unwrap();
+        assert_eq!(
+            moniker.set_moniker(MonikerOptions {
+                work_done_progress_options: progress(Some(false)),
+            }),
+            Err(BuildError::ConflictingCapability {
+                field: "monikerProvider"
             })
         );
     }
