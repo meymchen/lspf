@@ -20,6 +20,9 @@ mod transport;
 mod uri_key;
 mod workspace;
 
+#[cfg(test)]
+mod test_util;
+
 pub mod types {
     //! LSP protocol types — re-exported from `lsp-types` per ADR 0014.
     pub use lsp_types::*;
@@ -49,6 +52,8 @@ pub use engine::Outcome;
 pub use error::{BuildError, ClientError, Error, LspError, Result};
 pub use features::{FeatureSpec, NotificationFeatureSpec};
 pub use file_provider::{FileProvider, MemoryFileProvider};
+#[cfg(not(target_arch = "wasm32"))]
+pub use file_provider::{OsFileProvider, OsFileProviderBuilder};
 pub use raw::{JsonRpcError, RawMessage, RequestId};
 #[doc(hidden)]
 pub use runtime::TaskSend;

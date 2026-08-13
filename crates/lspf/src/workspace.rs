@@ -47,10 +47,28 @@ struct WorkspaceState {
 }
 
 /// Failure to resolve a document through the connection's workspace.
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[derive(Debug, thiserror::Error)]
 pub enum WorkspaceError {
+    /// No open document and the configured provider has no resource for the
+    /// URI.
     #[error("resource not found")]
     NotFound,
+
+    /// The resource's scheme is not served by the configured provider.
+    #[error("scheme `{0}` is not supported")]
+    UnsupportedScheme(String),
+
+    /// The resource's path or contents are not valid UTF-8.
+    #[error("the resource path or contents are not valid UTF-8")]
+    InvalidEncoding,
+
+    /// The resource is larger than the provider's configured byte limit.
+    #[error("the resource exceeds the maximum read size of {limit} bytes")]
+    TooLarge { limit: u64 },
+
+    /// The provider failed to read the resource.
+    #[error("failed to read the resource: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 impl std::fmt::Debug for WorkspaceState {
@@ -192,12 +210,11 @@ impl Workspace {
         if let Some(document) = self.inner.documents.get(uri) {
             return Ok(document);
         }
-        self.inner
-            .file_provider
-            .read_text(uri)
-            .await
-            .map(|text| Document::provider_snapshot(uri.clone(), text))
-            .ok_or(WorkspaceError::NotFound)
+        match self.inner.file_provider.read_text(uri).await {
+            Ok(Some(text)) => Ok(Document::provider_snapshot(uri.clone(), text)),
+            Ok(None) => Err(WorkspaceError::NotFound),
+            Err(error) => Err(error),
+        }
     }
 
     pub(crate) fn apply_folder_change(&self, params: DidChangeWorkspaceFoldersParams) {
@@ -249,7 +266,8 @@ mod tests {
     use super::*;
     use crate::documents::Documents;
     use crate::file_provider::erase;
-    use crate::{MemoryFileProvider, WorkspaceError};
+    use crate::test_util::file_uri;
+    use crate::{MemoryFileProvider, OsFileProvider, WorkspaceError};
 
     fn uri(spelling: &str) -> Uri {
         Uri::from_str(spelling).expect("the test URI parses")
@@ -535,9 +553,109 @@ mod tests {
             erase(MemoryFileProvider::new()),
         );
 
-        assert_eq!(
-            workspace.text_document(&requested).await.unwrap_err(),
-            WorkspaceError::NotFound
+        assert!(matches!(
+            workspace.text_document(&requested).await,
+            Err(WorkspaceError::NotFound)
+        ));
+    }
+
+    #[tokio::test]
+    #[cfg(not(target_arch = "wasm32"))]
+    async fn os_provider_snapshots_are_versionless_not_cached_and_not_opened() {
+        let dir = tempfile::tempdir().expect("a tempdir is created");
+        let file = dir.path().join("provider.rs");
+        std::fs::write(&file, "provider one").expect("the test file writes");
+        let requested = file_uri(&file);
+        let documents = Documents::new();
+        let workspace = Workspace::from_params_with_provider(
+            &InitializeParams::default(),
+            documents.clone(),
+            erase(OsFileProvider::new()),
         );
+
+        let first = workspace.text_document(&requested).await.unwrap();
+        assert_eq!(first.uri(), &requested);
+        assert_eq!(first.text(), "provider one");
+        assert_eq!(first.version(), None);
+        assert!(
+            documents.get(&requested).is_none(),
+            "a provider read never becomes an open document"
+        );
+
+        std::fs::write(&file, "provider two").expect("the test file rewrites");
+        assert_eq!(
+            workspace.text_document(&requested).await.unwrap().text(),
+            "provider two",
+            "an unopened lookup reads the filesystem every time"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(not(target_arch = "wasm32"))]
+    async fn os_provider_reads_files_outside_every_workspace_root() {
+        let dir = tempfile::tempdir().expect("a tempdir is created");
+        let file = dir.path().join("outside.rs");
+        std::fs::write(&file, "outside the root").expect("the test file writes");
+        let requested = file_uri(&file);
+        let workspace = Workspace::from_params_with_provider(
+            &params_with_root(Some("file:///workspace/root")),
+            Documents::new(),
+            erase(OsFileProvider::new()),
+        );
+
+        assert_eq!(
+            workspace.text_document(&requested).await.unwrap().text(),
+            "outside the root"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(not(target_arch = "wasm32"))]
+    async fn os_provider_missing_file_is_not_found() {
+        let dir = tempfile::tempdir().expect("a tempdir is created");
+        let requested = file_uri(&dir.path().join("absent.rs"));
+        let workspace = Workspace::from_params_with_provider(
+            &InitializeParams::default(),
+            Documents::new(),
+            erase(OsFileProvider::new()),
+        );
+
+        assert!(matches!(
+            workspace.text_document(&requested).await,
+            Err(WorkspaceError::NotFound)
+        ));
+    }
+
+    #[tokio::test]
+    #[cfg(not(target_arch = "wasm32"))]
+    async fn os_provider_rejects_non_file_schemes() {
+        let requested = uri("untitled:Untitled-1");
+        let workspace = Workspace::from_params_with_provider(
+            &InitializeParams::default(),
+            Documents::new(),
+            erase(OsFileProvider::new()),
+        );
+
+        assert!(matches!(
+            workspace.text_document(&requested).await,
+            Err(WorkspaceError::UnsupportedScheme(scheme)) if scheme == "untitled"
+        ));
+    }
+
+    #[tokio::test]
+    #[cfg(not(target_arch = "wasm32"))]
+    async fn os_provider_io_failures_surface_through_text_document() {
+        let dir = tempfile::tempdir().expect("a tempdir is created");
+        let requested = file_uri(dir.path());
+        let workspace = Workspace::from_params_with_provider(
+            &InitializeParams::default(),
+            Documents::new(),
+            erase(OsFileProvider::new()),
+        );
+
+        assert!(matches!(
+            workspace.text_document(&requested).await,
+            Err(WorkspaceError::Io(_))
+        ));
     }
 }
