@@ -1,0 +1,19 @@
+{
+  "method": "workspace/applyEdit",
+  "params": {
+    "label": "rename symbol",
+    "edit": {
+      "changes": {
+        "file:///main.rs": [
+          {
+            "range": {
+              "start": { "line": 0, "character": 4 },
+              "end": { "line": 0, "character": 7 }
+            },
+            "newText": "renamed"
+          }
+        ]
+      }
+    }
+  }
+}
