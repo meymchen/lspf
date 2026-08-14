@@ -1,9 +1,10 @@
-//! Typed outgoing request helpers on `Client` (issue #104).
+//! Typed outgoing request helpers on `Client` (issues #104, #105).
 //!
 //! `show_document`, `show_message_request`, and `apply_edit` are thin wrappers
-//! over the generic typed request broker. These wire-level tests run each
-//! helper inside a real handler over an in-memory transport, pin the outgoing
-//! request's method and parameter shape against the fixtures under
+//! over the generic typed request broker, as are the client-owned workspace
+//! queries `configuration` and `workspace_folders`. These wire-level tests run
+//! each helper inside a real handler over an in-memory transport, pin the
+//! outgoing request's method and parameter shape against the fixtures under
 //! `tests/fixtures/`, and then complete it through every documented path:
 //! success, a remote JSON-RPC error, an invalid success result, caller
 //! abandonment, and connection disconnect.
@@ -13,7 +14,9 @@ use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
 use lspf::types::request::Request;
-use lspf::types::{ApplyWorkspaceEditResponse, MessageActionItem, ShowDocumentResult};
+use lspf::types::{
+    ApplyWorkspaceEditResponse, MessageActionItem, ShowDocumentResult, WorkspaceFolder,
+};
 use lspf::{
     CancellationToken, Client, ClientError, Context, RawMessage, RequestId, Server, Transport,
     TransportError, TransportReader, TransportWriter,
@@ -24,6 +27,8 @@ use tokio::sync::mpsc;
 const SHOW_DOCUMENT_FIXTURE: &str = include_str!("fixtures/show_document_request.json");
 const SHOW_MESSAGE_REQUEST_FIXTURE: &str = include_str!("fixtures/show_message_request.json");
 const APPLY_EDIT_FIXTURE: &str = include_str!("fixtures/apply_edit_request.json");
+const CONFIGURATION_FIXTURE: &str = include_str!("fixtures/configuration_request.json");
+const WORKSPACE_FOLDERS_FIXTURE: &str = include_str!("fixtures/workspace_folders_request.json");
 
 // --- Registrations -----------------------------------------------------------
 
@@ -226,7 +231,8 @@ async fn await_outcome<T>(outcome: &Arc<Mutex<Option<T>>>) -> T {
 /// - `abandoning_the_future_cancels_the_request_on_the_wire`
 /// - `connection_disconnect_resolves_the_pending_request_as_cancelled`
 ///
-/// `call` is the `Client` method under test. It is invoked three ways: awaited
+/// `call` is an expression producing the helper future given a `Client` and
+/// the trigger params as `serde_json::Value`. It is invoked three ways: awaited
 /// inside the trigger handler, dropped without awaiting after a short delay
 /// (abandonment), and awaited on a detached task that survives session close.
 macro_rules! helper_wire_tests {
@@ -235,7 +241,7 @@ macro_rules! helper_wire_tests {
         result = $result:ty,
         params = $params:expr,
         fixture = $fixture:ident,
-        call = $call:ident,
+        call = $call:expr,
         success_reply = $success_reply:expr,
         success_assert = $success_assert:expr,
         invalid_reply = $invalid_reply:expr $(,)?
@@ -248,12 +254,12 @@ macro_rules! helper_wire_tests {
                 client: Client,
                 params: serde_json::Value,
             ) -> impl std::future::Future<Output = Result<$result, ClientError>> {
-                async move { client.$call(serde_json::from_value(params).unwrap()).await }
+                async move { ($call)(client, params).await }
             }
 
             /// The helper's future created and dropped without being awaited.
             async fn abandoned_call(client: Client, params: serde_json::Value) {
-                let fut = client.$call(serde_json::from_value(params).unwrap());
+                let fut = ($call)(client, params);
                 tokio::select! {
                     _ = fut => {}
                     _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}
@@ -478,7 +484,11 @@ helper_wire_tests!(
     result = ShowDocumentResult,
     params = json!({ "uri": "file:///guide.md", "takeFocus": true }),
     fixture = SHOW_DOCUMENT_FIXTURE,
-    call = show_document,
+    call = |client: Client, params: serde_json::Value| async move {
+        client
+            .show_document(serde_json::from_value(params).unwrap())
+            .await
+    },
     success_reply = json!({ "success": true }),
     success_assert =
         |value: ShowDocumentResult| assert_eq!(value, ShowDocumentResult { success: true }),
@@ -494,7 +504,11 @@ helper_wire_tests!(
         "actions": [{ "title": "Save" }, { "title": "Discard" }],
     }),
     fixture = SHOW_MESSAGE_REQUEST_FIXTURE,
-    call = show_message_request,
+    call = |client: Client, params: serde_json::Value| async move {
+        client
+            .show_message_request(serde_json::from_value(params).unwrap())
+            .await
+    },
     success_reply = json!({ "title": "Save" }),
     success_assert = |value: Option<MessageActionItem>| {
         let item = value.expect("the user picked an action");
@@ -524,7 +538,11 @@ helper_wire_tests!(
         },
     }),
     fixture = APPLY_EDIT_FIXTURE,
-    call = apply_edit,
+    call = |client: Client, params: serde_json::Value| async move {
+        client
+            .apply_edit(serde_json::from_value(params).unwrap())
+            .await
+    },
     success_reply = json!({ "applied": true }),
     success_assert = |value: ApplyWorkspaceEditResponse| {
         assert_eq!(
@@ -537,4 +555,52 @@ helper_wire_tests!(
         );
     },
     invalid_reply = json!({ "applied": "yes" }),
+);
+
+helper_wire_tests!(
+    configuration,
+    result = Vec<serde_json::Value>,
+    params = json!({
+        "items": [
+            { "section": "editor" },
+            { "scopeUri": "file:///workspace/main.rs", "section": "lspf.language" },
+        ],
+    }),
+    fixture = CONFIGURATION_FIXTURE,
+    call = |client: Client, params: serde_json::Value| async move {
+        client.configuration(serde_json::from_value(params).unwrap()).await
+    },
+    // The reply mixes a filled value, a null, and an extra entry: the result
+    // must keep the client's order and length exactly, filling nothing in and
+    // truncating nothing out.
+    success_reply = json!([{ "tabSize": 4 }, null, { "extra": true }]),
+    success_assert = |value: Vec<serde_json::Value>| {
+        assert_eq!(
+            value,
+            vec![json!({ "tabSize": 4 }), serde_json::Value::Null, json!({ "extra": true })],
+            "the client's order and length are preserved exactly"
+        );
+    },
+    invalid_reply = json!({ "not": "an array" }),
+);
+
+helper_wire_tests!(
+    workspace_folders,
+    result = Option<Vec<WorkspaceFolder>>,
+    params = json!(null),
+    fixture = WORKSPACE_FOLDERS_FIXTURE,
+    call = |client: Client, _params: serde_json::Value| async move { client.workspace_folders().await },
+    success_reply = json!([
+        { "uri": "file:///a", "name": "a" },
+        { "uri": "file:///b", "name": "b" },
+    ]),
+    success_assert = |value: Option<Vec<WorkspaceFolder>>| {
+        let folders = value.expect("the client answered with folders");
+        assert_eq!(folders.len(), 2, "the client's order and length are preserved");
+        assert_eq!(folders[0].uri.as_str(), "file:///a");
+        assert_eq!(folders[0].name, "a");
+        assert_eq!(folders[1].uri.as_str(), "file:///b");
+        assert_eq!(folders[1].name, "b");
+    },
+    invalid_reply = json!([{ "name": "missing uri" }]),
 );
