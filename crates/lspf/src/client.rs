@@ -7,11 +7,15 @@ use bytes::Bytes;
 use lsp_types::notification::{
     LogMessage, LogTrace, Notification, Progress, PublishDiagnostics, ShowMessage,
 };
-use lsp_types::request::{ApplyWorkspaceEdit, Request, ShowDocument, ShowMessageRequest};
+use lsp_types::request::{
+    ApplyWorkspaceEdit, Request, ShowDocument, ShowMessageRequest, WorkspaceConfiguration,
+    WorkspaceFoldersRequest,
+};
 use lsp_types::{
-    ApplyWorkspaceEditParams, ApplyWorkspaceEditResponse, LogMessageParams, LogTraceParams,
-    MessageActionItem, ProgressParams, PublishDiagnosticsParams, ShowDocumentParams,
-    ShowDocumentResult, ShowMessageParams, ShowMessageRequestParams, TraceValue,
+    ApplyWorkspaceEditParams, ApplyWorkspaceEditResponse, ConfigurationParams, LogMessageParams,
+    LogTraceParams, MessageActionItem, ProgressParams, PublishDiagnosticsParams,
+    ShowDocumentParams, ShowDocumentResult, ShowMessageParams, ShowMessageRequestParams,
+    TraceValue, WorkspaceFolder,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc::UnboundedSender, oneshot};
@@ -549,6 +553,57 @@ impl Client {
         params: ApplyWorkspaceEditParams,
     ) -> Result<ApplyWorkspaceEditResponse, ClientError> {
         self.request::<ApplyWorkspaceEdit>(params).await
+    }
+
+    /// Ask the client for its configuration with `workspace/configuration`
+    /// (LSP 3.17), awaiting one value per requested [`ConfigurationParams`]
+    /// item.
+    ///
+    /// The items are sent exactly as provided: which sections to fetch and
+    /// under which scope URIs all come from the caller. The client's
+    /// `Vec<Value>` is returned verbatim to the caller — entries keep the
+    /// client's order and length, with `null` wherever the client answered
+    /// nothing. The query result is never written into the framework-owned
+    /// [`Workspace`](crate::Workspace) configuration snapshot, which only
+    /// tracks `workspace/didChangeConfiguration`.
+    ///
+    /// # Errors
+    ///
+    /// Behaves exactly as [`Client::request`]: [`ClientError::Serialize`],
+    /// [`ClientError::ConnectionClosed`], [`ClientError::OutboundClosed`], or
+    /// [`ClientError::IdExhausted`] if the request never reaches the wire;
+    /// [`ClientError::Remote`] if the client answers with a JSON-RPC error;
+    /// [`ClientError::Deserialize`] if the success result cannot be decoded;
+    /// [`ClientError::Cancelled`] if the session closes before the client
+    /// answers.
+    pub async fn configuration(
+        &self,
+        params: ConfigurationParams,
+    ) -> Result<Vec<serde_json::Value>, ClientError> {
+        self.request::<WorkspaceConfiguration>(params).await
+    }
+
+    /// Ask the client for its current workspace folders with
+    /// `workspace/workspaceFolders` (LSP 3.17), awaiting the client's
+    /// `Option<Vec<WorkspaceFolder>>`.
+    ///
+    /// The client's folders are returned verbatim to the caller: `None` when
+    /// the client answers `null` (a single untitled document), otherwise one
+    /// folder per entry in the client's order. The query result is never
+    /// written into the framework-owned [`Workspace`](crate::Workspace)
+    /// folder list, which only tracks the initialization announcement and
+    /// later `workspace/didChangeWorkspaceFolders` synchronization.
+    ///
+    /// # Errors
+    ///
+    /// Behaves exactly as [`Client::request`]: [`ClientError::ConnectionClosed`],
+    /// [`ClientError::OutboundClosed`], or [`ClientError::IdExhausted`] if the
+    /// request never reaches the wire; [`ClientError::Remote`] if the client
+    /// answers with a JSON-RPC error; [`ClientError::Deserialize`] if the
+    /// success result cannot be decoded; [`ClientError::Cancelled`] if the
+    /// session closes before the client answers.
+    pub async fn workspace_folders(&self) -> Result<Option<Vec<WorkspaceFolder>>, ClientError> {
+        self.request::<WorkspaceFoldersRequest>(()).await
     }
 
     fn ensure_open(&self, phase: &mut Phase) -> Result<(), ClientError> {

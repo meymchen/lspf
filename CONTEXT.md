@@ -104,7 +104,12 @@ Named request helpers cover the standard window and workspace interactions —
 each a thin wrapper over the typed request broker: the native LSP params
 and results pass through verbatim under the broker's deterministic
 completion semantics, and no helper adds UI, message-selection, or edit
-policy.
+policy. The client-owned workspace queries — `configuration`
+(`workspace/configuration`) and `workspace_folders`
+(`workspace/workspaceFolders`) — follow the same contract, and their
+results go to the caller only: a query result never writes into the
+Workspace configuration snapshot or the Workspace folder list, which
+stay under protocol notification sync.
 `Client` is only a handle — the outbound queue, ID allocator, and pending
 registry are owned by the connection's protocol engine.
 _Avoid_: Connection (that is the transport level), sender.
