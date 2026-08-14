@@ -4,13 +4,22 @@ use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
-use lsp_types::notification::Notification;
+use lsp_types::notification::{
+    LogMessage, LogTrace, Notification, Progress, PublishDiagnostics, ShowMessage,
+};
 use lsp_types::request::Request;
+use lsp_types::{
+    LogMessageParams, LogTraceParams, ProgressParams, PublishDiagnosticsParams, ShowMessageParams,
+    TraceValue,
+};
+use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc::UnboundedSender, oneshot};
 use tokio_util::sync::CancellationToken;
+use tracing::warn;
 
 use crate::error::ClientError;
 use crate::raw::{JsonRpcError, RawMessage, RequestId};
+use crate::workspace::SharedTrace;
 
 /// A response completion value: either raw success bytes or a JSON-RPC error.
 type PendingResult = std::result::Result<Bytes, JsonRpcError>;
@@ -203,6 +212,45 @@ struct ClientState {
     outbound_closing: CancellationToken,
 }
 
+/// The payload of a `telemetry/event` notification.
+///
+/// Notification params on the wire are structured JSON — an object or an
+/// array — so this type has no primitive representation: a bare string,
+/// number, or boolean payload is rejected by the type system at the call
+/// site. Serialization is transparent: the object or array is sent exactly
+/// as constructed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum TelemetryEventParams {
+    /// A JSON object payload.
+    Object(serde_json::Map<String, serde_json::Value>),
+    /// A JSON array payload.
+    Array(Vec<serde_json::Value>),
+}
+
+impl From<serde_json::Map<String, serde_json::Value>> for TelemetryEventParams {
+    fn from(object: serde_json::Map<String, serde_json::Value>) -> Self {
+        Self::Object(object)
+    }
+}
+
+impl From<Vec<serde_json::Value>> for TelemetryEventParams {
+    fn from(array: Vec<serde_json::Value>) -> Self {
+        Self::Array(array)
+    }
+}
+
+/// The `telemetry/event` notification with the object-or-array params type.
+/// `lsp_types::notification::TelemetryEvent` types its params as
+/// `serde_json::Value`, which would admit primitive payloads, so the helper
+/// goes through this re-typed notification instead.
+enum TelemetryEvent {}
+
+impl Notification for TelemetryEvent {
+    type Params = TelemetryEventParams;
+    const METHOD: &'static str = <lsp_types::notification::TelemetryEvent as Notification>::METHOD;
+}
+
 /// A cloneable typed handle for messages sent to the current LSP client.
 ///
 /// A `Client` is connection-scoped. It does not expose the connection's
@@ -213,6 +261,7 @@ pub struct Client {
     outgoing: UnboundedSender<RawMessage>,
     outbound: OutboundRegistry,
     state: Arc<ClientState>,
+    trace: SharedTrace,
 }
 
 impl fmt::Debug for Client {
@@ -230,6 +279,7 @@ impl Client {
                 phase: Mutex::new(Phase::Open),
                 outbound_closing: CancellationToken::new(),
             }),
+            trace: SharedTrace::default(),
         }
     }
 
@@ -260,6 +310,72 @@ impl Client {
             return Err(ClientError::OutboundClosed);
         }
         Ok(())
+    }
+
+    /// The shared enqueue path of the named outgoing helpers: any
+    /// serialization or enqueue failure is reported through `tracing` and
+    /// still returned to the caller.
+    fn notify_logged<N>(&self, params: N::Params) -> Result<(), ClientError>
+    where
+        N: Notification,
+    {
+        self.notify::<N>(params).inspect_err(|error| {
+            warn!(method = N::METHOD, %error, "outgoing client notification failed");
+        })
+    }
+
+    /// Push diagnostics to the client with `textDocument/publishDiagnostics`
+    /// (LSP 3.17), fire-and-forget.
+    ///
+    /// The params are sent exactly as provided: diagnostics are not cached,
+    /// deduplicated, or rewritten, the caller-provided `version` is
+    /// preserved, and closing a document never clears them automatically.
+    pub fn publish_diagnostics(&self, params: PublishDiagnosticsParams) -> Result<(), ClientError> {
+        self.notify_logged::<PublishDiagnostics>(params)
+    }
+
+    /// Ask the client to display a message to the user with
+    /// `window/showMessage` (LSP 3.17), fire-and-forget.
+    pub fn show_message(&self, params: ShowMessageParams) -> Result<(), ClientError> {
+        self.notify_logged::<ShowMessage>(params)
+    }
+
+    /// Log a message to the client's log channel with `window/logMessage`
+    /// (LSP 3.17), fire-and-forget.
+    ///
+    /// The message goes to the client only; it is not duplicated into the
+    /// server's local `tracing` stream.
+    pub fn log_message(&self, params: LogMessageParams) -> Result<(), ClientError> {
+        self.notify_logged::<LogMessage>(params)
+    }
+
+    /// Send a trace message with `$/logTrace` (LSP 3.17), gated on the
+    /// connection's current trace level.
+    ///
+    /// With the level `Off` — the initial value until the client sends
+    /// `$/setTrace` — nothing is enqueued and the call returns `Ok(())`.
+    /// With `Messages` or `Verbose` the params are sent exactly as provided;
+    /// sending never changes the level.
+    pub fn log_trace(&self, params: LogTraceParams) -> Result<(), ClientError> {
+        if self.trace.get() == TraceValue::Off {
+            return Ok(());
+        }
+        self.notify_logged::<LogTrace>(params)
+    }
+
+    /// Ask the client to log a telemetry event with `telemetry/event`
+    /// (LSP 3.17), fire-and-forget.
+    ///
+    /// The payload is a [`TelemetryEventParams`] — a JSON object or array —
+    /// so primitive JSON values are rejected by the type system.
+    pub fn telemetry_event(&self, params: TelemetryEventParams) -> Result<(), ClientError> {
+        self.notify_logged::<TelemetryEvent>(params)
+    }
+
+    /// Report progress to the client with `$/progress` (LSP 3.17),
+    /// fire-and-forget.
+    pub fn progress(&self, params: ProgressParams) -> Result<(), ClientError> {
+        self.notify_logged::<Progress>(params)
     }
 
     /// Encode and enqueue one typed server-to-client request, then await the
@@ -392,6 +508,13 @@ impl Client {
     /// Engine-private accessor to the shared outbound registry.
     pub(crate) fn outbound_registry(&self) -> &OutboundRegistry {
         &self.outbound
+    }
+
+    /// The connection's shared trace level, handed to the
+    /// [`Workspace`](crate::Workspace) when the engine establishes it, so
+    /// `$/setTrace` writes and [`Client::log_trace`] reads observe one cell.
+    pub(crate) fn shared_trace(&self) -> SharedTrace {
+        self.trace.clone()
     }
 }
 
