@@ -1,0 +1,9 @@
+{
+  "method": "workspace/configuration",
+  "params": {
+    "items": [
+      { "section": "editor" },
+      { "scopeUri": "file:///workspace/main.rs", "section": "lspf.language" }
+    ]
+  }
+}
