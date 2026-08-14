@@ -354,10 +354,7 @@ impl Client {
             PendingOutcome::Response(Ok(bytes)) => {
                 serde_json::from_slice::<R::Result>(&bytes).map_err(ClientError::Deserialize)
             }
-            PendingOutcome::Response(Err(e)) => Err(ClientError::Remote {
-                code: e.code,
-                message: e.message,
-            }),
+            PendingOutcome::Response(Err(e)) => Err(ClientError::Remote(e)),
             PendingOutcome::Cancelled => Err(ClientError::Cancelled),
         }
     }
@@ -630,12 +627,59 @@ mod tests {
             Err(JsonRpcError {
                 code: -32000,
                 message: "server error".to_string(),
-                data: None,
+                data: Some(json!({ "retry": true })),
             }),
         );
 
+        // The remote error's code, message, and optional data are preserved.
         let err = handle.await.unwrap().unwrap_err();
-        assert!(matches!(err, ClientError::Remote { code: -32000, .. }));
+        match err {
+            ClientError::Remote(e) => {
+                assert_eq!(e.code, -32000);
+                assert_eq!(e.message, "server error");
+                assert_eq!(e.data, Some(json!({ "retry": true })));
+            }
+            other => panic!("expected ClientError::Remote, got {other:?}"),
+        }
+        assert_eq!(client.outbound_registry().pending_len(), 0);
+    }
+
+    #[tokio::test]
+    async fn malformed_success_result_returns_deserialize_error() {
+        use lsp_types::request::Request as LspRequest;
+
+        enum TypedRequest {}
+        impl LspRequest for TypedRequest {
+            type Params = serde_json::Value;
+            type Result = u32;
+            const METHOD: &'static str = "test/typed";
+        }
+
+        let (client, mut receiver) = make_client();
+        let client2 = client.clone();
+
+        let handle = tokio::spawn(async move { client2.request::<TypedRequest>(json!({})).await });
+
+        let msg = receiver.recv().await.unwrap();
+        let id_num = match msg {
+            RawMessage::Request {
+                id: NumberOrString::Number(n),
+                ..
+            } => n as u32,
+            _ => panic!("expected numeric request"),
+        };
+
+        // A success envelope whose result does not decode into `R::Result`.
+        client
+            .outbound_registry()
+            .complete(id_num, Ok(Bytes::from_static(b"\"not a number\"")));
+
+        let err = handle.await.unwrap().unwrap_err();
+        assert!(
+            matches!(err, ClientError::Deserialize(_)),
+            "expected ClientError::Deserialize, got {err:?}"
+        );
+        assert_eq!(client.outbound_registry().pending_len(), 0);
     }
 
     #[tokio::test]
