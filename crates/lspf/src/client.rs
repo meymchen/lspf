@@ -8,14 +8,14 @@ use lsp_types::notification::{
     LogMessage, LogTrace, Notification, Progress, PublishDiagnostics, ShowMessage,
 };
 use lsp_types::request::{
-    ApplyWorkspaceEdit, Request, ShowDocument, ShowMessageRequest, WorkspaceConfiguration,
-    WorkspaceFoldersRequest,
+    ApplyWorkspaceEdit, RegisterCapability, Request, ShowDocument, ShowMessageRequest,
+    UnregisterCapability, WorkspaceConfiguration, WorkspaceFoldersRequest,
 };
 use lsp_types::{
     ApplyWorkspaceEditParams, ApplyWorkspaceEditResponse, ConfigurationParams, LogMessageParams,
     LogTraceParams, MessageActionItem, ProgressParams, PublishDiagnosticsParams,
-    ShowDocumentParams, ShowDocumentResult, ShowMessageParams, ShowMessageRequestParams,
-    TraceValue, WorkspaceFolder,
+    RegistrationParams, ShowDocumentParams, ShowDocumentResult, ShowMessageParams,
+    ShowMessageRequestParams, TraceValue, UnregistrationParams, WorkspaceFolder,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc::UnboundedSender, oneshot};
@@ -604,6 +604,64 @@ impl Client {
     /// session closes before the client answers.
     pub async fn workspace_folders(&self) -> Result<Option<Vec<WorkspaceFolder>>, ClientError> {
         self.request::<WorkspaceFoldersRequest>(()).await
+    }
+
+    /// Tell the client about new capabilities with `client/registerCapability`
+    /// (LSP 3.17), awaiting the client's acknowledgement.
+    ///
+    /// The [`RegistrationParams`] are sent exactly as provided: the
+    /// registration ids, methods, and register options all come from the
+    /// caller. The announcement changes nothing on the server side: the helper
+    /// never adds, replaces, or removes a route in the connection's frozen
+    /// Router, never recomputes the initialize capabilities, and the framework
+    /// retains no second list of currently registered client capabilities.
+    /// Any local route must already exist through static or
+    /// initialize-conditional registration — dynamic registration only tells
+    /// the client to start sending traffic for it. The client's `null`
+    /// acknowledgement is returned as `()`.
+    ///
+    /// # Errors
+    ///
+    /// Behaves exactly as [`Client::request`]: [`ClientError::Serialize`],
+    /// [`ClientError::ConnectionClosed`], [`ClientError::OutboundClosed`], or
+    /// [`ClientError::IdExhausted`] if the request never reaches the wire;
+    /// [`ClientError::Remote`] if the client answers with a JSON-RPC error;
+    /// [`ClientError::Deserialize`] if the success result cannot be decoded;
+    /// [`ClientError::Cancelled`] if the session closes before the client
+    /// answers.
+    pub async fn register_capability(&self, params: RegistrationParams) -> Result<(), ClientError> {
+        self.request::<RegisterCapability>(params).await
+    }
+
+    /// Tell the client to drop capabilities with
+    /// `client/unregisterCapability` (LSP 3.17), awaiting the client's
+    /// acknowledgement.
+    ///
+    /// The [`UnregistrationParams`] are sent exactly as provided: which
+    /// registration ids and methods to withdraw all come from the caller. The
+    /// announcement changes nothing on the server side: the helper never adds,
+    /// replaces, or removes a route in the connection's frozen Router, never
+    /// recomputes the initialize capabilities, and the framework retains no
+    /// second list of currently registered client capabilities. Any local
+    /// route must already exist through static or initialize-conditional
+    /// registration — dynamic unregistration only tells the client to stop
+    /// sending traffic for it. The client's `null` acknowledgement is
+    /// returned as `()`.
+    ///
+    /// # Errors
+    ///
+    /// Behaves exactly as [`Client::request`]: [`ClientError::Serialize`],
+    /// [`ClientError::ConnectionClosed`], [`ClientError::OutboundClosed`], or
+    /// [`ClientError::IdExhausted`] if the request never reaches the wire;
+    /// [`ClientError::Remote`] if the client answers with a JSON-RPC error;
+    /// [`ClientError::Deserialize`] if the success result cannot be decoded;
+    /// [`ClientError::Cancelled`] if the session closes before the client
+    /// answers.
+    pub async fn unregister_capability(
+        &self,
+        params: UnregistrationParams,
+    ) -> Result<(), ClientError> {
+        self.request::<UnregisterCapability>(params).await
     }
 
     fn ensure_open(&self, phase: &mut Phase) -> Result<(), ClientError> {

@@ -31,3 +31,6 @@ Desktop.ini
 
 # Scratch files
 /.scratch/
+
+# Agent run state
+/.agent-runs/
