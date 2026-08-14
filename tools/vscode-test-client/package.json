@@ -1,4 +1,4 @@
-{
+﻿{
   "name": "lspf-test-client",
   "displayName": "lspf test client",
   "description": "Spawns the lspf-hello binary as a language server for manual smoke testing.",
@@ -25,5 +25,8 @@
     "@types/node": "^24",
     "@types/vscode": "^1.80.0",
     "typescript": "^5"
+  },
+  "overrides": {
+    "brace-expansion": "2.1.4"
   }
 }
