@@ -1,0 +1,7 @@
+{
+  "method": "window/showDocument",
+  "params": {
+    "uri": "file:///guide.md",
+    "takeFocus": true
+  }
+}
