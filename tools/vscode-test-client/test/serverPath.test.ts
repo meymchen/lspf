@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as path from 'node:path';
 
-import { resolveServerBinary } from './serverPath.ts';
+import { resolveServerBinary } from '../src/serverPath.ts';
 
 test('resolves the lspf-hello workspace binary under target/debug', () => {
     const binary = resolveServerBinary('/repo');
