@@ -1,0 +1,7 @@
+{
+  "method": "$/logTrace",
+  "params": {
+    "message": "resolved import",
+    "verbose": "walked the import graph"
+  }
+}
