@@ -110,6 +110,13 @@ policy. The client-owned workspace queries — `configuration`
 results go to the caller only: a query result never writes into the
 Workspace configuration snapshot or the Workspace folder list, which
 stay under protocol notification sync.
+The dynamic capability announcements — `register_capability`
+(`client/registerCapability`) and `unregister_capability`
+(`client/unregisterCapability`) — tell the client about capability
+changes while leaving the permanently frozen [[Router]] and the computed
+initialize capabilities untouched; the framework retains no second list
+of currently registered client capabilities, and any local route must
+already exist through static or initialize-conditional registration.
 `Client` is only a handle — the outbound queue, ID allocator, and pending
 registry are owned by the connection's protocol engine.
 _Avoid_: Connection (that is the transport level), sender.

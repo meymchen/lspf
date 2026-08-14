@@ -1,13 +1,16 @@
-//! Typed outgoing request helpers on `Client` (issues #104, #105).
+//! Typed outgoing request helpers on `Client` (issues #104, #105, #106).
 //!
 //! `show_document`, `show_message_request`, and `apply_edit` are thin wrappers
 //! over the generic typed request broker, as are the client-owned workspace
-//! queries `configuration` and `workspace_folders`. These wire-level tests run
-//! each helper inside a real handler over an in-memory transport, pin the
-//! outgoing request's method and parameter shape against the fixtures under
-//! `tests/fixtures/`, and then complete it through every documented path:
-//! success, a remote JSON-RPC error, an invalid success result, caller
-//! abandonment, and connection disconnect.
+//! queries `configuration` and `workspace_folders` and the dynamic capability
+//! announcements `register_capability` and `unregister_capability`. These
+//! wire-level tests run each helper inside a real handler over an in-memory
+//! transport, pin the outgoing request's method and parameter shape against
+//! the fixtures under `tests/fixtures/`, and then complete it through every
+//! documented path: success, a remote JSON-RPC error, an invalid success
+//! result, caller abandonment, and connection disconnect. A final integration
+//! test proves that dynamic registration never makes an otherwise absent
+//! local route dispatchable.
 
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex};
@@ -29,6 +32,9 @@ const SHOW_MESSAGE_REQUEST_FIXTURE: &str = include_str!("fixtures/show_message_r
 const APPLY_EDIT_FIXTURE: &str = include_str!("fixtures/apply_edit_request.json");
 const CONFIGURATION_FIXTURE: &str = include_str!("fixtures/configuration_request.json");
 const WORKSPACE_FOLDERS_FIXTURE: &str = include_str!("fixtures/workspace_folders_request.json");
+const REGISTER_CAPABILITY_FIXTURE: &str = include_str!("fixtures/register_capability_request.json");
+const UNREGISTER_CAPABILITY_FIXTURE: &str =
+    include_str!("fixtures/unregister_capability_request.json");
 
 // --- Registrations -----------------------------------------------------------
 
@@ -604,3 +610,120 @@ helper_wire_tests!(
     },
     invalid_reply = json!([{ "name": "missing uri" }]),
 );
+
+helper_wire_tests!(
+    register_capability,
+    result = (),
+    params = json!({
+        "registrations": [
+            {
+                "id": "hover-registration",
+                "method": "textDocument/hover",
+                "registerOptions": { "documentSelector": [{ "language": "rust" }] },
+            },
+        ],
+    }),
+    fixture = REGISTER_CAPABILITY_FIXTURE,
+    call = |client: Client, params: serde_json::Value| async move {
+        client
+            .register_capability(serde_json::from_value(params).unwrap())
+            .await
+    },
+    success_reply = json!(null),
+    success_assert = |value: ()| assert_eq!(value, ()),
+    invalid_reply = json!({ "unexpected": true }),
+);
+
+helper_wire_tests!(
+    unregister_capability,
+    result = (),
+    params = json!({
+        "unregisterations": [
+            { "id": "hover-registration", "method": "textDocument/hover" },
+        ],
+    }),
+    fixture = UNREGISTER_CAPABILITY_FIXTURE,
+    call = |client: Client, params: serde_json::Value| async move {
+        client
+            .unregister_capability(serde_json::from_value(params).unwrap())
+            .await
+    },
+    success_reply = json!(null),
+    success_assert = |value: ()| assert_eq!(value, ()),
+    invalid_reply = json!({ "unexpected": true }),
+);
+
+// --- Router freeze integration test (issue #106) ----------------------------
+
+/// A dynamic `client/registerCapability` announcement tells the client about
+/// a capability; it never adds a route to the connection's frozen Router.
+/// Dynamically registering `textDocument/hover` must not make the otherwise
+/// absent local hover route dispatchable.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dynamic_registration_does_not_dispatch_an_absent_route() {
+    // The trigger handler announces hover support to the client; the params
+    // come from the wire fixture so the announcement is the real thing.
+    let fixture: serde_json::Value =
+        serde_json::from_str(REGISTER_CAPABILITY_FIXTURE).expect("the fixture is valid JSON");
+    let registration_params = fixture["params"].clone();
+    let server = Server::builder(())
+        .request::<Trigger, _, _>(
+            move |_state: Arc<()>,
+                  ctx: Context,
+                  params: serde_json::Value,
+                  _ct: CancellationToken| {
+                async move {
+                    ctx.client()
+                        .register_capability(serde_json::from_value(params).unwrap())
+                        .await
+                        .expect("the client accepted the registration");
+                    Ok("registered".to_string())
+                }
+            },
+        )
+        .build()
+        .expect("the outgoing-request server builds");
+    let mut session = start(server).await;
+    init(&mut session).await;
+
+    session
+        .in_tx
+        .send(inbound_request(2, Trigger::METHOD, registration_params))
+        .unwrap();
+    let outbound = receive(&mut session.out_rx).await;
+    assert_wire_request(&outbound, REGISTER_CAPABILITY_FIXTURE);
+    let id = outbound_number_id(&outbound);
+    session
+        .in_tx
+        .send(success_response(id, json!(null)))
+        .unwrap();
+    let response = receive(&mut session.out_rx).await;
+    assert_eq!(response.id(), Some(&RequestId::Number(2)));
+    assert_eq!(result_string(&response), "registered");
+
+    // The Router never gained a hover route: dispatch still answers
+    // MethodNotFound for the dynamically registered method.
+    session
+        .in_tx
+        .send(inbound_request(
+            3,
+            "textDocument/hover",
+            json!({
+                "textDocument": { "uri": "file:///main.rs" },
+                "position": { "line": 0, "character": 0 },
+            }),
+        ))
+        .unwrap();
+    let response = receive(&mut session.out_rx).await;
+    match response {
+        RawMessage::Response {
+            id: RequestId::Number(3),
+            result: Err(e),
+        } => assert_eq!(
+            e.code, -32601,
+            "dynamic registration must not add a local route"
+        ),
+        other => panic!("expected a MethodNotFound error for id 3, got {other:?}"),
+    }
+    finish(session).await;
+}
