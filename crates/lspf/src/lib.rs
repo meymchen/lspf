@@ -45,7 +45,7 @@ mod markdown {
 }
 
 pub use builder::{InitializeRegistrar, Server, ServerBuilder};
-pub use client::Client;
+pub use client::{Client, TelemetryEventParams};
 pub use context::Context;
 pub use documents::{Document, DocumentsView, PositionEncoding};
 pub use engine::Outcome;
