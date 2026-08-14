@@ -39,9 +39,10 @@ pub enum ClientError {
     #[error("outbound request ID space exhausted")]
     IdExhausted,
 
-    /// The remote peer returned a JSON-RPC error response.
-    #[error("remote error (code {code}): {message}")]
-    Remote { code: i32, message: String },
+    /// The remote peer returned a JSON-RPC error response. The original
+    /// error's code, message, and optional data are preserved.
+    #[error("remote error (code {code}): {message}", code = .0.code, message = .0.message)]
+    Remote(crate::raw::JsonRpcError),
 
     /// The remote peer returned a success result that could not be decoded
     /// into the expected type.
