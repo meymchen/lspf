@@ -1,0 +1,11 @@
+{
+  "method": "window/showMessageRequest",
+  "params": {
+    "type": 3,
+    "message": "save before closing?",
+    "actions": [
+      { "title": "Save" },
+      { "title": "Discard" }
+    ]
+  }
+}

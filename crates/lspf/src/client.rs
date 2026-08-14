@@ -7,10 +7,11 @@ use bytes::Bytes;
 use lsp_types::notification::{
     LogMessage, LogTrace, Notification, Progress, PublishDiagnostics, ShowMessage,
 };
-use lsp_types::request::Request;
+use lsp_types::request::{ApplyWorkspaceEdit, Request, ShowDocument, ShowMessageRequest};
 use lsp_types::{
-    LogMessageParams, LogTraceParams, ProgressParams, PublishDiagnosticsParams, ShowMessageParams,
-    TraceValue,
+    ApplyWorkspaceEditParams, ApplyWorkspaceEditResponse, LogMessageParams, LogTraceParams,
+    MessageActionItem, ProgressParams, PublishDiagnosticsParams, ShowDocumentParams,
+    ShowDocumentResult, ShowMessageParams, ShowMessageRequestParams, TraceValue,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc::UnboundedSender, oneshot};
@@ -473,6 +474,81 @@ impl Client {
             PendingOutcome::Response(Err(e)) => Err(ClientError::Remote(e)),
             PendingOutcome::Cancelled => Err(ClientError::Cancelled),
         }
+    }
+
+    /// Ask the client to display a document with `window/showDocument`
+    /// (LSP 3.17), awaiting the client's [`ShowDocumentResult`].
+    ///
+    /// The [`ShowDocumentParams`] are sent exactly as provided: which document
+    /// to show, whether it opens externally, and whether it takes focus all
+    /// come from the caller. The helper owns no UI policy and the client's
+    /// [`ShowDocumentResult`] — its success flag — is returned verbatim.
+    ///
+    /// # Errors
+    ///
+    /// Behaves exactly as [`Client::request`]: [`ClientError::Serialize`],
+    /// [`ClientError::ConnectionClosed`], [`ClientError::OutboundClosed`], or
+    /// [`ClientError::IdExhausted`] if the request never reaches the wire;
+    /// [`ClientError::Remote`] if the client answers with a JSON-RPC error;
+    /// [`ClientError::Deserialize`] if the success result cannot be decoded;
+    /// [`ClientError::Cancelled`] if the session closes before the client
+    /// answers.
+    pub async fn show_document(
+        &self,
+        params: ShowDocumentParams,
+    ) -> Result<ShowDocumentResult, ClientError> {
+        self.request::<ShowDocument>(params).await
+    }
+
+    /// Ask the user to pick one of several actions with
+    /// `window/showMessageRequest` (LSP 3.17), awaiting the user's choice.
+    ///
+    /// The [`ShowMessageRequestParams`] are sent exactly as provided: the
+    /// message, its type, and the action titles all come from the caller.
+    /// The helper owns no message-selection policy: it never filters, ranks,
+    /// or substitutes actions, and the client's `Option<MessageActionItem>` —
+    /// the user's choice, or `None` on dismissal — is returned verbatim.
+    ///
+    /// # Errors
+    ///
+    /// Behaves exactly as [`Client::request`]: [`ClientError::Serialize`],
+    /// [`ClientError::ConnectionClosed`], [`ClientError::OutboundClosed`], or
+    /// [`ClientError::IdExhausted`] if the request never reaches the wire;
+    /// [`ClientError::Remote`] if the client answers with a JSON-RPC error;
+    /// [`ClientError::Deserialize`] if the success result cannot be decoded;
+    /// [`ClientError::Cancelled`] if the session closes before the client
+    /// answers.
+    pub async fn show_message_request(
+        &self,
+        params: ShowMessageRequestParams,
+    ) -> Result<Option<MessageActionItem>, ClientError> {
+        self.request::<ShowMessageRequest>(params).await
+    }
+
+    /// Ask the client to apply a workspace edit with `workspace/applyEdit`
+    /// (LSP 3.17), awaiting the client's [`ApplyWorkspaceEditResponse`].
+    ///
+    /// The [`ApplyWorkspaceEditParams`] are sent exactly as provided: the
+    /// edit contents, label, and metadata all come from the caller. The
+    /// helper owns no edit policy: it never rewrites, filters, or batches
+    /// edits, and the client's [`ApplyWorkspaceEditResponse`] — its `applied`
+    /// flag with the optional failure reason — is returned verbatim for the
+    /// caller to interpret.
+    ///
+    /// # Errors
+    ///
+    /// Behaves exactly as [`Client::request`]: [`ClientError::Serialize`],
+    /// [`ClientError::ConnectionClosed`], [`ClientError::OutboundClosed`], or
+    /// [`ClientError::IdExhausted`] if the request never reaches the wire;
+    /// [`ClientError::Remote`] if the client answers with a JSON-RPC error;
+    /// [`ClientError::Deserialize`] if the success result cannot be decoded;
+    /// [`ClientError::Cancelled`] if the session closes before the client
+    /// answers.
+    pub async fn apply_edit(
+        &self,
+        params: ApplyWorkspaceEditParams,
+    ) -> Result<ApplyWorkspaceEditResponse, ClientError> {
+        self.request::<ApplyWorkspaceEdit>(params).await
     }
 
     fn ensure_open(&self, phase: &mut Phase) -> Result<(), ClientError> {

@@ -98,6 +98,13 @@ Named helpers cover the stable outgoing notification surface
 `telemetry_event`, `progress`): each sends its LSP-typed params verbatim and
 returns enqueue failures as `ClientError`; `log_trace` gates on the
 connection's shared trace level, enqueueing nothing while the level is `Off`.
+Named request helpers cover the standard window and workspace interactions —
+`show_document` (`window/showDocument`), `show_message_request`
+(`window/showMessageRequest`), and `apply_edit` (`workspace/applyEdit`) —
+each a thin wrapper over the typed request broker: the native LSP params
+and results pass through verbatim under the broker's deterministic
+completion semantics, and no helper adds UI, message-selection, or edit
+policy.
 `Client` is only a handle — the outbound queue, ID allocator, and pending
 registry are owned by the connection's protocol engine.
 _Avoid_: Connection (that is the transport level), sender.
