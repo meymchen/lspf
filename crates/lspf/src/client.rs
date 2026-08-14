@@ -8,8 +8,10 @@ use lsp_types::notification::{
     LogMessage, LogTrace, Notification, Progress, PublishDiagnostics, ShowMessage,
 };
 use lsp_types::request::{
-    ApplyWorkspaceEdit, RegisterCapability, Request, ShowDocument, ShowMessageRequest,
-    UnregisterCapability, WorkspaceConfiguration, WorkspaceFoldersRequest,
+    ApplyWorkspaceEdit, CodeLensRefresh, InlayHintRefreshRequest, InlineValueRefreshRequest,
+    RegisterCapability, Request, SemanticTokensRefresh, ShowDocument, ShowMessageRequest,
+    UnregisterCapability, WorkspaceConfiguration, WorkspaceDiagnosticRefresh,
+    WorkspaceFoldersRequest,
 };
 use lsp_types::{
     ApplyWorkspaceEditParams, ApplyWorkspaceEditResponse, ConfigurationParams, LogMessageParams,
@@ -662,6 +664,112 @@ impl Client {
         params: UnregistrationParams,
     ) -> Result<(), ClientError> {
         self.request::<UnregisterCapability>(params).await
+    }
+
+    /// Ask the client to recompute its code lenses with
+    /// `workspace/codeLens/refresh` (stable since LSP 3.16), awaiting the
+    /// client's `null` acknowledgement as `()`.
+    ///
+    /// The request carries no parameters (`Params = ()`, sent as `null`); the
+    /// helper owns no recomputation policy — which lenses the client recomputes
+    /// is entirely the client's concern. The framework keeps no code-lens
+    /// state, so nothing local changes when the client acknowledges.
+    ///
+    /// # Errors
+    ///
+    /// Behaves exactly as [`Client::request`]: [`ClientError::ConnectionClosed`],
+    /// [`ClientError::OutboundClosed`], or [`ClientError::IdExhausted`] if the
+    /// request never reaches the wire; [`ClientError::Remote`] if the client
+    /// answers with a JSON-RPC error; [`ClientError::Deserialize`] if the
+    /// success result cannot be decoded; [`ClientError::Cancelled`] if the
+    /// session closes before the client answers.
+    pub async fn code_lens_refresh(&self) -> Result<(), ClientError> {
+        self.request::<CodeLensRefresh>(()).await
+    }
+
+    /// Ask the client to recompute its workspace diagnostics with
+    /// `workspace/diagnostic/refresh` (stable since LSP 3.17), awaiting the
+    /// client's `null` acknowledgement as `()`.
+    ///
+    /// The request carries no parameters (`Params = ()`, sent as `null`); the
+    /// helper owns no recomputation policy — which documents the client re-pulls
+    /// diagnostics for is entirely the client's concern. The framework keeps no
+    /// pull-diagnostic state, so nothing local changes when the client
+    /// acknowledges.
+    ///
+    /// # Errors
+    ///
+    /// Behaves exactly as [`Client::request`]: [`ClientError::ConnectionClosed`],
+    /// [`ClientError::OutboundClosed`], or [`ClientError::IdExhausted`] if the
+    /// request never reaches the wire; [`ClientError::Remote`] if the client
+    /// answers with a JSON-RPC error; [`ClientError::Deserialize`] if the
+    /// success result cannot be decoded; [`ClientError::Cancelled`] if the
+    /// session closes before the client answers.
+    pub async fn diagnostic_refresh(&self) -> Result<(), ClientError> {
+        self.request::<WorkspaceDiagnosticRefresh>(()).await
+    }
+
+    /// Ask the client to recompute its inlay hints with
+    /// `workspace/inlayHint/refresh` (stable since LSP 3.17), awaiting the
+    /// client's `null` acknowledgement as `()`.
+    ///
+    /// The request carries no parameters (`Params = ()`, sent as `null`); the
+    /// helper owns no recomputation policy — which hints the client recomputes
+    /// is entirely the client's concern. The framework keeps no inlay-hint
+    /// state, so nothing local changes when the client acknowledges.
+    ///
+    /// # Errors
+    ///
+    /// Behaves exactly as [`Client::request`]: [`ClientError::ConnectionClosed`],
+    /// [`ClientError::OutboundClosed`], or [`ClientError::IdExhausted`] if the
+    /// request never reaches the wire; [`ClientError::Remote`] if the client
+    /// answers with a JSON-RPC error; [`ClientError::Deserialize`] if the
+    /// success result cannot be decoded; [`ClientError::Cancelled`] if the
+    /// session closes before the client answers.
+    pub async fn inlay_hint_refresh(&self) -> Result<(), ClientError> {
+        self.request::<InlayHintRefreshRequest>(()).await
+    }
+
+    /// Ask the client to recompute its inline values with
+    /// `workspace/inlineValue/refresh` (stable since LSP 3.17), awaiting the
+    /// client's `null` acknowledgement as `()`.
+    ///
+    /// The request carries no parameters (`Params = ()`, sent as `null`); the
+    /// helper owns no recomputation policy — which values the client recomputes
+    /// is entirely the client's concern. The framework keeps no inline-value
+    /// state, so nothing local changes when the client acknowledges.
+    ///
+    /// # Errors
+    ///
+    /// Behaves exactly as [`Client::request`]: [`ClientError::ConnectionClosed`],
+    /// [`ClientError::OutboundClosed`], or [`ClientError::IdExhausted`] if the
+    /// request never reaches the wire; [`ClientError::Remote`] if the client
+    /// answers with a JSON-RPC error; [`ClientError::Deserialize`] if the
+    /// success result cannot be decoded; [`ClientError::Cancelled`] if the
+    /// session closes before the client answers.
+    pub async fn inline_value_refresh(&self) -> Result<(), ClientError> {
+        self.request::<InlineValueRefreshRequest>(()).await
+    }
+
+    /// Ask the client to recompute its semantic tokens with
+    /// `workspace/semanticTokens/refresh` (stable since LSP 3.16), awaiting
+    /// the client's `null` acknowledgement as `()`.
+    ///
+    /// The request carries no parameters (`Params = ()`, sent as `null`); the
+    /// helper owns no recomputation policy — which tokens the client recomputes
+    /// is entirely the client's concern. The framework keeps no semantic-token
+    /// state, so nothing local changes when the client acknowledges.
+    ///
+    /// # Errors
+    ///
+    /// Behaves exactly as [`Client::request`]: [`ClientError::ConnectionClosed`],
+    /// [`ClientError::OutboundClosed`], or [`ClientError::IdExhausted`] if the
+    /// request never reaches the wire; [`ClientError::Remote`] if the client
+    /// answers with a JSON-RPC error; [`ClientError::Deserialize`] if the
+    /// success result cannot be decoded; [`ClientError::Cancelled`] if the
+    /// session closes before the client answers.
+    pub async fn semantic_tokens_refresh(&self) -> Result<(), ClientError> {
+        self.request::<SemanticTokensRefresh>(()).await
     }
 
     fn ensure_open(&self, phase: &mut Phase) -> Result<(), ClientError> {
