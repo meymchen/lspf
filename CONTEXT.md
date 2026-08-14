@@ -117,6 +117,16 @@ changes while leaving the permanently frozen [[Router]] and the computed
 initialize capabilities untouched; the framework retains no second list
 of currently registered client capabilities, and any local route must
 already exist through static or initialize-conditional registration.
+The five stable workspace refresh helpers — `code_lens_refresh`
+(`workspace/codeLens/refresh`), `diagnostic_refresh`
+(`workspace/diagnostic/refresh`), `inlay_hint_refresh`
+(`workspace/inlayHint/refresh`), `inline_value_refresh`
+(`workspace/inlineValue/refresh`), and `semantic_tokens_refresh`
+(`workspace/semanticTokens/refresh`) — each take no parameters and
+return the client's `null` acknowledgement as `()`; they own no
+recomputation policy, and the framework keeps no lens, diagnostic, hint,
+value, or token state for them to touch. The default refresh surface
+contains no proposed, draft, or notebook method.
 `Client` is only a handle — the outbound queue, ID allocator, and pending
 registry are owned by the connection's protocol engine.
 _Avoid_: Connection (that is the transport level), sender.

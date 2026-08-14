@@ -1,9 +1,12 @@
-//! Typed outgoing request helpers on `Client` (issues #104, #105, #106).
+//! Typed outgoing request helpers on `Client` (issues #104, #105, #106, #107).
 //!
 //! `show_document`, `show_message_request`, and `apply_edit` are thin wrappers
 //! over the generic typed request broker, as are the client-owned workspace
-//! queries `configuration` and `workspace_folders` and the dynamic capability
-//! announcements `register_capability` and `unregister_capability`. These
+//! queries `configuration` and `workspace_folders`, the dynamic capability
+//! announcements `register_capability` and `unregister_capability`, and the
+//! five stable workspace refresh helpers `code_lens_refresh`,
+//! `diagnostic_refresh`, `inlay_hint_refresh`, `inline_value_refresh`, and
+//! `semantic_tokens_refresh`. These
 //! wire-level tests run each helper inside a real handler over an in-memory
 //! transport, pin the outgoing request's method and parameter shape against
 //! the fixtures under `tests/fixtures/`, and then complete it through every
@@ -35,6 +38,13 @@ const WORKSPACE_FOLDERS_FIXTURE: &str = include_str!("fixtures/workspace_folders
 const REGISTER_CAPABILITY_FIXTURE: &str = include_str!("fixtures/register_capability_request.json");
 const UNREGISTER_CAPABILITY_FIXTURE: &str =
     include_str!("fixtures/unregister_capability_request.json");
+const CODE_LENS_REFRESH_FIXTURE: &str = include_str!("fixtures/code_lens_refresh_request.json");
+const DIAGNOSTIC_REFRESH_FIXTURE: &str = include_str!("fixtures/diagnostic_refresh_request.json");
+const INLAY_HINT_REFRESH_FIXTURE: &str = include_str!("fixtures/inlay_hint_refresh_request.json");
+const INLINE_VALUE_REFRESH_FIXTURE: &str =
+    include_str!("fixtures/inline_value_refresh_request.json");
+const SEMANTIC_TOKENS_REFRESH_FIXTURE: &str =
+    include_str!("fixtures/semantic_tokens_refresh_request.json");
 
 // --- Registrations -----------------------------------------------------------
 
@@ -647,6 +657,65 @@ helper_wire_tests!(
         client
             .unregister_capability(serde_json::from_value(params).unwrap())
             .await
+    },
+    success_reply = json!(null),
+    success_assert = |value: ()| assert_eq!(value, ()),
+    invalid_reply = json!({ "unexpected": true }),
+);
+
+helper_wire_tests!(
+    code_lens_refresh,
+    result = (),
+    params = json!(null),
+    fixture = CODE_LENS_REFRESH_FIXTURE,
+    call = |client: Client, _params: serde_json::Value| async move { client.code_lens_refresh().await },
+    success_reply = json!(null),
+    success_assert = |value: ()| assert_eq!(value, ()),
+    invalid_reply = json!({ "unexpected": true }),
+);
+
+helper_wire_tests!(
+    diagnostic_refresh,
+    result = (),
+    params = json!(null),
+    fixture = DIAGNOSTIC_REFRESH_FIXTURE,
+    call = |client: Client, _params: serde_json::Value| async move { client.diagnostic_refresh().await },
+    success_reply = json!(null),
+    success_assert = |value: ()| assert_eq!(value, ()),
+    invalid_reply = json!({ "unexpected": true }),
+);
+
+helper_wire_tests!(
+    inlay_hint_refresh,
+    result = (),
+    params = json!(null),
+    fixture = INLAY_HINT_REFRESH_FIXTURE,
+    call = |client: Client, _params: serde_json::Value| async move { client.inlay_hint_refresh().await },
+    success_reply = json!(null),
+    success_assert = |value: ()| assert_eq!(value, ()),
+    invalid_reply = json!({ "unexpected": true }),
+);
+
+helper_wire_tests!(
+    inline_value_refresh,
+    result = (),
+    params = json!(null),
+    fixture = INLINE_VALUE_REFRESH_FIXTURE,
+    call = |client: Client, _params: serde_json::Value| async move {
+        client.inline_value_refresh().await
+    },
+    success_reply = json!(null),
+    success_assert = |value: ()| assert_eq!(value, ()),
+    invalid_reply = json!({ "unexpected": true }),
+);
+
+helper_wire_tests!(
+    semantic_tokens_refresh,
+    result = (),
+    params = json!(null),
+    fixture = SEMANTIC_TOKENS_REFRESH_FIXTURE,
+    call = |client: Client, _params: serde_json::Value| async move {
+        client.semantic_tokens_refresh().await
     },
     success_reply = json!(null),
     success_assert = |value: ()| assert_eq!(value, ()),
