@@ -125,11 +125,16 @@ fn notification(method: &'static str, params: serde_json::Value) -> RawMessage {
     }
 }
 
+/// Hang guard for every wait in this file. Assertions never depend on a
+/// scheduler delay; the watchdog only bounds a genuinely stuck engine, so it
+/// stays generous enough for instrumented (llvm-cov) CI runs.
+const WATCHDOG: std::time::Duration = std::time::Duration::from_secs(30);
+
 async fn receive_for(
     outgoing: &mut mpsc::UnboundedReceiver<RawMessage>,
     expected_id: i32,
 ) -> RawMessage {
-    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+    tokio::time::timeout(WATCHDOG, async {
         loop {
             let message = outgoing.recv().await.expect("server response");
             if message.id() == Some(&RequestId::Number(expected_id)) {
@@ -247,7 +252,7 @@ async fn cancellation_reaches_handler_token_and_completes_unfinished_request_onc
         .send(notification("$/cancelRequest", json!({ "id": 2 })))
         .unwrap();
 
-    tokio::time::timeout(std::time::Duration::from_secs(2), observed_rx)
+    tokio::time::timeout(WATCHDOG, observed_rx)
         .await
         .expect("handler observed cancellation before watchdog timeout")
         .expect("handler observed its cancellation token");
