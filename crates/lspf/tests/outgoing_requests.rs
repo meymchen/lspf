@@ -1,0 +1,540 @@
+//! Typed outgoing request helpers on `Client` (issue #104).
+//!
+//! `show_document`, `show_message_request`, and `apply_edit` are thin wrappers
+//! over the generic typed request broker. These wire-level tests run each
+//! helper inside a real handler over an in-memory transport, pin the outgoing
+//! request's method and parameter shape against the fixtures under
+//! `tests/fixtures/`, and then complete it through every documented path:
+//! success, a remote JSON-RPC error, an invalid success result, caller
+//! abandonment, and connection disconnect.
+
+use std::borrow::Cow;
+use std::sync::{Arc, Mutex};
+
+use bytes::Bytes;
+use lspf::types::request::Request;
+use lspf::types::{ApplyWorkspaceEditResponse, MessageActionItem, ShowDocumentResult};
+use lspf::{
+    CancellationToken, Client, ClientError, Context, RawMessage, RequestId, Server, Transport,
+    TransportError, TransportReader, TransportWriter,
+};
+use serde_json::json;
+use tokio::sync::mpsc;
+
+const SHOW_DOCUMENT_FIXTURE: &str = include_str!("fixtures/show_document_request.json");
+const SHOW_MESSAGE_REQUEST_FIXTURE: &str = include_str!("fixtures/show_message_request.json");
+const APPLY_EDIT_FIXTURE: &str = include_str!("fixtures/apply_edit_request.json");
+
+// --- Registrations -----------------------------------------------------------
+
+/// A probe request whose handler runs one outgoing helper call. The trigger's
+/// params are the helper's params as JSON; its result is the handler's marker
+/// string, which synchronizes the test with the read loop.
+enum Trigger {}
+
+impl Request for Trigger {
+    type Params = serde_json::Value;
+    type Result = String;
+    const METHOD: &'static str = "test/trigger";
+}
+
+// --- Harness -----------------------------------------------------------------
+
+struct ChannelTransport {
+    incoming: mpsc::UnboundedReceiver<RawMessage>,
+    outgoing: mpsc::UnboundedSender<RawMessage>,
+}
+
+struct ChannelReader(mpsc::UnboundedReceiver<RawMessage>);
+struct ChannelWriter(mpsc::UnboundedSender<RawMessage>);
+
+impl Transport for ChannelTransport {
+    type Reader = ChannelReader;
+    type Writer = ChannelWriter;
+
+    fn split(self) -> (Self::Reader, Self::Writer) {
+        (ChannelReader(self.incoming), ChannelWriter(self.outgoing))
+    }
+}
+
+impl TransportReader for ChannelReader {
+    async fn recv(&mut self) -> Result<RawMessage, TransportError> {
+        self.0.recv().await.ok_or(TransportError::Closed)
+    }
+}
+
+impl TransportWriter for ChannelWriter {
+    async fn send(&mut self, message: RawMessage) -> Result<(), TransportError> {
+        self.0.send(message).map_err(|_| TransportError::Closed)
+    }
+
+    async fn shutdown(self) -> Result<(), TransportError> {
+        Ok(())
+    }
+}
+
+struct Session {
+    in_tx: mpsc::UnboundedSender<RawMessage>,
+    out_rx: mpsc::UnboundedReceiver<RawMessage>,
+    serve: tokio::task::JoinHandle<lspf::Result<lspf::Outcome>>,
+}
+
+fn inbound_request(id: i32, method: &'static str, params: serde_json::Value) -> RawMessage {
+    RawMessage::Request {
+        id: RequestId::Number(id),
+        method: Cow::Borrowed(method),
+        params: Bytes::from(serde_json::to_vec(&params).unwrap()),
+    }
+}
+
+fn success_response(id: i32, result: serde_json::Value) -> RawMessage {
+    RawMessage::Response {
+        id: RequestId::Number(id),
+        result: Ok(Bytes::from(serde_json::to_vec(&result).unwrap())),
+    }
+}
+
+fn error_response(
+    id: i32,
+    code: i32,
+    message: &'static str,
+    data: Option<serde_json::Value>,
+) -> RawMessage {
+    RawMessage::Response {
+        id: RequestId::Number(id),
+        result: Err(lspf::JsonRpcError {
+            code,
+            message: message.to_string(),
+            data,
+        }),
+    }
+}
+
+fn exit() -> RawMessage {
+    RawMessage::Notification {
+        method: Cow::Borrowed("exit"),
+        params: Bytes::from_static(b"null"),
+    }
+}
+
+async fn receive(outgoing: &mut mpsc::UnboundedReceiver<RawMessage>) -> RawMessage {
+    tokio::time::timeout(std::time::Duration::from_secs(2), outgoing.recv())
+        .await
+        .expect("server output before watchdog timeout")
+        .expect("server output channel remains open")
+}
+
+async fn start(server: Server<()>) -> Session {
+    let (in_tx, incoming) = mpsc::unbounded_channel();
+    let (outgoing, out_rx) = mpsc::unbounded_channel();
+    let serve = tokio::spawn(server.serve(ChannelTransport { incoming, outgoing }));
+    Session {
+        in_tx,
+        out_rx,
+        serve,
+    }
+}
+
+async fn init(session: &mut Session) {
+    session
+        .in_tx
+        .send(inbound_request(
+            1,
+            "initialize",
+            json!({ "processId": null, "rootUri": null, "capabilities": {} }),
+        ))
+        .unwrap();
+    let response = receive(&mut session.out_rx).await;
+    assert_eq!(response.id(), Some(&RequestId::Number(1)));
+}
+
+async fn finish(session: Session) {
+    session.in_tx.send(exit()).unwrap();
+    session
+        .serve
+        .await
+        .expect("serve task did not panic")
+        .expect("serve ended cleanly");
+}
+
+fn result_string(response: &RawMessage) -> String {
+    match response {
+        RawMessage::Response {
+            result: Ok(bytes), ..
+        } => serde_json::from_slice(bytes).expect("the result decodes"),
+        other => panic!("expected a success response, got {other:?}"),
+    }
+}
+
+fn assert_wire_request(message: &RawMessage, fixture: &str) {
+    let RawMessage::Request { method, params, .. } = message else {
+        panic!("expected a request, got {message:?}")
+    };
+    let wire = json!({
+        "method": method.as_ref(),
+        "params": serde_json::from_slice::<serde_json::Value>(params)
+            .expect("the params are valid JSON"),
+    });
+    let expected: serde_json::Value =
+        serde_json::from_str(fixture).expect("the fixture is valid JSON");
+    assert_eq!(wire, expected, "the wire shape must match the fixture");
+}
+
+/// The numeric ID of an outbound request, which is how the mock peer answers
+/// it and how a `$/cancelRequest` names it.
+fn outbound_number_id(message: &RawMessage) -> i32 {
+    match message {
+        RawMessage::Request { id, .. } => match id {
+            RequestId::Number(n) => *n,
+            _ => panic!("expected a numeric outbound request id"),
+        },
+        other => panic!("expected a request, got {other:?}"),
+    }
+}
+
+fn take_outcome<T>(outcome: &Arc<Mutex<Option<T>>>) -> T {
+    outcome
+        .lock()
+        .unwrap()
+        .take()
+        .expect("the handler recorded an outcome")
+}
+
+/// Poll for an outcome recorded by a detached task, which survives the
+/// session close that completes the pending request.
+async fn await_outcome<T>(outcome: &Arc<Mutex<Option<T>>>) -> T {
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            if let Some(value) = outcome.lock().unwrap().take() {
+                return value;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the detached task recorded an outcome within the watchdog")
+}
+
+// --- Per-helper behavior tests ----------------------------------------------
+
+/// Instantiate the five wire-level behavior tests for one helper. Each test
+/// module gets:
+///
+/// - `success_matches_the_wire_fixture_and_decodes_the_result`
+/// - `remote_error_preserves_code_message_and_data`
+/// - `invalid_success_result_reports_deserialize`
+/// - `abandoning_the_future_cancels_the_request_on_the_wire`
+/// - `connection_disconnect_resolves_the_pending_request_as_cancelled`
+///
+/// `call` is the `Client` method under test. It is invoked three ways: awaited
+/// inside the trigger handler, dropped without awaiting after a short delay
+/// (abandonment), and awaited on a detached task that survives session close.
+macro_rules! helper_wire_tests {
+    (
+        $name:ident,
+        result = $result:ty,
+        params = $params:expr,
+        fixture = $fixture:ident,
+        call = $call:ident,
+        success_reply = $success_reply:expr,
+        success_assert = $success_assert:expr,
+        invalid_reply = $invalid_reply:expr $(,)?
+    ) => {
+        mod $name {
+            use super::*;
+
+            /// The helper awaited to completion inside the trigger handler.
+            fn awaited_call(
+                client: Client,
+                params: serde_json::Value,
+            ) -> impl std::future::Future<Output = Result<$result, ClientError>> {
+                async move { client.$call(serde_json::from_value(params).unwrap()).await }
+            }
+
+            /// The helper's future created and dropped without being awaited.
+            async fn abandoned_call(client: Client, params: serde_json::Value) {
+                let fut = client.$call(serde_json::from_value(params).unwrap());
+                tokio::select! {
+                    _ = fut => {}
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}
+                }
+            }
+
+            fn roundtrip_server(
+                outcome: &Arc<Mutex<Option<Result<$result, ClientError>>>>,
+            ) -> Server<()> {
+                let outcome = Arc::clone(outcome);
+                Server::builder(())
+                    .request::<Trigger, _, _>(move |_state: Arc<()>,
+                                                 ctx: Context,
+                                                 params: serde_json::Value,
+                                                 _ct: CancellationToken| {
+                        let outcome = Arc::clone(&outcome);
+                        async move {
+                            let result = awaited_call(ctx.client(), params).await;
+                            *outcome.lock().unwrap() = Some(result);
+                            Ok("triggered".to_string())
+                        }
+                    })
+                    .build()
+                    .expect("the outgoing-request server builds")
+            }
+
+            fn abandon_server() -> Server<()> {
+                Server::builder(())
+                    .request::<Trigger, _, _>(move |_state: Arc<()>,
+                                                 ctx: Context,
+                                                 params: serde_json::Value,
+                                                 _ct: CancellationToken| {
+                        async move {
+                            abandoned_call(ctx.client(), params).await;
+                            Ok("abandoned".to_string())
+                        }
+                    })
+                    .build()
+                    .expect("the outgoing-request server builds")
+            }
+
+            fn detached_server(
+                outcome: &Arc<Mutex<Option<Result<$result, ClientError>>>>,
+            ) -> Server<()> {
+                let outcome = Arc::clone(outcome);
+                Server::builder(())
+                    .request::<Trigger, _, _>(move |_state: Arc<()>,
+                                                 ctx: Context,
+                                                 params: serde_json::Value,
+                                                 _ct: CancellationToken| {
+                        let outcome = Arc::clone(&outcome);
+                        async move {
+                            tokio::spawn(async move {
+                                let result = awaited_call(ctx.client(), params).await;
+                                *outcome.lock().unwrap() = Some(result);
+                            });
+                            Ok("spawned".to_string())
+                        }
+                    })
+                    .build()
+                    .expect("the outgoing-request server builds")
+            }
+
+            /// Send the trigger, return the outbound request the helper put on
+            /// the wire (with its wire shape pinned against the fixture).
+            async fn trigger_request(session: &mut Session) -> i32 {
+                session
+                    .in_tx
+                    .send(inbound_request(2, Trigger::METHOD, $params))
+                    .unwrap();
+                let outbound = receive(&mut session.out_rx).await;
+                assert_wire_request(&outbound, $fixture);
+                outbound_number_id(&outbound)
+            }
+
+            #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+            async fn success_matches_the_wire_fixture_and_decodes_the_result() {
+                let outcome = Arc::new(Mutex::new(None));
+                let mut session = start(roundtrip_server(&outcome)).await;
+                init(&mut session).await;
+
+                let id = trigger_request(&mut session).await;
+                session
+                    .in_tx
+                    .send(success_response(id, $success_reply))
+                    .unwrap();
+                let response = receive(&mut session.out_rx).await;
+                assert_eq!(response.id(), Some(&RequestId::Number(2)));
+                assert_eq!(result_string(&response), "triggered");
+                finish(session).await;
+
+                let value = take_outcome(&outcome).expect("the helper succeeded");
+                ($success_assert)(value);
+            }
+
+            #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+            async fn remote_error_preserves_code_message_and_data() {
+                let outcome = Arc::new(Mutex::new(None));
+                let mut session = start(roundtrip_server(&outcome)).await;
+                init(&mut session).await;
+
+                let id = trigger_request(&mut session).await;
+                session
+                    .in_tx
+                    .send(error_response(
+                        id,
+                        -32001,
+                        "test error",
+                        Some(json!({ "detail": "transient" })),
+                    ))
+                    .unwrap();
+                let response = receive(&mut session.out_rx).await;
+                assert_eq!(response.id(), Some(&RequestId::Number(2)));
+                finish(session).await;
+
+                let err = take_outcome(&outcome).unwrap_err();
+                match err {
+                    ClientError::Remote(e) => {
+                        assert_eq!(e.code, -32001);
+                        assert_eq!(e.message, "test error");
+                        assert_eq!(e.data, Some(json!({ "detail": "transient" })));
+                    }
+                    other => panic!("expected ClientError::Remote, got {other:?}"),
+                }
+            }
+
+            #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+            async fn invalid_success_result_reports_deserialize() {
+                let outcome = Arc::new(Mutex::new(None));
+                let mut session = start(roundtrip_server(&outcome)).await;
+                init(&mut session).await;
+
+                let id = trigger_request(&mut session).await;
+                session
+                    .in_tx
+                    .send(success_response(id, $invalid_reply))
+                    .unwrap();
+                let response = receive(&mut session.out_rx).await;
+                assert_eq!(response.id(), Some(&RequestId::Number(2)));
+                finish(session).await;
+
+                let err = take_outcome(&outcome).unwrap_err();
+                assert!(
+                    matches!(err, ClientError::Deserialize(_)),
+                    "expected ClientError::Deserialize, got {err:?}"
+                );
+            }
+
+            #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+            async fn abandoning_the_future_cancels_the_request_on_the_wire() {
+                let mut session = start(abandon_server()).await;
+                init(&mut session).await;
+
+                session
+                    .in_tx
+                    .send(inbound_request(2, Trigger::METHOD, $params))
+                    .unwrap();
+                let outbound = receive(&mut session.out_rx).await;
+                let id = outbound_number_id(&outbound);
+
+                // Dropping the future emits exactly one typed $/cancelRequest
+                // naming the abandoned request's ID.
+                let cancel = receive(&mut session.out_rx).await;
+                match cancel {
+                    RawMessage::Notification { method, params } => {
+                        assert_eq!(&*method, "$/cancelRequest");
+                        let params: serde_json::Value =
+                            serde_json::from_slice(&params).unwrap();
+                        assert_eq!(params["id"], serde_json::json!(id));
+                    }
+                    other => panic!("expected a $/cancelRequest notification, got {other:?}"),
+                }
+
+                // The handler still completes normally.
+                let response = receive(&mut session.out_rx).await;
+                assert_eq!(response.id(), Some(&RequestId::Number(2)));
+                assert_eq!(result_string(&response), "abandoned");
+                finish(session).await;
+            }
+
+            #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+            async fn connection_disconnect_resolves_the_pending_request_as_cancelled() {
+                let outcome = Arc::new(Mutex::new(None));
+                let mut session = start(detached_server(&outcome)).await;
+                init(&mut session).await;
+
+                session
+                    .in_tx
+                    .send(inbound_request(2, Trigger::METHOD, $params))
+                    .unwrap();
+                // The trigger response may race the detached task's request;
+                // skip it until the request itself appears on the wire, which
+                // proves it is pending when the connection drops.
+                loop {
+                    match receive(&mut session.out_rx).await {
+                        RawMessage::Request { .. } => break,
+                        _ => {}
+                    }
+                }
+
+                // Close the transport without answering: the pending request
+                // must complete with Cancelled, and serving must not hang.
+                drop(session.in_tx);
+                tokio::time::timeout(std::time::Duration::from_secs(3), session.serve)
+                    .await
+                    .expect("serve returned within the watchdog")
+                    .expect("serve task did not panic")
+                    .expect("serve ended cleanly");
+
+                let err = await_outcome(&outcome).await.unwrap_err();
+                assert!(
+                    matches!(err, ClientError::Cancelled),
+                    "expected ClientError::Cancelled, got {err:?}"
+                );
+            }
+        }
+    };
+}
+
+helper_wire_tests!(
+    show_document,
+    result = ShowDocumentResult,
+    params = json!({ "uri": "file:///guide.md", "takeFocus": true }),
+    fixture = SHOW_DOCUMENT_FIXTURE,
+    call = show_document,
+    success_reply = json!({ "success": true }),
+    success_assert =
+        |value: ShowDocumentResult| assert_eq!(value, ShowDocumentResult { success: true }),
+    invalid_reply = json!({ "success": "yes" }),
+);
+
+helper_wire_tests!(
+    show_message_request,
+    result = Option<MessageActionItem>,
+    params = json!({
+        "type": 3,
+        "message": "save before closing?",
+        "actions": [{ "title": "Save" }, { "title": "Discard" }],
+    }),
+    fixture = SHOW_MESSAGE_REQUEST_FIXTURE,
+    call = show_message_request,
+    success_reply = json!({ "title": "Save" }),
+    success_assert = |value: Option<MessageActionItem>| {
+        let item = value.expect("the user picked an action");
+        assert_eq!(item.title, "Save");
+        assert!(item.properties.is_empty());
+    },
+    invalid_reply = json!({ "title": 42 }),
+);
+
+helper_wire_tests!(
+    apply_edit,
+    result = ApplyWorkspaceEditResponse,
+    params = json!({
+        "label": "rename symbol",
+        "edit": {
+            "changes": {
+                "file:///main.rs": [
+                    {
+                        "range": {
+                            "start": { "line": 0, "character": 4 },
+                            "end": { "line": 0, "character": 7 },
+                        },
+                        "newText": "renamed",
+                    },
+                ],
+            },
+        },
+    }),
+    fixture = APPLY_EDIT_FIXTURE,
+    call = apply_edit,
+    success_reply = json!({ "applied": true }),
+    success_assert = |value: ApplyWorkspaceEditResponse| {
+        assert_eq!(
+            value,
+            ApplyWorkspaceEditResponse {
+                applied: true,
+                failure_reason: None,
+                failed_change: None,
+            }
+        );
+    },
+    invalid_reply = json!({ "applied": "yes" }),
+);
