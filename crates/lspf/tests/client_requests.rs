@@ -84,14 +84,19 @@ fn inbound_response(id: i32, result: serde_json::Value) -> RawMessage {
     }
 }
 
-fn inbound_error_response(id: i32, code: i32, message: &'static str) -> RawMessage {
+fn inbound_error_response(
+    id: i32,
+    code: i32,
+    message: &'static str,
+    data: Option<serde_json::Value>,
+) -> RawMessage {
     use lspf::JsonRpcError;
     RawMessage::Response {
         id: RequestId::Number(id),
         result: Err(JsonRpcError {
             code,
             message: message.to_string(),
-            data: None,
+            data,
         }),
     }
 }
@@ -349,7 +354,12 @@ async fn remote_error_response_becomes_client_error_remote() {
     };
 
     in_tx
-        .send(inbound_error_response(client_req_id, -32001, "test error"))
+        .send(inbound_error_response(
+            client_req_id,
+            -32001,
+            "test error",
+            Some(json!({ "detail": "transient" })),
+        ))
         .unwrap();
 
     let trigger_resp = recv(&mut out_rx).await;
@@ -361,11 +371,16 @@ async fn remote_error_response_becomes_client_error_remote() {
         .expect("serve did not panic")
         .expect("serve ended cleanly");
 
+    // The remote error's code, message, and optional data are preserved.
     let err = captured_err.lock().unwrap().take().expect("error captured");
-    assert!(
-        matches!(err, ClientError::Remote { code: -32001, .. }),
-        "expected Remote error, got {err:?}"
-    );
+    match err {
+        ClientError::Remote(e) => {
+            assert_eq!(e.code, -32001);
+            assert_eq!(e.message, "test error");
+            assert_eq!(e.data, Some(json!({ "detail": "transient" })));
+        }
+        other => panic!("expected Remote error, got {other:?}"),
+    }
 }
 
 /// Session close completes all pending outbound requests with
