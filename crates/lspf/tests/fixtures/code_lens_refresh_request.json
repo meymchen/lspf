@@ -1,0 +1,4 @@
+{
+  "method": "workspace/codeLens/refresh",
+  "params": null
+}
