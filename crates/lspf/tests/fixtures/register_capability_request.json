@@ -1,0 +1,14 @@
+{
+  "method": "client/registerCapability",
+  "params": {
+    "registrations": [
+      {
+        "id": "hover-registration",
+        "method": "textDocument/hover",
+        "registerOptions": {
+          "documentSelector": [{ "language": "rust" }]
+        }
+      }
+    ]
+  }
+}

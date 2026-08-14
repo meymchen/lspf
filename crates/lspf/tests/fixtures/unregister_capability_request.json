@@ -1,0 +1,11 @@
+{
+  "method": "client/unregisterCapability",
+  "params": {
+    "unregisterations": [
+      {
+        "id": "hover-registration",
+        "method": "textDocument/hover"
+      }
+    ]
+  }
+}
