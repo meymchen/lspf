@@ -1,4 +1,4 @@
-name: CI
+﻿name: CI
 
 on:
   push:
@@ -28,6 +28,15 @@ jobs:
         with:
           components: rustfmt
       - run: cargo fmt --all -- --check
+
+  msrv:
+    name: msrv
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.96.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace --all-targets --all-features --locked
 
   clippy:
     name: clippy
@@ -68,4 +77,4 @@ jobs:
           path: |
             target/coverage/html
             target/coverage/lcov.info
-          retention-days: 7
+          retention-days: 3
