@@ -1,10 +1,10 @@
 use lsp_types::PublishDiagnosticsParams;
-use lsp_types::notification::PublishDiagnostics;
 use tokio_util::sync::CancellationToken;
-use tracing::{Span, warn};
+use tracing::Span;
 
 use crate::client::Client;
 use crate::documents::DocumentsView;
+use crate::error::ClientError;
 use crate::raw::RequestId;
 use crate::workspace::Workspace;
 
@@ -94,16 +94,15 @@ impl Context {
     }
 
     /// Push a `textDocument/publishDiagnostics` notification through the
-    /// connection's typed [`Client`] (fire-and-forget).
+    /// connection's typed [`Client`] (fire-and-forget); see
+    /// [`Client::publish_diagnostics`] for the exact semantics.
     ///
-    /// Errors during serialization or send (channel closed during
-    /// shutdown) are logged via `tracing::warn!` rather than surfaced —
-    /// the LSP semantics of `publishDiagnostics` is "best effort"; a
-    /// failed publish never invalidates the handler that triggered it.
-    pub fn publish_diagnostics(&self, params: PublishDiagnosticsParams) {
-        if let Err(error) = self.client.notify::<PublishDiagnostics>(params) {
-            warn!(%error, "publish_diagnostics: notification failed");
-        }
+    /// Serialization and enqueue failures are returned to the caller (the
+    /// client helper also reports them through `tracing`). A failed publish
+    /// never invalidates the handler that triggered it, so a handler that
+    /// treats publishing as best effort may simply drop the error.
+    pub fn publish_diagnostics(&self, params: PublishDiagnosticsParams) -> Result<(), ClientError> {
+        self.client.publish_diagnostics(params)
     }
 }
 

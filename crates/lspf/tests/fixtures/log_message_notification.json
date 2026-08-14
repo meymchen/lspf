@@ -1,0 +1,7 @@
+{
+  "method": "window/logMessage",
+  "params": {
+    "type": 3,
+    "message": "indexed 42 files"
+  }
+}
