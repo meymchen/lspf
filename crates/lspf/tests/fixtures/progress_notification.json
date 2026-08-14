@@ -1,0 +1,12 @@
+{
+  "method": "$/progress",
+  "params": {
+    "token": "build-1",
+    "value": {
+      "kind": "begin",
+      "title": "Building",
+      "message": "crates",
+      "percentage": 10
+    }
+  }
+}

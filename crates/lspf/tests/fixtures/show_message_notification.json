@@ -1,0 +1,7 @@
+{
+  "method": "window/showMessage",
+  "params": {
+    "type": 2,
+    "message": "disk almost full"
+  }
+}

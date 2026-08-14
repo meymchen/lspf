@@ -93,6 +93,11 @@ encoded and enqueued without allocating an ID; a typed request reserves a
 connection-local, never-reused ID and awaits its correlated response
 (ADR 0018). Abandoning a pending request emits one `$/cancelRequest` for its
 ID; session close resolves every pending request with `ClientError::Cancelled`.
+Named helpers cover the stable outgoing notification surface
+(`publish_diagnostics`, `show_message`, `log_message`, `log_trace`,
+`telemetry_event`, `progress`): each sends its LSP-typed params verbatim and
+returns enqueue failures as `ClientError`; `log_trace` gates on the
+connection's shared trace level, enqueueing nothing while the level is `Off`.
 `Client` is only a handle — the outbound queue, ID allocator, and pending
 registry are owned by the connection's protocol engine.
 _Avoid_: Connection (that is the transport level), sender.

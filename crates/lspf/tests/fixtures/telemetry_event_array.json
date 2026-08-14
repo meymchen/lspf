@@ -1,0 +1,4 @@
+{
+  "method": "telemetry/event",
+  "params": ["build", 42]
+}
