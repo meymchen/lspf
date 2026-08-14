@@ -1057,8 +1057,12 @@ where
         // (step 5). The Workspace takes ownership of the connection's
         // Documents handle; the engine keeps its own clone for the built-in
         // document-sync mutations.
-        let established =
-            Workspace::from_params_with_provider(&params, self.documents.clone(), file_provider);
+        let established = Workspace::from_params_with_provider(
+            &params,
+            self.documents.clone(),
+            file_provider,
+            self.client.shared_trace(),
+        );
         self.workspace = Some(established.clone());
 
         let position_encoding = self.documents.negotiate_position_encoding(&params);

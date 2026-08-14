@@ -1,0 +1,7 @@
+{
+  "method": "telemetry/event",
+  "params": {
+    "eventName": "build",
+    "durationMs": 42
+  }
+}

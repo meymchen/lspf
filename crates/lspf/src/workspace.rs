@@ -41,9 +41,28 @@ struct WorkspaceState {
     root_uri: Option<Uri>,
     folders: RwLock<Vec<WorkspaceFolder>>,
     configuration: RwLock<Option<Value>>,
-    trace: RwLock<TraceValue>,
+    trace: SharedTrace,
     documents: Documents,
     file_provider: SharedFileProvider,
+}
+
+/// The connection's protocol trace level, shared between the [`Workspace`]
+/// and the connection's [`Client`](crate::Client).
+///
+/// `$/setTrace` writes through the workspace; [`Client::log_trace`](crate::Client::log_trace)
+/// reads the same cell to gate its enqueue, so the two never observe
+/// different levels.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SharedTrace(Arc<RwLock<TraceValue>>);
+
+impl SharedTrace {
+    pub(crate) fn get(&self) -> TraceValue {
+        *self.0.read().unwrap()
+    }
+
+    fn set(&self, value: TraceValue) {
+        *self.0.write().unwrap() = value;
+    }
 }
 
 /// Failure to resolve a document through the connection's workspace.
@@ -96,12 +115,17 @@ impl Workspace {
     /// all verbatim, folder order included; an absent `workspaceFolders` list
     /// yields no folders. `documents` is the connection's document store,
     /// which the workspace owns from here on.
+    ///
+    /// This test-only constructor gives the workspace a private trace cell;
+    /// the engine uses [`Workspace::from_params_with_provider`] so the cell
+    /// is the one the connection's [`Client`](crate::Client) reads.
     #[cfg(test)]
     pub(crate) fn from_params(params: &InitializeParams, documents: Documents) -> Self {
         Self::from_params_with_provider(
             params,
             documents,
             crate::file_provider::erase(crate::MemoryFileProvider::new()),
+            SharedTrace::default(),
         )
     }
 
@@ -109,6 +133,7 @@ impl Workspace {
         params: &InitializeParams,
         documents: Documents,
         file_provider: SharedFileProvider,
+        trace: SharedTrace,
     ) -> Self {
         #[allow(deprecated)] // `root_uri` is deprecated in LSP but still the input we echo.
         let root_uri = params.root_uri.clone();
@@ -120,7 +145,7 @@ impl Workspace {
                 root_uri,
                 folders: RwLock::new(params.workspace_folders.clone().unwrap_or_default()),
                 configuration: RwLock::new(None),
-                trace: RwLock::new(TraceValue::Off),
+                trace,
                 documents,
                 file_provider,
             }),
@@ -163,7 +188,7 @@ impl Workspace {
 
     /// The connection's current protocol trace level.
     pub fn trace(&self) -> TraceValue {
-        *self.inner.trace.read().unwrap()
+        self.inner.trace.get()
     }
 
     /// The effective workspace roots.
@@ -248,7 +273,7 @@ impl Workspace {
     }
 
     pub(crate) fn set_trace(&self, trace: TraceValue) {
-        *self.inner.trace.write().unwrap() = trace;
+        self.inner.trace.set(trace);
     }
 }
 
@@ -509,6 +534,7 @@ mod tests {
             &InitializeParams::default(),
             documents,
             erase(provider),
+            SharedTrace::default(),
         );
 
         let document = workspace.text_document(&requested).await.unwrap();
@@ -528,6 +554,7 @@ mod tests {
             &InitializeParams::default(),
             documents.clone(),
             erase(provider.clone()),
+            SharedTrace::default(),
         );
 
         let first = workspace.text_document(&requested).await.unwrap();
@@ -551,6 +578,7 @@ mod tests {
             &InitializeParams::default(),
             Documents::new(),
             erase(MemoryFileProvider::new()),
+            SharedTrace::default(),
         );
 
         assert!(matches!(
@@ -571,6 +599,7 @@ mod tests {
             &InitializeParams::default(),
             documents.clone(),
             erase(OsFileProvider::new()),
+            SharedTrace::default(),
         );
 
         let first = workspace.text_document(&requested).await.unwrap();
@@ -601,6 +630,7 @@ mod tests {
             &params_with_root(Some("file:///workspace/root")),
             Documents::new(),
             erase(OsFileProvider::new()),
+            SharedTrace::default(),
         );
 
         assert_eq!(
@@ -618,6 +648,7 @@ mod tests {
             &InitializeParams::default(),
             Documents::new(),
             erase(OsFileProvider::new()),
+            SharedTrace::default(),
         );
 
         assert!(matches!(
@@ -634,6 +665,7 @@ mod tests {
             &InitializeParams::default(),
             Documents::new(),
             erase(OsFileProvider::new()),
+            SharedTrace::default(),
         );
 
         assert!(matches!(
@@ -651,6 +683,7 @@ mod tests {
             &InitializeParams::default(),
             Documents::new(),
             erase(OsFileProvider::new()),
+            SharedTrace::default(),
         );
 
         assert!(matches!(
