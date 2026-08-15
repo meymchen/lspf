@@ -108,7 +108,12 @@ async fn the_zero_three_journey_runs_over_stdio() {
     );
     assert_eq!(
         caps["executeCommandProvider"],
-        json!({ "commands": ["lspf-hello.workspaceRoots", "lspf-hello.readFile"] }),
+        json!({ "commands": [
+            "lspf-hello.workspaceRoots",
+            "lspf-hello.readFile",
+            "lspf-hello.outgoingJourney",
+            "lspf-hello.cancellableProgress",
+        ] }),
         "commands are advertised in registration order"
     );
     assert_eq!(

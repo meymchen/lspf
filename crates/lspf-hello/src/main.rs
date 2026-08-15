@@ -11,6 +11,11 @@
 //!   that is not open in the editor;
 //! - a post-mutation hook for `textDocument/didOpen`, observing the document
 //!   the framework has already opened;
+//! - a Command running the complete outgoing-helper journey — configuration
+//!   lookup, workspace edit, a custom outgoing request, dynamic registration,
+//!   every stable workspace refresh, and work-done progress — plus a second
+//!   Command demonstrating client-cancellable progress, all through typed
+//!   helpers with no handwritten JSON;
 //! - an `OsFileProvider` configured on the builder, so unopened `file:` URIs
 //!   resolve from disk.
 //!
@@ -21,11 +26,13 @@ use std::sync::Arc;
 
 use lspf::types::notification::{DidOpenTextDocument, PublishDiagnostics};
 use lspf::types::{
-    CompletionItem, CompletionItemKind, CompletionOptions, CompletionParams, CompletionResponse,
-    Diagnostic, DiagnosticSeverity, DidOpenTextDocumentParams, Hover, HoverContents, HoverParams,
-    MarkedString, Position, PublishDiagnosticsParams, Range, Uri,
+    ApplyWorkspaceEditParams, CompletionItem, CompletionItemKind, CompletionOptions,
+    CompletionParams, CompletionResponse, ConfigurationItem, ConfigurationParams, Diagnostic,
+    DiagnosticSeverity, DidOpenTextDocumentParams, Hover, HoverContents, HoverParams, MarkedString,
+    MessageType, Position, PublishDiagnosticsParams, Range, Registration, RegistrationParams,
+    ShowMessageParams, TextEdit, Uri, WorkspaceEdit,
 };
-use lspf::{CancellationToken, Context, LspError, OsFileProvider, Server};
+use lspf::{CancellationToken, Context, LspError, OsFileProvider, ProgressOptions, Server};
 use tracing::{debug, warn};
 
 /// This server's own application state, shared by every handler as `Arc<State>`.
@@ -203,6 +210,206 @@ async fn read_file(
     Ok(document.text())
 }
 
+/// The custom outgoing request the journey sends to the client. A marker type
+/// implementing the re-exported [`lspf::types::request::Request`] trait is the
+/// whole mechanism: the framework allocates the ID, correlates the response,
+/// and cancels on the wire if the future is dropped.
+enum HelloPing {}
+
+impl lspf::types::request::Request for HelloPing {
+    type Params = String;
+    type Result = String;
+    const METHOD: &'static str = "lspf-hello/ping";
+}
+
+/// One journey step's name and outcome, reported back as the Command result so
+/// the caller can see how every helper call ended.
+type Step = (String, String);
+
+/// Record a step's outcome: `Ok(_)` summaries on success, the error text on
+/// failure. The journey keeps going after a failure — a helper that returns
+/// `Err` has already cleaned up after itself.
+fn record(steps: &mut Vec<Step>, name: &str, outcome: Result<String, lspf::ClientError>) {
+    match outcome {
+        Ok(summary) => steps.push((name.to_string(), summary)),
+        Err(error) => {
+            warn!(%error, step = name, "outgoing journey step failed");
+            steps.push((name.to_string(), format!("error: {error}")));
+        }
+    }
+}
+
+/// A typed Command running the complete outgoing-helper journey against the
+/// real client — every step goes through a named [`Client`](lspf::Client)
+/// helper with native LSP types and no handwritten JSON.
+///
+/// In wire order: a `workspace/configuration` lookup whose result is reported
+/// with `window/showMessage`, a `workspace/applyEdit` against the document URI
+/// passed as the first argument, the custom `lspf-hello/ping` request, a
+/// dynamic `client/registerCapability` announcement, all five stable workspace
+/// refreshes, and a cancellable work-done progress lifecycle. Each step's
+/// outcome is collected into the returned list, so a client that answers one
+/// request with an error watches the rest of the journey complete regardless.
+async fn outgoing_journey(
+    _state: Arc<State>,
+    ctx: Context,
+    args: Vec<String>,
+    _ct: CancellationToken,
+) -> Result<Vec<Step>, LspError> {
+    let Some(target) = args.into_iter().next() else {
+        return Err(LspError::invalid_params(
+            "lspf-hello.outgoingJourney expects the target document URI",
+        ));
+    };
+    let uri = Uri::from_str(&target)
+        .map_err(|error| LspError::invalid_params(format!("invalid URI: {error}")))?;
+    let client = ctx.client();
+    let mut steps: Vec<Step> = Vec::new();
+
+    // 1. Configuration lookup: the items go out verbatim and the result comes
+    //    back to this caller only — the Workspace snapshot is not updated.
+    let configuration = client
+        .configuration(ConfigurationParams {
+            items: vec![ConfigurationItem {
+                scope_uri: None,
+                section: Some("lspf-hello".into()),
+            }],
+        })
+        .await
+        .map(|values| values.into_iter().next().unwrap_or_default().to_string());
+    let configured_text = configuration
+        .as_ref()
+        .map_or_else(|error| format!("unavailable ({error})"), Clone::clone);
+    record(&mut steps, "configuration", configuration);
+
+    // 2. Messaging: a fire-and-forget `window/showMessage` reports the
+    //    outcome. It is encoded and enqueued synchronously.
+    if let Err(error) = client.show_message(ShowMessageParams {
+        typ: MessageType::INFO,
+        message: format!("lspf-hello configuration: {configured_text}"),
+    }) {
+        warn!(%error, "showing the configuration message failed");
+    }
+
+    // 3. Workspace edit: the edit is sent exactly as built; the client's
+    //    applied flag and failure reason come back verbatim.
+    let applied = client
+        .apply_edit(ApplyWorkspaceEditParams {
+            label: Some("lspf-hello touch".into()),
+            edit: WorkspaceEdit {
+                changes: Some(
+                    [(
+                        uri,
+                        vec![TextEdit {
+                            range: Range {
+                                start: Position {
+                                    line: 0,
+                                    character: 0,
+                                },
+                                end: Position {
+                                    line: 0,
+                                    character: 0,
+                                },
+                            },
+                            new_text: "// touched by lspf-hello\n".into(),
+                        }],
+                    )]
+                    .into_iter()
+                    .collect(),
+                ),
+                ..WorkspaceEdit::default()
+            },
+        })
+        .await
+        .map(|response| match response.failure_reason {
+            Some(reason) => format!("applied:{} ({reason})", response.applied),
+            None => format!("applied:{}", response.applied),
+        });
+    record(&mut steps, "applyEdit", applied);
+
+    // 4. The custom outgoing request: a user-defined method with typed params
+    //    and result, sent through the same broker as every named helper.
+    let pong = client.request::<HelloPing>("ping".to_string()).await;
+    record(&mut steps, "ping", pong);
+
+    // 5. Dynamic registration: the announcement tells the client about the
+    //    change; the frozen Router and the initialize capabilities stay
+    //    untouched, and the framework keeps no registration state.
+    let registered = client
+        .register_capability(RegistrationParams {
+            registrations: vec![Registration {
+                id: "lspf-hello.watch".into(),
+                method: "workspace/didChangeWatchedFiles".into(),
+                register_options: None,
+            }],
+        })
+        .await
+        .map(|()| "registered".to_string());
+    record(&mut steps, "registerCapability", registered);
+
+    // 6. Every stable workspace refresh: no parameters, a `null`
+    //    acknowledgement, and no recomputation policy owned by the helper.
+    let refreshes = [
+        ("codeLens", client.code_lens_refresh().await),
+        ("diagnostic", client.diagnostic_refresh().await),
+        ("inlayHint", client.inlay_hint_refresh().await),
+        ("inlineValue", client.inline_value_refresh().await),
+        ("semanticTokens", client.semantic_tokens_refresh().await),
+    ];
+    for (name, result) in refreshes {
+        record(&mut steps, name, result.map(|()| "refreshed".to_string()));
+    }
+
+    // 7. Cancellable work-done progress: create completes before the token
+    //    registers, one begin carries the options verbatim, and `end`
+    //    consumes the handle and removes the token either way.
+    let progress = match client
+        .begin_progress(
+            ProgressOptions::new("Outgoing journey")
+                .cancellable(true)
+                .message("wrapping up")
+                .percentage(0),
+        )
+        .await
+    {
+        Ok(handle) => {
+            let reported = handle.report(Some("halfway".into()), Some(50));
+            let ended = reported.and_then(|()| handle.end(Some("done".into())));
+            ended.map(|()| "completed".to_string())
+        }
+        Err(error) => Err(error),
+    };
+    record(&mut steps, "progress", progress);
+
+    Ok(steps)
+}
+
+/// A typed Command demonstrating client-cancellable work-done progress.
+///
+/// The client cancels through `window/workDoneProgress/cancel`; the framework
+/// fires the handle's [`CancellationToken`] and sends nothing by itself — the
+/// application observes the cancellation and ends the progress. A client that
+/// never cancels leaves this Command pending, which is the honest shape of
+/// work that only ends when it is cancelled or finished.
+async fn cancellable_progress(
+    _state: Arc<State>,
+    ctx: Context,
+    _args: Vec<String>,
+    _ct: CancellationToken,
+) -> Result<Vec<Step>, LspError> {
+    let handle = ctx
+        .client()
+        .begin_progress(ProgressOptions::new("Cancellable demo").cancellable(true))
+        .await
+        .map_err(LspError::internal)?;
+    handle.report(None, Some(0)).map_err(LspError::internal)?;
+    handle.cancellation_token().cancelled().await;
+    handle
+        .end(Some("cancelled".into()))
+        .map_err(LspError::internal)?;
+    Ok(vec![("outcome".to_string(), "cancelled".to_string())])
+}
+
 fn completion_options() -> CompletionOptions {
     CompletionOptions {
         trigger_characters: Some(vec![".".to_string()]),
@@ -228,6 +435,8 @@ async fn main() -> lspf::Result<()> {
         // Typed Commands beneath `workspace/executeCommand`.
         .command("lspf-hello.workspaceRoots", workspace_roots)
         .command("lspf-hello.readFile", read_file)
+        .command("lspf-hello.outgoingJourney", outgoing_journey)
+        .command("lspf-hello.cancellableProgress", cancellable_progress)
         // The post-mutation hook observes the framework's document sync.
         .notification::<DidOpenTextDocument, _, _>(on_did_open)
         .build()

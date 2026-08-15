@@ -326,6 +326,106 @@ async fn progress_lifecycle_over_a_connection() {
         .expect("serve ended cleanly");
 }
 
+/// One full lifecycle pinned against the deterministic wire fixtures: the
+/// exact JSON of the `window/workDoneProgress/create` request and the
+/// begin, report, and end `$/progress` notifications. The fixtures exist so
+/// a wire-shape change is a deliberate, reviewed edit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn progress_lifecycle_matches_the_wire_fixtures() {
+    const CREATE_FIXTURE: &str = include_str!("fixtures/work_done_progress_create_request.json");
+    const BEGIN_FIXTURE: &str = include_str!("fixtures/progress_begin_notification.json");
+    const REPORT_FIXTURE: &str = include_str!("fixtures/progress_report_notification.json");
+    const END_FIXTURE: &str = include_str!("fixtures/progress_end_notification.json");
+
+    /// Assert the wire shape — method plus decoded params — matches the
+    /// fixture, for requests and notifications alike.
+    fn assert_wire_fixture(message: &RawMessage, fixture: &str) {
+        let (method, params) = match message {
+            RawMessage::Request { method, params, .. }
+            | RawMessage::Notification { method, params } => (method, params),
+            other => panic!("expected a request or notification, got {other:?}"),
+        };
+        let wire = json!({
+            "method": method.as_ref(),
+            "params": serde_json::from_slice::<Value>(params)
+                .expect("the params are valid JSON"),
+        });
+        let expected: Value = serde_json::from_str(fixture).expect("the fixture is valid JSON");
+        assert_eq!(wire, expected, "the wire shape must match the fixture");
+    }
+
+    enum FixtureRun {}
+
+    impl Request for FixtureRun {
+        type Params = Value;
+        type Result = Value;
+        const METHOD: &'static str = "test/progress-fixture";
+    }
+
+    let (in_tx, in_rx) = mpsc::unbounded_channel();
+    let (out_tx, mut out_rx) = mpsc::unbounded_channel();
+
+    let server = Server::builder(())
+        .request::<FixtureRun, _, _>(
+            |_state: Arc<()>, ctx: Context, _params: Value, _ct| async move {
+                let handle = ctx
+                    .client()
+                    .begin_progress(
+                        ProgressOptions::new("Indexing")
+                            .cancellable(true)
+                            .message("starting")
+                            .percentage(0),
+                    )
+                    .await
+                    .map_err(LspError::internal)?;
+                handle
+                    .report(Some("half".into()), Some(50))
+                    .map_err(LspError::internal)?;
+                handle
+                    .end(Some("done".into()))
+                    .map_err(LspError::internal)?;
+                Ok(json!(null))
+            },
+        )
+        .build()
+        .expect("server builds");
+
+    let serve = tokio::spawn(server.serve(ChannelTransport {
+        incoming: in_rx,
+        outgoing: out_tx,
+    }));
+
+    initialize(&in_tx, &mut out_rx).await;
+    in_tx
+        .send(inbound_request(2, "test/progress-fixture", json!(null)))
+        .unwrap();
+
+    // A fresh connection's first progress token is deterministically 1, which
+    // is what the fixtures pin.
+    let create = recv(&mut out_rx).await;
+    assert_wire_fixture(&create, CREATE_FIXTURE);
+    let (create_id, _) = expect_request(&create, "window/workDoneProgress/create");
+    in_tx
+        .send(inbound_response(create_id, json!(null)))
+        .unwrap();
+
+    let begin = recv(&mut out_rx).await;
+    assert_wire_fixture(&begin, BEGIN_FIXTURE);
+    let report = recv(&mut out_rx).await;
+    assert_wire_fixture(&report, REPORT_FIXTURE);
+    let end = recv(&mut out_rx).await;
+    assert_wire_fixture(&end, END_FIXTURE);
+
+    let response = recv(&mut out_rx).await;
+    assert_eq!(response.id(), Some(&RequestId::Number(2)));
+
+    in_tx.send(exit()).unwrap();
+    serve
+        .await
+        .expect("serve did not panic")
+        .expect("serve ended cleanly");
+}
+
 /// A remote refusal of `window/workDoneProgress/create` surfaces as
 /// `ClientError::Remote` and no begin notification is ever sent.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
