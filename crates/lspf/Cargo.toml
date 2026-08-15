@@ -28,6 +28,13 @@ wasm-bindgen-futures.workspace = true
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "io-std", "fs"] }
 
+[features]
+default = []
+# Proposed (not yet stabilized) LSP protocol surface. Off by default so the
+# stable API stays exactly the 3.17 catalog; enabling it only adds the
+# `proposed` module and the gated `Client` helpers.
+proposed = []
+
 [dev-dependencies]
 tempfile.workspace = true
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "time"] }

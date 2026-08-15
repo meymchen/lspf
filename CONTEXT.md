@@ -125,8 +125,14 @@ The five stable workspace refresh helpers — `code_lens_refresh`
 (`workspace/semanticTokens/refresh`) — each take no parameters and
 return the client's `null` acknowledgement as `()`; they own no
 recomputation policy, and the framework keeps no lens, diagnostic, hint,
-value, or token state for them to touch. The default refresh surface
-contains no proposed, draft, or notebook method.
+value, or token state for them to touch. With the non-default `proposed`
+Cargo feature, `refresh_folding_ranges` (`workspace/foldingRange/refresh`)
+and `refresh_text_document_content`
+(`workspace/textDocumentContent/refresh`, params naming only the target
+document URI) join the refresh surface, using request markers and params
+from the feature-gated `proposed` module because `lsp-types` 0.97.x lacks
+them. The default refresh surface contains no proposed, draft, or notebook
+method.
 `Client` is only a handle — the outbound queue, ID allocator, and pending
 registry are owned by the connection's protocol engine.
 _Avoid_: Connection (that is the transport level), sender.
