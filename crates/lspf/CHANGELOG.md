@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/meymchen/lspf/compare/v0.3.0...v0.4.0) - 2026-08-15
+
+### Added
+
+- add the client workspace query helpers ([#105](https://github.com/meymchen/lspf/pull/105)) ([#118](https://github.com/meymchen/lspf/pull/118))
+- add the window interaction request helpers ([#104](https://github.com/meymchen/lspf/pull/104)) ([#117](https://github.com/meymchen/lspf/pull/117))
+- [**breaking**] add the complete outgoing notification helper surface ([#102](https://github.com/meymchen/lspf/pull/102)) ([#116](https://github.com/meymchen/lspf/pull/116))
+
+### Other
+
+- Ship the 0.4 outgoing-client guide and stdio verification ([#112](https://github.com/meymchen/lspf/pull/112))
+- Observe outbound queue depth without dropping messages ([#111](https://github.com/meymchen/lspf/pull/111))
+- Handle client cancellation of work-done progress ([#110](https://github.com/meymchen/lspf/pull/110))
+- Deliver a leak-free work-done progress lifecycle ([#109](https://github.com/meymchen/lspf/pull/109))
+- Gate proposed workspace refresh helpers behind a Cargo feature ([#108](https://github.com/meymchen/lspf/pull/108))
+- Update ([#107](https://github.com/meymchen/lspf/pull/107))
+- No data supplied ([#106](https://github.com/meymchen/lspf/pull/106))
+- enforce MSRV 1.96 and reduce coverage artifact retention to 3 days
+- widen inbound completion watchdogs for instrumented CI runs ([#114](https://github.com/meymchen/lspf/pull/114))
+- [**breaking**] carry the full JsonRpcError in ClientError::Remote ([#101](https://github.com/meymchen/lspf/pull/101)) ([#113](https://github.com/meymchen/lspf/pull/113))
+- promote 0.3.0 changelog and drop the unused 0.1.x records ([#99](https://github.com/meymchen/lspf/pull/99))
+
 ## [0.3.0](https://github.com/meymchen/lspf/compare/v0.2.1...v0.3.0) - 2026-08-14
 
 ### Other
