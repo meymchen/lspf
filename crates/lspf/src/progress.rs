@@ -11,7 +11,9 @@
 //! The [`ProgressRegistry`] is the connection-local registry of active
 //! progress tokens. It is shared by every [`Client`] clone of the connection
 //! and is independent of the outbound request-ID allocator: progress tokens
-//! and request IDs are separate monotonic sequences.
+//! and request IDs are separate monotonic sequences. The protocol engine's
+//! `window/workDoneProgress/cancel` built-in resolves a client cancellation
+//! against it, and session close clears it.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -37,12 +39,23 @@ const MAX_PROGRESS_TOKEN: u32 = i32::MAX as u32;
 pub(crate) struct ActiveProgress {
     /// Whether the begin announcement told the client the operation is
     /// cancellable.
-    #[allow(dead_code)] // Read by the `window/workDoneProgress/cancel` built-in (#110).
     pub(crate) cancellable: bool,
-    /// The handle's cancellation token, triggered by the client-side cancel
-    /// built-in (#110). User code may also cancel it directly.
-    #[allow(dead_code)]
+    /// The handle's cancellation token, triggered by the
+    /// `window/workDoneProgress/cancel` built-in. User code may also cancel
+    /// it directly.
     pub(crate) cancellation: CancellationToken,
+}
+
+/// The outcome of applying one `window/workDoneProgress/cancel` notification
+/// to the registry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProgressCancel {
+    /// The token was active and cancellable; its cancellation token fired.
+    Cancelled,
+    /// The token is active but its begin announcement was not cancellable.
+    NotCancellable,
+    /// The token is not active on the connection — unknown or already ended.
+    NotActive,
 }
 
 /// The connection-local registry of active work-done progress tokens.
@@ -130,6 +143,36 @@ impl ProgressRegistry {
         self.inner.lock().unwrap().active.remove(token)
     }
 
+    /// Apply one client cancellation to `token` (the
+    /// `window/workDoneProgress/cancel` built-in).
+    ///
+    /// A matching active and cancellable entry fires its cancellation token;
+    /// the entry stays registered, because cancellation never ends the
+    /// progress by itself — the application decides the final message and
+    /// calls `end`. A non-cancellable or inactive (unknown or already ended)
+    /// token leaves the registry untouched.
+    pub(crate) fn cancel(&self, token: &ProgressToken) -> ProgressCancel {
+        let inner = self.inner.lock().unwrap();
+        match inner.active.get(token) {
+            Some(entry) if entry.cancellable => {
+                entry.cancellation.cancel();
+                ProgressCancel::Cancelled
+            }
+            Some(_) => ProgressCancel::NotCancellable,
+            None => ProgressCancel::NotActive,
+        }
+    }
+
+    /// Remove every active token.
+    ///
+    /// Session close calls this so a closed connection holds no stale
+    /// entries; handles that outlive the connection then observe
+    /// [`ProgressError::UnknownToken`]. The registry is connection-owned, so
+    /// clearing it cannot affect another connection.
+    pub(crate) fn clear(&self) {
+        self.inner.lock().unwrap().active.clear();
+    }
+
     /// Whether the token is currently active on this connection.
     pub(crate) fn is_active(&self, token: &ProgressToken) -> bool {
         self.inner.lock().unwrap().active.contains_key(token)
@@ -203,9 +246,9 @@ impl ProgressOptions {
 
 /// The shared state behind one [`ProgressHandle`].
 ///
-/// Cloning is crate-internal: tests and future protocol built-ins (the
-/// `window/workDoneProgress/cancel` registry, #110) operate on the shared
-/// state while the public handle owns the user-facing lifecycle. `end` on the
+/// Cloning is crate-internal: tests and the protocol engine's
+/// `window/workDoneProgress/cancel` built-in operate on the shared state
+/// while the public handle owns the user-facing lifecycle. `end` on the
 /// shared state is idempotent in the failure sense — a second call fails with
 /// [`ProgressError::AlreadyEnded`] instead of sending a second end.
 #[derive(Clone)]
@@ -331,9 +374,9 @@ impl ProgressHandle {
 
     /// The handle's cancellation token.
     ///
-    /// User code may cancel it directly; the client-side
-    /// `window/workDoneProgress/cancel` built-in (#110) cancels it when the
-    /// user cancels a cancellable progress in the client UI. Cancellation
+    /// User code may cancel it directly; the protocol engine's
+    /// `window/workDoneProgress/cancel` built-in cancels it when the user
+    /// cancels a cancellable progress in the client UI. Cancellation
     /// never sends anything by itself: reports on a cancelled handle fail
     /// with [`ProgressError::Cancelled`] and the application still decides
     /// the final message and calls [`ProgressHandle::end`].
@@ -582,6 +625,67 @@ mod tests {
         registry.set_next_token(MAX_PROGRESS_TOKEN);
         assert_eq!(registry.allocate(), Some(ProgressToken::Number(i32::MAX)));
         assert_eq!(registry.allocate(), None);
+    }
+
+    #[test]
+    fn cancel_fires_only_a_matching_active_cancellable_token() {
+        let registry = ProgressRegistry::default();
+        let cancellable = CancellationToken::new();
+        let plain = CancellationToken::new();
+        assert!(registry.register(ProgressToken::Number(1), true, cancellable.clone()));
+        assert!(registry.register(ProgressToken::Number(2), false, plain.clone()));
+
+        // A non-cancellable token is left alone.
+        assert_eq!(
+            registry.cancel(&ProgressToken::Number(2)),
+            ProgressCancel::NotCancellable
+        );
+        assert!(!plain.is_cancelled());
+
+        // An inactive token — unknown or already ended — changes nothing.
+        assert_eq!(
+            registry.cancel(&ProgressToken::Number(3)),
+            ProgressCancel::NotActive
+        );
+        assert_eq!(
+            registry.cancel(&ProgressToken::String("ended".into())),
+            ProgressCancel::NotActive
+        );
+
+        // The matching cancellable token fires and stays registered: ending
+        // the progress remains the application's decision.
+        assert_eq!(
+            registry.cancel(&ProgressToken::Number(1)),
+            ProgressCancel::Cancelled
+        );
+        assert!(cancellable.is_cancelled());
+        assert!(registry.is_active(&ProgressToken::Number(1)));
+
+        // A repeated cancel fires again and reports the same outcome.
+        assert_eq!(
+            registry.cancel(&ProgressToken::Number(1)),
+            ProgressCancel::Cancelled
+        );
+    }
+
+    #[test]
+    fn clear_removes_every_active_token() {
+        let registry = ProgressRegistry::default();
+        let token = registry.allocate().expect("the token space is fresh");
+        assert!(registry.register(token.clone(), true, CancellationToken::new()));
+        assert!(registry.register(
+            ProgressToken::String("client-token".into()),
+            false,
+            CancellationToken::new()
+        ));
+
+        registry.clear();
+
+        assert!(!registry.is_active(&token));
+        assert!(!registry.is_active(&ProgressToken::String("client-token".into())));
+        assert_eq!(registry.active_len(), 0);
+        // The token sequence is unaffected: allocation keeps moving forward.
+        assert_eq!(registry.allocate(), Some(ProgressToken::Number(2)));
     }
 
     #[tokio::test]
