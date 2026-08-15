@@ -146,6 +146,14 @@ consumes the handle, enqueues one work-done end, and removes the token
 whether the enqueue succeeded or failed. A failed begin leaves no
 registered token behind, and dropping an active handle removes its token
 with a warning but performs no I/O and sends no implicit end.
+`window/workDoneProgress/cancel` is a protocol-owned built-in against the
+same connection-local registry: a matching active and cancellable token
+fires the handle's `CancellationToken` without sending a work-done end —
+the application decides the final message and calls `end` — while unknown,
+malformed, ended, and non-cancellable tokens are logged at debug level and
+ignored; a registered notification hook runs after a successful decode and
+observes the updated cancellation state. Session close clears the registry,
+so a handle that outlives the connection observes an unknown token.
 `Client` is only a handle — the outbound queue, ID allocator, and pending
 registry are owned by the connection's protocol engine.
 _Avoid_: Connection (that is the transport level), sender.

@@ -59,6 +59,16 @@ impl EventCapture {
             .any(|(_, fields)| fields.contains(needle))
     }
 
+    /// Whether any captured event at exactly `level` has rendered fields
+    /// containing `needle`.
+    pub(crate) fn contains_at(&self, level: tracing::Level, needle: &str) -> bool {
+        self.events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(event_level, fields)| *event_level == level && fields.contains(needle))
+    }
+
     /// The rendered field strings of every captured event.
     pub(crate) fn messages(&self) -> Vec<String> {
         self.events
