@@ -772,6 +772,66 @@ impl Client {
         self.request::<SemanticTokensRefresh>(()).await
     }
 
+    /// Ask the client to recompute its folding ranges with
+    /// `workspace/foldingRange/refresh` (proposed LSP), awaiting the client's
+    /// `null` acknowledgement as `()`.
+    ///
+    /// The request carries no parameters (`Params = ()`, sent as `null`); the
+    /// helper owns no recomputation policy — which ranges the client
+    /// recomputes is entirely the client's concern. The framework keeps no
+    /// folding-range state, so nothing local changes when the client
+    /// acknowledges.
+    ///
+    /// This helper exists only with the crate's `proposed` Cargo feature:
+    /// `lsp-types` 0.97.x has no marker for this request, so the marker comes
+    /// from [`crate::proposed`].
+    ///
+    /// # Errors
+    ///
+    /// Behaves exactly as [`Client::request`]: [`ClientError::ConnectionClosed`],
+    /// [`ClientError::OutboundClosed`], or [`ClientError::IdExhausted`] if the
+    /// request never reaches the wire; [`ClientError::Remote`] if the client
+    /// answers with a JSON-RPC error; [`ClientError::Deserialize`] if the
+    /// success result cannot be decoded; [`ClientError::Cancelled`] if the
+    /// session closes before the client answers.
+    #[cfg(feature = "proposed")]
+    pub async fn refresh_folding_ranges(&self) -> Result<(), ClientError> {
+        self.request::<crate::proposed::FoldingRangeRefresh>(())
+            .await
+    }
+
+    /// Ask the client to refresh one document's cached content with
+    /// `workspace/textDocumentContent/refresh` (proposed LSP), awaiting the
+    /// client's `null` acknowledgement as `()`.
+    ///
+    /// The [`TextDocumentContentRefreshParams`](crate::proposed::TextDocumentContentRefreshParams)
+    /// are sent exactly as provided: they name only the target document's URI
+    /// and the helper owns no refresh policy — how the client re-pulls the
+    /// content is entirely the client's concern. The framework keeps no
+    /// text-document-content pull state, so nothing local changes when the
+    /// client acknowledges.
+    ///
+    /// This helper exists only with the crate's `proposed` Cargo feature:
+    /// `lsp-types` 0.97.x has no marker or params type for this request, so
+    /// both come from [`crate::proposed`].
+    ///
+    /// # Errors
+    ///
+    /// Behaves exactly as [`Client::request`]: [`ClientError::ConnectionClosed`],
+    /// [`ClientError::OutboundClosed`], or [`ClientError::IdExhausted`] if the
+    /// request never reaches the wire; [`ClientError::Remote`] if the client
+    /// answers with a JSON-RPC error; [`ClientError::Deserialize`] if the
+    /// success result cannot be decoded; [`ClientError::Cancelled`] if the
+    /// session closes before the client answers.
+    #[cfg(feature = "proposed")]
+    pub async fn refresh_text_document_content(
+        &self,
+        params: crate::proposed::TextDocumentContentRefreshParams,
+    ) -> Result<(), ClientError> {
+        self.request::<crate::proposed::TextDocumentContentRefresh>(params)
+            .await
+    }
+
     fn ensure_open(&self, phase: &mut Phase) -> Result<(), ClientError> {
         if self.outgoing.is_closed() {
             *phase = Phase::OutboundClosed;
