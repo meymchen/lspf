@@ -6,7 +6,9 @@
 //! announcements `register_capability` and `unregister_capability`, and the
 //! five stable workspace refresh helpers `code_lens_refresh`,
 //! `diagnostic_refresh`, `inlay_hint_refresh`, `inline_value_refresh`, and
-//! `semantic_tokens_refresh`. These
+//! `semantic_tokens_refresh`. With the `proposed` Cargo feature the same
+//! coverage extends to the proposed `refresh_folding_ranges` and
+//! `refresh_text_document_content` helpers (issue #108). These
 //! wire-level tests run each helper inside a real handler over an in-memory
 //! transport, pin the outgoing request's method and parameter shape against
 //! the fixtures under `tests/fixtures/`, and then complete it through every
@@ -721,6 +723,65 @@ helper_wire_tests!(
     success_assert = |value: ()| assert_eq!(value, ()),
     invalid_reply = json!({ "unexpected": true }),
 );
+
+// --- Proposed workspace refresh helpers (issue #108) --------------------------
+//
+// These helpers and their local protocol types exist only when the crate's
+// `proposed` Cargo feature is enabled, so the whole module is compiled out of
+// default builds.
+
+#[cfg(feature = "proposed")]
+mod proposed {
+    use super::*;
+
+    const FOLDING_RANGE_REFRESH_FIXTURE: &str =
+        include_str!("fixtures/folding_range_refresh_request.json");
+    const TEXT_DOCUMENT_CONTENT_REFRESH_FIXTURE: &str =
+        include_str!("fixtures/text_document_content_refresh_request.json");
+
+    helper_wire_tests!(
+        refresh_folding_ranges,
+        result = (),
+        params = json!(null),
+        fixture = FOLDING_RANGE_REFRESH_FIXTURE,
+        call = |client: Client, _params: serde_json::Value| async move {
+            client.refresh_folding_ranges().await
+        },
+        success_reply = json!(null),
+        success_assert = |value: ()| assert_eq!(value, ()),
+        invalid_reply = json!({ "unexpected": true }),
+    );
+
+    helper_wire_tests!(
+        refresh_text_document_content,
+        result = (),
+        params = json!({ "uri": "file:///main.rs" }),
+        fixture = TEXT_DOCUMENT_CONTENT_REFRESH_FIXTURE,
+        call = |client: Client, params: serde_json::Value| async move {
+            client
+                .refresh_text_document_content(serde_json::from_value(params).unwrap())
+                .await
+        },
+        success_reply = json!(null),
+        success_assert = |value: ()| assert_eq!(value, ()),
+        invalid_reply = json!({ "unexpected": true }),
+    );
+
+    /// The text-document-content refresh params carry only the target
+    /// `DocumentUri`: the struct has exactly that one field, so the helper
+    /// produces exactly the `uri` wire field.
+    #[test]
+    fn text_document_content_refresh_params_contain_only_the_uri() {
+        let params: lspf::proposed::TextDocumentContentRefreshParams =
+            serde_json::from_value(json!({ "uri": "file:///main.rs" })).unwrap();
+        assert_eq!(params.uri.as_str(), "file:///main.rs");
+        assert_eq!(
+            serde_json::to_value(&params).unwrap(),
+            json!({ "uri": "file:///main.rs" }),
+            "the params serialize to exactly the uri field"
+        );
+    }
+}
 
 // --- Router freeze integration test (issue #106) ----------------------------
 
