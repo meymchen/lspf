@@ -594,6 +594,7 @@ pub struct ServerBuilder<S> {
     on_exit: Option<OnExit<S>>,
     layers: Vec<UserLayer<S>>,
     concurrency_limit: usize,
+    outbound_warning_threshold: usize,
     /// First registration error seen, if any. Reported by `build`.
     error: Option<BuildError>,
 }
@@ -610,6 +611,7 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
             on_exit: None,
             layers: Vec::new(),
             concurrency_limit: crate::DEFAULT_CONCURRENCY_LIMIT,
+            outbound_warning_threshold: crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD,
             error: None,
         }
     }
@@ -894,6 +896,19 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
         self
     }
 
+    /// Set the outbound queue depth at which the engine warns once per upward
+    /// crossing. Zero is rejected by [`build`](Self::build). The queue itself
+    /// stays unbounded regardless: the threshold only controls when sustained
+    /// depth produces a warning, never whether a message is sent.
+    pub fn outbound_warning_threshold(mut self, threshold: usize) -> Self {
+        if threshold == 0 {
+            self.record(BuildError::InvalidOutboundWarningThreshold);
+        } else {
+            self.outbound_warning_threshold = threshold;
+        }
+        self
+    }
+
     /// Validate the complete static registration set and return the [`Server`].
     ///
     /// Performs no I/O and does not run `configure_initialize`; the Router is
@@ -916,6 +931,7 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
             on_exit: self.on_exit,
             layers: self.layers,
             concurrency_limit: self.concurrency_limit,
+            outbound_warning_threshold: self.outbound_warning_threshold,
         })
     }
 
@@ -1055,6 +1071,7 @@ pub struct Server<S> {
     pub(crate) on_exit: Option<OnExit<S>>,
     pub(crate) layers: Vec<UserLayer<S>>,
     pub(crate) concurrency_limit: usize,
+    pub(crate) outbound_warning_threshold: usize,
 }
 
 impl<S: Send + Sync + 'static> Server<S> {
@@ -1827,6 +1844,41 @@ mod tests {
             router.capabilities(),
             ServerCapabilities::default(),
             "LSP 3.17 has no watched-files server capability, so none is advertised"
+        );
+    }
+
+    #[test]
+    fn the_outbound_warning_threshold_defaults_to_1024() {
+        let server = Server::builder(DummyState)
+            .build()
+            .expect("the default threshold builds");
+        assert_eq!(server.outbound_warning_threshold, 1024);
+        assert_eq!(
+            server.outbound_warning_threshold,
+            crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD
+        );
+    }
+
+    #[test]
+    fn the_outbound_warning_threshold_accepts_positive_values() {
+        let server = Server::builder(DummyState)
+            .outbound_warning_threshold(7)
+            .build()
+            .expect("a positive threshold builds");
+        assert_eq!(server.outbound_warning_threshold, 7);
+    }
+
+    #[test]
+    fn a_zero_outbound_warning_threshold_is_a_build_error() {
+        let err = Server::builder(DummyState)
+            .outbound_warning_threshold(0)
+            .build()
+            .err()
+            .expect("a zero threshold must fail the build");
+        assert_eq!(err, BuildError::InvalidOutboundWarningThreshold);
+        assert_eq!(
+            err.to_string(),
+            "outbound warning threshold must be greater than zero"
         );
     }
 }

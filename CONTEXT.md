@@ -155,7 +155,17 @@ ignored; a registered notification hook runs after a successful decode and
 observes the updated cancellation state. Session close clears the registry,
 so a handle that outlives the connection observes an unknown token.
 `Client` is only a handle — the outbound queue, ID allocator, and pending
-registry are owned by the connection's protocol engine.
+registry are owned by the connection's protocol engine. The outbound queue
+stays unbounded and is observed by a connection-scoped depth counter: every
+enqueued request, response, and notification increments it, the writer
+decrements it after each attempted transport send, and once the depth
+reaches the warning threshold tracing records the current value as
+`outbound.queue_depth` (a healthy queue stays silent, so notification
+helpers never echo into local tracing). Sustained depth warns once per
+upward crossing of `ServerBuilder::outbound_warning_threshold`
+(`DEFAULT_OUTBOUND_WARNING_THRESHOLD` = 1024 by default; zero is a
+`BuildError`); dropping below the threshold rearms one warning. The counting
+never drops, reorders, or delays a message.
 _Avoid_: Connection (that is the transport level), sender.
 
 **Command**:
