@@ -25,6 +25,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::error::ClientError;
+use crate::progress::ProgressRegistry;
 use crate::raw::{JsonRpcError, RawMessage, RequestId};
 use crate::workspace::SharedTrace;
 
@@ -267,6 +268,7 @@ impl Notification for TelemetryEvent {
 pub struct Client {
     outgoing: UnboundedSender<RawMessage>,
     outbound: OutboundRegistry,
+    progress: ProgressRegistry,
     state: Arc<ClientState>,
     trace: SharedTrace,
 }
@@ -282,6 +284,7 @@ impl Client {
         Self {
             outgoing,
             outbound,
+            progress: ProgressRegistry::default(),
             state: Arc::new(ClientState {
                 phase: Mutex::new(Phase::Open),
                 outbound_closing: CancellationToken::new(),
@@ -322,7 +325,7 @@ impl Client {
     /// The shared enqueue path of the named outgoing helpers: any
     /// serialization or enqueue failure is reported through `tracing` and
     /// still returned to the caller.
-    fn notify_logged<N>(&self, params: N::Params) -> Result<(), ClientError>
+    pub(crate) fn notify_logged<N>(&self, params: N::Params) -> Result<(), ClientError>
     where
         N: Notification,
     {
@@ -865,6 +868,12 @@ impl Client {
     /// Engine-private accessor to the shared outbound registry.
     pub(crate) fn outbound_registry(&self) -> &OutboundRegistry {
         &self.outbound
+    }
+
+    /// Accessor to the connection's work-done progress token registry, shared
+    /// by every clone of this handle.
+    pub(crate) fn progress_registry(&self) -> &ProgressRegistry {
+        &self.progress
     }
 
     /// The connection's shared trace level, handed to the
