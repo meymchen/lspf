@@ -191,6 +191,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 - [`docs/guides/features-and-workspace.md`](./docs/guides/features-and-workspace.md)：
   如何注册功能、capability 从何而来、谁持有 workspace 和文档、Command 如何分发，
   以及 `FileProvider` 的配置方式。其中的每个示例都作为 doctest 编译。
+- [`docs/guides/outgoing-client.md`](./docs/guides/outgoing-client.md)：
+  服务器到客户端的辅助方法全景：通知、窗口与 workspace 请求、动态注册、
+  workspace 刷新和 work-done 进度，并附完整的辅助方法参考表。其中的每个示例都作为
+  doctest 编译。
+- [`docs/guides/migrating-to-0.4.md`](./docs/guides/migrating-to-0.4.md)：
+  0.3 → 0.4 的破坏性变更与迁移方法。
 
 ## 路线图
 

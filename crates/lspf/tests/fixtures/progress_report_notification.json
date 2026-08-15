@@ -1,0 +1,12 @@
+{
+  "method": "$/progress",
+  "params": {
+    "token": 1,
+    "value": {
+      "kind": "report",
+      "cancellable": true,
+      "message": "half",
+      "percentage": 50
+    }
+  }
+}

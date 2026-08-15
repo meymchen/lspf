@@ -213,6 +213,13 @@ The full design lives next to the code:
   — how to register features, where capabilities come from, who owns the
   workspace and documents, how Commands dispatch, and how `FileProvider`
   configuration works. Every example in it compiles as a doctest.
+- [`docs/guides/outgoing-client.md`](./docs/guides/outgoing-client.md)
+  — the server-to-client helper surface: notifications, window and workspace
+  requests, dynamic registration, workspace refreshes, and work-done
+  progress, with a full helper reference. Every example compiles as a
+  doctest.
+- [`docs/guides/migrating-to-0.4.md`](./docs/guides/migrating-to-0.4.md)
+  — the 0.3 → 0.4 breaking changes and how to update.
 
 ## Roadmap
 
