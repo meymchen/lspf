@@ -1,0 +1,13 @@
+{
+  "method": "$/progress",
+  "params": {
+    "token": 1,
+    "value": {
+      "kind": "begin",
+      "title": "Indexing",
+      "cancellable": true,
+      "message": "starting",
+      "percentage": 0
+    }
+  }
+}
