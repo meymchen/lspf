@@ -77,6 +77,10 @@ pub(crate) enum ProtocolNotification {
     WorkspaceFolders,
     Configuration,
     Trace,
+    /// `window/workDoneProgress/cancel`: the engine fires the matching
+    /// handle's cancellation token; a registration records the
+    /// post-validation hook.
+    ProgressCancel,
 }
 
 impl ProtocolNotification {
@@ -98,6 +102,7 @@ impl ProtocolNotification {
             "workspace/didChangeWorkspaceFolders" => Some(Self::WorkspaceFolders),
             "workspace/didChangeConfiguration" => Some(Self::Configuration),
             "$/setTrace" => Some(Self::Trace),
+            "window/workDoneProgress/cancel" => Some(Self::ProgressCancel),
             _ => None,
         }
     }
@@ -1255,6 +1260,35 @@ mod tests {
         assert!(
             router.built_in_hook("textDocument/didSave").is_some(),
             "didSave is protocol-validated before its typed hook runs"
+        );
+    }
+
+    #[test]
+    fn a_progress_cancel_registration_records_a_hook_not_a_route() {
+        let server = Server::builder(DummyState)
+            .notification::<lsp_types::notification::WorkDoneProgressCancel, _, _>(
+                |_s, _c, _p: lsp_types::WorkDoneProgressCancelParams| async {},
+            )
+            .build()
+            .expect("a lone progress-cancel hook builds");
+        let router = server.into_router();
+
+        assert!(
+            router
+                .built_in_hook("window/workDoneProgress/cancel")
+                .is_some(),
+            "the progress-cancel built-in records a post-validation hook"
+        );
+        assert!(
+            router
+                .notification("window/workDoneProgress/cancel")
+                .is_none(),
+            "the hook is not a Router route, so it cannot replace the built-in"
+        );
+        assert_eq!(
+            router.capabilities(),
+            ServerCapabilities::default(),
+            "a progress-cancel hook contributes no capabilities"
         );
     }
 
