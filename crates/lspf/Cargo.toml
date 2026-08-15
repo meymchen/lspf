@@ -17,22 +17,36 @@ ropey.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
+# The Tokio runtime behind every native Transport (ADR 0013): optional, pulled
+# in only through the `runtime-tokio` feature.
+tokio = { workspace = true, optional = true }
+# The WebSocket adapter's framing library (ADR 0011): optional, pulled in only
+# through the `websocket` feature.
+tokio-tungstenite = { workspace = true, optional = true }
 # `rt` pulls in the `CancellationToken` primitive used by ADR 0007.
 tokio-util.workspace = true
 tracing.workspace = true
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen-futures.workspace = true
+# The browser WASM task spawner behind the `wasm` feature (ADR 0020): optional
+# so the native default tree never carries WASM-only dependencies.
+wasm-bindgen-futures = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "io-std", "fs"] }
+tokio = { workspace = true, optional = true, features = ["rt-multi-thread", "io-std", "fs"] }
 
 [features]
-default = []
+# Native stdio is the default experience: opting in also selects the Tokio
+# runtime that serves it (the 0.5 feature graph, ADR 0013).
+default = ["stdio"]
+stdio = ["runtime-tokio"]
+tcp = ["runtime-tokio"]
+websocket = ["runtime-tokio", "dep:tokio-tungstenite"]
+runtime-tokio = ["dep:tokio"]
+wasm = ["dep:wasm-bindgen-futures"]
+# The browser MessagePort transport rides on the WASM runtime.
+worker-channel = ["wasm"]
 # Proposed (not yet stabilized) LSP protocol surface. Off by default so the
 # stable API stays exactly the 3.17 catalog; enabling it only adds the
-# `proposed` module and the gated `Client` helpers.
+# `proposed` module and the gated `Client` helpers. It pulls in no Transport.
 proposed = []
 
 [dev-dependencies]

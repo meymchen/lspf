@@ -1,8 +1,8 @@
 use std::future::Future;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
 use std::cell::Cell;
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
 use std::rc::Rc;
 
 mod sealed {
@@ -57,16 +57,16 @@ impl Runtime for TokioRuntime {
 }
 
 /// Runtime selected for browser WASM targets.
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
 #[derive(Default)]
 pub(crate) struct WasmRuntime;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
 pub(crate) fn default_runtime() -> WasmRuntime {
     WasmRuntime
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
 impl Runtime for WasmRuntime {
     fn spawn<F>(&self, future: F) -> TaskHandle
     where
@@ -97,7 +97,7 @@ impl Runtime for WasmRuntime {
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct TaskHandle(tokio::task::JoinHandle<()>);
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
 pub(crate) struct TaskHandle {
     abort: futures_util::future::AbortHandle,
     completed: tokio::sync::oneshot::Receiver<()>,
@@ -110,7 +110,7 @@ impl TaskHandle {
         self.0.abort();
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", feature = "wasm"))]
     pub(crate) fn abort(&self) {
         self.abort.abort();
     }
@@ -120,7 +120,7 @@ impl TaskHandle {
         self.0.is_finished()
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", feature = "wasm"))]
     pub(crate) fn is_finished(&self) -> bool {
         self.finished.get()
     }
@@ -130,7 +130,7 @@ impl TaskHandle {
         let _ = self.0.await;
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", feature = "wasm"))]
     pub(crate) async fn join(self) {
         let _ = self.completed.await;
     }
