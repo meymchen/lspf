@@ -524,7 +524,7 @@ mod tests {
     use tracing_subscriber::layer::SubscriberExt;
 
     use super::*;
-    use crate::client::OutboundRegistry;
+    use crate::client::{OutboundQueue, OutboundRegistry};
     use crate::raw::{RawMessage, RequestId};
 
     fn make_client() -> (
@@ -532,7 +532,7 @@ mod tests {
         OutboundRegistry,
         mpsc::UnboundedReceiver<RawMessage>,
     ) {
-        let (outgoing, receiver) = mpsc::unbounded_channel();
+        let (outgoing, receiver) = OutboundQueue::new(crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD);
         let outbound = OutboundRegistry::default();
         let client = Client::new(outgoing, outbound.clone());
         (client, outbound, receiver)
