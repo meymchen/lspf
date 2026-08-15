@@ -1,0 +1,6 @@
+{
+  "method": "window/workDoneProgress/create",
+  "params": {
+    "token": 1
+  }
+}

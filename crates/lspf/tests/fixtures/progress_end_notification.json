@@ -1,0 +1,10 @@
+{
+  "method": "$/progress",
+  "params": {
+    "token": 1,
+    "value": {
+      "kind": "end",
+      "message": "done"
+    }
+  }
+}
