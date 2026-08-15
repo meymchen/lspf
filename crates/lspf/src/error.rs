@@ -34,8 +34,9 @@ pub enum ClientError {
     #[error("client request was cancelled")]
     Cancelled,
 
-    /// The connection exhausted the positive outbound request-ID space; no
-    /// further server-to-client requests can be allocated on this connection.
+    /// The connection exhausted the positive outbound request-ID or
+    /// progress-token space; no further server-to-client requests or progress
+    /// tokens can be allocated on this connection.
     #[error("outbound request ID space exhausted")]
     IdExhausted,
 
@@ -48,6 +49,46 @@ pub enum ClientError {
     /// into the expected type.
     #[error("failed to deserialize client response: {0}")]
     Deserialize(#[source] serde_json::Error),
+
+    /// A named helper rejected its own parameters before anything was
+    /// encoded or enqueued: no request or notification was sent.
+    #[error("invalid helper parameters: {0}")]
+    InvalidHelperParams(String),
+
+    /// A work-done progress lifecycle failure from a
+    /// [`ProgressHandle`](crate::ProgressHandle) operation.
+    #[error(transparent)]
+    Progress(#[from] ProgressError),
+}
+
+/// A failure of the connection-scoped work-done progress lifecycle
+/// ([`Client::begin_progress`](crate::Client::begin_progress) and the
+/// resulting [`ProgressHandle`](crate::ProgressHandle)).
+///
+/// These failures describe the handle's own state, not transport or remote
+/// failures: enqueue and response failures surface as the other
+/// [`ClientError`] variants.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum ProgressError {
+    /// The handle's progress was already ended; an ended handle reports and
+    /// ends nothing further.
+    #[error("progress handle has already ended")]
+    AlreadyEnded,
+
+    /// The handle's cancellation token was cancelled; a cancelled handle
+    /// sends no further report notifications.
+    #[error("progress was cancelled")]
+    Cancelled,
+
+    /// The handle's token is not active on this connection anymore (for
+    /// example because the handle was dropped or the registry entry was
+    /// removed by another path).
+    #[error("progress token is not active on this connection")]
+    UnknownToken,
+
+    /// A report percentage outside the inclusive range 0 through 100.
+    #[error("progress percentage {0} is outside the range 0..=100")]
+    InvalidPercentage(u32),
 }
 
 /// A configuration error surfaced by [`ServerBuilder::build`](crate::ServerBuilder::build).

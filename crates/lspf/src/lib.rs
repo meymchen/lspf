@@ -13,6 +13,7 @@ mod engine;
 mod error;
 pub mod features;
 mod file_provider;
+mod progress;
 #[cfg(feature = "proposed")]
 pub mod proposed;
 mod raw;
@@ -51,11 +52,12 @@ pub use client::{Client, TelemetryEventParams};
 pub use context::Context;
 pub use documents::{Document, DocumentsView, PositionEncoding};
 pub use engine::Outcome;
-pub use error::{BuildError, ClientError, Error, LspError, Result};
+pub use error::{BuildError, ClientError, Error, LspError, ProgressError, Result};
 pub use features::{FeatureSpec, NotificationFeatureSpec};
 pub use file_provider::{FileProvider, MemoryFileProvider};
 #[cfg(not(target_arch = "wasm32"))]
 pub use file_provider::{OsFileProvider, OsFileProviderBuilder};
+pub use progress::{ProgressHandle, ProgressOptions};
 pub use raw::{JsonRpcError, RawMessage, RequestId};
 #[doc(hidden)]
 pub use runtime::TaskSend;

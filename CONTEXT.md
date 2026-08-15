@@ -133,6 +133,19 @@ document URI) join the refresh surface, using request markers and params
 from the feature-gated `proposed` module because `lsp-types` 0.97.x lacks
 them. The default refresh surface contains no proposed, draft, or notebook
 method.
+`begin_progress(ProgressOptions)` runs the connection-scoped work-done
+progress lifecycle as one failure-safe operation: it allocates a
+connection-local numeric token from a monotonic sequence (starting at 1,
+skipping tokens already active on the connection, independent of the
+outbound request-ID sequence), completes `window/workDoneProgress/create`,
+registers the token only after the remote success, and enqueues exactly one
+work-done begin notification. The returned `ProgressHandle` exposes its
+`ProgressToken` and `CancellationToken`; `report` sends the exact work-done
+report shape with percentages validated from 0 through 100, and `end`
+consumes the handle, enqueues one work-done end, and removes the token
+whether the enqueue succeeded or failed. A failed begin leaves no
+registered token behind, and dropping an active handle removes its token
+with a warning but performs no I/O and sends no implicit end.
 `Client` is only a handle — the outbound queue, ID allocator, and pending
 registry are owned by the connection's protocol engine.
 _Avoid_: Connection (that is the transport level), sender.
