@@ -69,6 +69,17 @@ impl EventCapture {
             .any(|(event_level, fields)| *event_level == level && fields.contains(needle))
     }
 
+    /// How many captured events at exactly `level` have rendered fields
+    /// containing `needle`.
+    pub(crate) fn count_at(&self, level: tracing::Level, needle: &str) -> usize {
+        self.events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(event_level, fields)| *event_level == level && fields.contains(needle))
+            .count()
+    }
+
     /// The rendered field strings of every captured event.
     pub(crate) fn messages(&self) -> Vec<String> {
         self.events
