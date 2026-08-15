@@ -20,9 +20,12 @@ use lsp_types::{
     ShowMessageRequestParams, TraceValue, UnregistrationParams, WorkspaceFolder,
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc::UnboundedSender, oneshot};
+use tokio::sync::{
+    mpsc::{self, UnboundedReceiver, UnboundedSender},
+    oneshot,
+};
 use tokio_util::sync::CancellationToken;
-use tracing::warn;
+use tracing::{trace, warn};
 
 use crate::error::ClientError;
 use crate::progress::ProgressRegistry;
@@ -208,6 +211,115 @@ impl OutboundRegistry {
     }
 }
 
+/// The engine-owned outbound queue for one connection: the unbounded channel
+/// feeding the writer's send-loop plus the depth counter that observes it.
+///
+/// The counter is observability only. Enqueue stays synchronous and the queue
+/// stays unbounded, so no message is ever dropped, reordered, or delayed by
+/// the accounting. Every successful [`send`](Self::send) increments the
+/// depth; the send-loop calls [`record_done`](Self::record_done) after each
+/// transport send, whether it succeeded or failed.
+#[derive(Clone)]
+pub(crate) struct OutboundQueue {
+    tx: UnboundedSender<RawMessage>,
+    inner: Arc<OutboundDepth>,
+}
+
+struct OutboundDepth {
+    threshold: usize,
+    /// Depth and warn-state move together under one lock, so a concurrent
+    /// enqueue can never observe a stale warn-state for a depth that has
+    /// already dropped back below the threshold (and vice versa).
+    state: Mutex<DepthState>,
+}
+
+struct DepthState {
+    depth: usize,
+    /// Set once depth reaches the threshold and cleared once it drops back
+    /// below it, so one sustained crossing produces exactly one warning.
+    warned: bool,
+}
+
+impl OutboundQueue {
+    /// Create the queue with its receiving half. `threshold` is the depth at
+    /// which one warning is emitted per upward crossing.
+    pub(crate) fn new(threshold: usize) -> (Self, UnboundedReceiver<RawMessage>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        (
+            Self {
+                tx,
+                inner: Arc::new(OutboundDepth {
+                    threshold,
+                    state: Mutex::new(DepthState {
+                        depth: 0,
+                        warned: false,
+                    }),
+                }),
+            },
+            rx,
+        )
+    }
+
+    /// Enqueue one message. The depth is counted before the send so the
+    /// writer can never decrement a message that is not yet counted; a failed
+    /// send means the writer half is gone, so the message is uncounted again.
+    pub(crate) fn send(
+        &self,
+        message: RawMessage,
+    ) -> Result<(), mpsc::error::SendError<RawMessage>> {
+        self.record_enqueue();
+        self.tx.send(message).inspect_err(|_| self.record_done())
+    }
+
+    pub(crate) fn is_closed(&self) -> bool {
+        self.tx.is_closed()
+    }
+
+    /// The current queue depth.
+    #[cfg(test)]
+    pub(crate) fn depth(&self) -> usize {
+        self.inner.state.lock().unwrap().depth
+    }
+
+    /// Count one enqueued request, response, or notification, warning once
+    /// when the depth crosses from below the threshold to at least it.
+    ///
+    /// Tracing stays silent below the threshold: a healthy queue produces no
+    /// per-message events, so helpers like `log_message` never echo into the
+    /// server's local tracing stream.
+    fn record_enqueue(&self) {
+        let mut state = self.inner.state.lock().unwrap();
+        state.depth += 1;
+        let depth = state.depth;
+        if depth >= self.inner.threshold {
+            trace!(outbound.queue_depth = depth, "outbound message enqueued");
+            if !state.warned {
+                state.warned = true;
+                warn!(
+                    outbound.queue_depth = depth,
+                    threshold = self.inner.threshold,
+                    "outbound queue depth reached the warning threshold"
+                );
+            }
+        }
+    }
+
+    /// Count one message the queue is done with: the writer calls this after
+    /// each transport send, whether it succeeded or failed, and `send` calls
+    /// it to uncount a message whose channel enqueue failed. Dropping back
+    /// below the threshold rearms one warning for the next crossing.
+    pub(crate) fn record_done(&self) {
+        let mut state = self.inner.state.lock().unwrap();
+        state.depth -= 1;
+        let depth = state.depth;
+        if depth >= self.inner.threshold {
+            trace!(outbound.queue_depth = depth, "outbound message written");
+        } else {
+            state.warned = false;
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum Phase {
     Open,
@@ -266,7 +378,7 @@ impl Notification for TelemetryEvent {
 /// handle into facilities owned by the protocol engine.
 #[derive(Clone)]
 pub struct Client {
-    outgoing: UnboundedSender<RawMessage>,
+    outgoing: OutboundQueue,
     outbound: OutboundRegistry,
     progress: ProgressRegistry,
     state: Arc<ClientState>,
@@ -280,7 +392,7 @@ impl fmt::Debug for Client {
 }
 
 impl Client {
-    pub(crate) fn new(outgoing: UnboundedSender<RawMessage>, outbound: OutboundRegistry) -> Self {
+    pub(crate) fn new(outgoing: OutboundQueue, outbound: OutboundRegistry) -> Self {
         Self {
             outgoing,
             outbound,
@@ -865,6 +977,13 @@ impl Client {
         self.state.outbound_closing.clone()
     }
 
+    /// The writer's send-loop reports each finished message here, after its
+    /// transport send succeeded or failed, so the queue depth counts only what
+    /// is still waiting to be written.
+    pub(crate) fn record_done(&self) {
+        self.outgoing.record_done();
+    }
+
     /// Engine-private accessor to the shared outbound registry.
     pub(crate) fn outbound_registry(&self) -> &OutboundRegistry {
         &self.outbound
@@ -889,6 +1008,7 @@ mod tests {
     use lsp_types::NumberOrString;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
     use serde_json::json;
+    use tracing_subscriber::layer::SubscriberExt;
 
     use super::*;
 
@@ -929,15 +1049,16 @@ mod tests {
         const METHOD: &'static str = "test/fails-to-serialize";
     }
 
-    fn make_client() -> (Client, tokio::sync::mpsc::UnboundedReceiver<RawMessage>) {
-        let (outgoing, receiver) = tokio::sync::mpsc::unbounded_channel();
+    fn make_client() -> (Client, UnboundedReceiver<RawMessage>) {
+        let (outgoing, receiver) = OutboundQueue::new(crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD);
         let client = Client::new(outgoing, OutboundRegistry::default());
         (client, receiver)
     }
 
     #[test]
     fn serialization_failure_is_reported_without_enqueuing() {
-        let (outgoing, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let (outgoing, mut receiver) =
+            OutboundQueue::new(crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD);
         let client = Client::new(outgoing, OutboundRegistry::default());
 
         assert!(matches!(
@@ -949,7 +1070,8 @@ mod tests {
 
     #[test]
     fn closed_connection_is_reported_before_enqueue() {
-        let (outgoing, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let (outgoing, mut receiver) =
+            OutboundQueue::new(crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD);
         let client = Client::new(outgoing, OutboundRegistry::default());
         client.close_connection();
 
@@ -962,7 +1084,8 @@ mod tests {
 
     #[test]
     fn outbound_closure_rejects_every_new_notification() {
-        let (outgoing, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let (outgoing, mut receiver) =
+            OutboundQueue::new(crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD);
         let client = Client::new(outgoing, OutboundRegistry::default());
         client.close_connection();
         client.close_outbound();
@@ -1379,7 +1502,7 @@ mod tests {
 
         // A client whose outbound queue is closed (receiver dropped, so all
         // sends fail).
-        let (outgoing, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let (outgoing, receiver) = OutboundQueue::new(crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD);
         let client = Client::new(outgoing, OutboundRegistry::default());
         drop(receiver);
         let client2 = client.clone();
@@ -1389,5 +1512,153 @@ mod tests {
 
         // Nothing was ever emitted, and the registry is empty.
         assert_eq!(client.outbound_registry().pending_len(), 0);
+    }
+
+    // --- OutboundQueue depth observability tests -----------------------------
+
+    fn queue_test_message() -> RawMessage {
+        RawMessage::Notification {
+            method: Cow::Borrowed("test/message"),
+            params: Bytes::from_static(b"{}"),
+        }
+    }
+
+    /// Run `f` with an [`EventCapture`] subscriber, returning its result and
+    /// every tracing event emitted on this thread.
+    fn capture<T>(f: impl FnOnce() -> T) -> (T, crate::test_util::EventCapture) {
+        let events = crate::test_util::EventCapture::new();
+        let subscriber = tracing_subscriber::registry().with(events.clone());
+        let result = tracing::subscriber::with_default(subscriber, f);
+        (result, events)
+    }
+
+    fn warning_count(events: &crate::test_util::EventCapture) -> usize {
+        events.count_at(tracing::Level::WARN, "reached the warning threshold")
+    }
+
+    #[test]
+    fn the_first_threshold_crossing_records_the_depth_and_warns_once() {
+        let (queue, _rx) = OutboundQueue::new(2);
+
+        let ((), events) = capture(|| {
+            queue.send(queue_test_message()).unwrap();
+            queue.send(queue_test_message()).unwrap();
+            queue.send(queue_test_message()).unwrap();
+        });
+
+        assert_eq!(queue.depth(), 3);
+        assert!(
+            !events.contains_at(tracing::Level::TRACE, "outbound.queue_depth=1"),
+            "below the threshold a healthy queue stays silent, got {:?}",
+            events.messages()
+        );
+        assert!(
+            events.contains_at(tracing::Level::TRACE, "outbound.queue_depth=3"),
+            "at and above the threshold every enqueue records the current depth, got {:?}",
+            events.messages()
+        );
+        assert_eq!(
+            events.count_at(tracing::Level::WARN, "outbound.queue_depth=2"),
+            1,
+            "the crossing warns once, recording the current depth, got {:?}",
+            events.messages()
+        );
+    }
+
+    #[test]
+    fn sustained_depth_at_or_above_the_threshold_does_not_repeat_the_warning() {
+        let (queue, _rx) = OutboundQueue::new(2);
+
+        let ((), events) = capture(|| {
+            for _ in 0..5 {
+                queue.send(queue_test_message()).unwrap();
+            }
+        });
+
+        assert_eq!(
+            queue.depth(),
+            5,
+            "the queue stays unbounded above the threshold"
+        );
+        assert_eq!(
+            warning_count(&events),
+            1,
+            "depth remaining at or above the threshold warns only once, got {:?}",
+            events.messages()
+        );
+    }
+
+    #[test]
+    fn dropping_below_the_threshold_rearms_one_warning_for_the_next_crossing() {
+        let (queue, _rx) = OutboundQueue::new(2);
+
+        let ((), events) = capture(|| {
+            queue.send(queue_test_message()).unwrap();
+            queue.send(queue_test_message()).unwrap();
+            queue.record_done();
+            queue.record_done();
+            assert_eq!(queue.depth(), 0, "the writer drained both messages");
+            queue.send(queue_test_message()).unwrap();
+            queue.send(queue_test_message()).unwrap();
+            queue.send(queue_test_message()).unwrap();
+        });
+
+        assert_eq!(queue.depth(), 3);
+        assert_eq!(
+            events.count_at(tracing::Level::TRACE, "outbound.queue_depth=2"),
+            2,
+            "each crossing records the current depth at the threshold, got {:?}",
+            events.messages()
+        );
+        assert!(
+            !events.contains_at(tracing::Level::TRACE, "outbound.queue_depth=0"),
+            "below the threshold the writer's sends stay silent, got {:?}",
+            events.messages()
+        );
+        assert_eq!(
+            warning_count(&events),
+            2,
+            "the recovery rearms exactly one warning for the second crossing, got {:?}",
+            events.messages()
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_enqueues_all_count_toward_the_one_shared_depth() {
+        let (queue, mut rx) = OutboundQueue::new(usize::MAX);
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let queue = queue.clone();
+            handles.push(tokio::spawn(async move {
+                for _ in 0..100 {
+                    queue.send(queue_test_message()).unwrap();
+                }
+            }));
+        }
+        for handle in handles {
+            handle.await.unwrap();
+        }
+
+        assert_eq!(queue.depth(), 800, "no concurrent enqueue is lost");
+        for _ in 0..800 {
+            rx.try_recv().expect("no enqueued message is dropped");
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "exactly the enqueued messages arrive"
+        );
+    }
+
+    #[test]
+    fn a_failed_enqueue_is_not_counted() {
+        let (queue, rx) = OutboundQueue::new(1);
+        drop(rx);
+
+        assert!(queue.send(queue_test_message()).is_err());
+        assert_eq!(
+            queue.depth(),
+            0,
+            "a message that never entered the queue is not counted"
+        );
     }
 }

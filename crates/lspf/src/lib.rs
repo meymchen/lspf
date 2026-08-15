@@ -76,3 +76,11 @@ pub use tokio_util::sync::CancellationToken;
 /// The cap is connection policy, so it belongs to the built [`Server`] that
 /// owns the connection rather than to the `Transport` it is served over.
 pub const DEFAULT_CONCURRENCY_LIMIT: usize = 64;
+
+/// Outbound queue depth at which the engine warns once per upward crossing
+/// when a [`Server`] does not set its own with
+/// [`ServerBuilder::outbound_warning_threshold`].
+///
+/// The queue itself stays unbounded: the threshold only controls when
+/// sustained depth produces a warning, never whether a message is sent.
+pub const DEFAULT_OUTBOUND_WARNING_THRESHOLD: usize = 1024;

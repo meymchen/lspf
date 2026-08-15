@@ -36,7 +36,7 @@ use lsp_types::{
     WorkDoneProgressCancelParams, WorkspaceFoldersServerCapabilities, WorkspaceServerCapabilities,
 };
 use serde::Serialize;
-use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::UnboundedReceiver;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Span, debug, info_span, warn};
 
@@ -45,7 +45,7 @@ use crate::builder::{
     ProtocolNotification, Registrations, Server,
 };
 use crate::capability::GeneratedCapabilities;
-use crate::client::{Client, OutboundRegistry};
+use crate::client::{Client, OutboundQueue, OutboundRegistry};
 use crate::codec::{decode_params, decode_value, encode_body};
 use crate::context::Context;
 use crate::documents::Documents;
@@ -232,7 +232,7 @@ where
     T: Transport,
 {
     let (reader, writer) = transport.split();
-    let (out_tx, out_rx) = mpsc::unbounded_channel::<RawMessage>();
+    let (out_tx, out_rx) = OutboundQueue::new(server.outbound_warning_threshold);
     let client = Client::new(out_tx.clone(), OutboundRegistry::default());
     let close = CloseSignal::new();
     let runtime = default_runtime();
@@ -348,7 +348,7 @@ impl InboundRegistry {
     /// Does nothing if some other path already claimed that entry.
     fn complete(
         &self,
-        out_tx: &UnboundedSender<RawMessage>,
+        out_tx: &OutboundQueue,
         reservation: Reservation,
         result: std::result::Result<Bytes, LspError>,
     ) {
@@ -366,7 +366,7 @@ impl InboundRegistry {
         }
     }
 
-    fn complete_cancellation(&self, out_tx: &UnboundedSender<RawMessage>, id: &RequestId) {
+    fn complete_cancellation(&self, out_tx: &OutboundQueue, id: &RequestId) {
         let token = {
             let mut inner = self.inner.lock().unwrap();
             match inner.entries.get(id) {
@@ -389,7 +389,7 @@ impl InboundRegistry {
     /// enough to deliver each cancellation. Removing the entry also claims the
     /// completion gate, so the handler's own late result is dropped and every
     /// cancelled request still receives exactly one response.
-    fn cancel_all_with_response(&self, out_tx: &UnboundedSender<RawMessage>) {
+    fn cancel_all_with_response(&self, out_tx: &OutboundQueue) {
         let entries = std::mem::take(&mut self.inner.lock().unwrap().entries);
         for (id, entry) in entries {
             if let Some(cancellation) = entry.cancellation {
@@ -484,7 +484,12 @@ async fn send_loop<W: TransportWriter>(
             client.close_outbound();
             break;
         };
-        if let Err(e) = writer.send(msg).await {
+        // The depth counts what is still queued, so each message is decremented
+        // once its transport send has succeeded or failed — including the
+        // terminally failed send, after which the loop returns.
+        let sent = writer.send(msg).await;
+        client.record_done();
+        if let Err(e) = sent {
             warn!(error = %e, "send_loop: transport write failed");
             // ADR 0018: the writer reports its terminal failure and performs no
             // cleanup of its own; the engine runs the one close operation.
@@ -493,7 +498,9 @@ async fn send_loop<W: TransportWriter>(
         }
     }
     while let Some(msg) = out_rx.recv().await {
-        if let Err(e) = writer.send(msg).await {
+        let sent = writer.send(msg).await;
+        client.record_done();
+        if let Err(e) = sent {
             warn!(error = %e, "send_loop: transport write failed while draining");
             close.request(CloseCause::WriterFailed);
             return;
@@ -551,7 +558,7 @@ struct ProtocolEngine<S, R> {
     on_exit: Option<OnExit<S>>,
     inbound: InboundRegistry,
     tasks: TaskGroup<R>,
-    out_tx: UnboundedSender<RawMessage>,
+    out_tx: OutboundQueue,
     client: Client,
     /// Cancelled once by [`close`](Self::close). Every request-scoped token is
     /// a child of it, so closing the session cancels all outstanding user work
@@ -571,7 +578,7 @@ where
     fn new(
         server: Server<S>,
         runtime: R,
-        out_tx: UnboundedSender<RawMessage>,
+        out_tx: OutboundQueue,
         client: Client,
         close: CloseSignal,
         send_task: TaskHandle,
@@ -1318,7 +1325,7 @@ enum Flow {
 /// Enqueue a success response after the protocol engine's final wire encoding,
 /// or enqueue the mapped wire error.
 fn enqueue_encoded(
-    out_tx: &UnboundedSender<RawMessage>,
+    out_tx: &OutboundQueue,
     id: RequestId,
     result: std::result::Result<Bytes, LspError>,
 ) {
@@ -1343,7 +1350,7 @@ fn error_response(id: RequestId, err: &LspError) -> RawMessage {
     }
 }
 
-fn enqueue_error(out_tx: &UnboundedSender<RawMessage>, id: RequestId, err: LspError) {
+fn enqueue_error(out_tx: &OutboundQueue, id: RequestId, err: LspError) {
     let _ = out_tx.send(error_response(id, &err));
 }
 
@@ -1535,7 +1542,7 @@ mod tests {
     /// finishes after its own entry was claimed.
     #[test]
     fn a_stale_reservation_cannot_claim_a_reused_request_id() {
-        let (out_tx, mut out_rx) = mpsc::unbounded_channel();
+        let (out_tx, mut out_rx) = OutboundQueue::new(crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD);
         let registry = InboundRegistry::default();
         let id = RequestId::Number(2);
 
@@ -1589,5 +1596,166 @@ mod tests {
         assert_eq!(Outcome::TransportClosed.code(), 1);
         assert_eq!(Outcome::WriterFailed.code(), 1);
         assert_eq!(Outcome::InitializeFailed.code(), 1);
+    }
+
+    // --- Outbound queue depth observability tests ----------------------------
+
+    enum TestOutboundNotification {}
+
+    impl lsp_types::notification::Notification for TestOutboundNotification {
+        type Params = serde_json::Value;
+        const METHOD: &'static str = "test/outbound-notification";
+    }
+
+    enum TestOutboundRequest {}
+
+    impl lsp_types::request::Request for TestOutboundRequest {
+        type Params = serde_json::Value;
+        type Result = String;
+        const METHOD: &'static str = "test/outbound-request";
+    }
+
+    fn send_loop_message(tag: u8) -> RawMessage {
+        RawMessage::Notification {
+            method: "test/send-loop".into(),
+            params: Bytes::from(vec![tag]),
+        }
+    }
+
+    /// A writer that records what it sent and fails the `fail_on_send`-th send
+    /// (1-based; `None` never fails), driving the send-loop through its
+    /// success, draining, and terminal-failure paths.
+    struct ScriptedWriter {
+        outbox: Arc<Mutex<Vec<RawMessage>>>,
+        fail_on_send: Option<usize>,
+        sends: usize,
+    }
+
+    impl TransportWriter for ScriptedWriter {
+        async fn send(&mut self, msg: RawMessage) -> std::result::Result<(), TransportError> {
+            self.sends += 1;
+            if self.fail_on_send == Some(self.sends) {
+                return Err(TransportError::Closed);
+            }
+            self.outbox.lock().unwrap().push(msg);
+            Ok(())
+        }
+
+        async fn shutdown(self) -> std::result::Result<(), TransportError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn requests_responses_and_notifications_share_one_depth_counter() {
+        let (queue, _rx) = OutboundQueue::new(crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD);
+        let client = Client::new(queue.clone(), OutboundRegistry::default());
+
+        client
+            .notify::<TestOutboundNotification>(serde_json::json!({}))
+            .unwrap();
+        enqueue_encoded(
+            &queue,
+            RequestId::Number(1),
+            Ok(Bytes::from_static(b"null")),
+        );
+
+        // The request future enqueues synchronously on its first poll, then
+        // awaits the peer's response.
+        let pending = client.request::<TestOutboundRequest>(serde_json::json!({}));
+        futures_util::pin_mut!(pending);
+        assert!(
+            futures_util::poll!(pending.as_mut()).is_pending(),
+            "the request awaits the peer's response"
+        );
+        assert_eq!(queue.depth(), 3);
+        client
+            .outbound_registry()
+            .complete(1, Ok(Bytes::from_static(b"\"pong\"")));
+        let answer = pending.await;
+        assert_eq!(answer.unwrap(), "pong");
+
+        assert_eq!(
+            queue.depth(),
+            3,
+            "a notification, a response, and a request all increment the one counter"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_send_loop_decrements_each_attempted_send_including_the_failed_one() {
+        let (queue, rx) = OutboundQueue::new(16);
+        let client = Client::new(queue.clone(), OutboundRegistry::default());
+        for tag in 0..3 {
+            queue.send(send_loop_message(tag)).unwrap();
+        }
+        assert_eq!(queue.depth(), 3);
+
+        let outbox = Arc::new(Mutex::new(Vec::new()));
+        let writer = ScriptedWriter {
+            outbox: outbox.clone(),
+            fail_on_send: Some(2),
+            sends: 0,
+        };
+        let close = CloseSignal::new();
+        send_loop(writer, rx, client, close.clone()).await;
+
+        assert_eq!(
+            queue.depth(),
+            1,
+            "the succeeded and the terminally failed send are both decremented"
+        );
+        assert_eq!(
+            outbox.lock().unwrap().len(),
+            1,
+            "only the first send landed on the transport"
+        );
+        assert!(
+            matches!(close.take_cause(), Some(CloseCause::WriterFailed)),
+            "the writer reports its terminal failure"
+        );
+    }
+
+    #[tokio::test]
+    async fn draining_after_close_decrements_every_message_in_order() {
+        let (queue, rx) = OutboundQueue::new(2);
+        let client = Client::new(queue.clone(), OutboundRegistry::default());
+        for tag in 0..3 {
+            queue.send(send_loop_message(tag)).unwrap();
+        }
+        client.close_outbound();
+
+        let outbox = Arc::new(Mutex::new(Vec::new()));
+        let writer = ScriptedWriter {
+            outbox: outbox.clone(),
+            fail_on_send: None,
+            sends: 0,
+        };
+        let close = CloseSignal::new();
+        send_loop(writer, rx, client, close.clone()).await;
+
+        assert_eq!(
+            queue.depth(),
+            0,
+            "draining decrements every queued message, above and below the threshold"
+        );
+        let tags: Vec<u8> = outbox
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|msg| match msg {
+                RawMessage::Notification { params, .. } => params[0],
+                other => panic!("expected notifications, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            tags,
+            vec![0, 1, 2],
+            "draining never drops or reorders a message"
+        );
+        assert!(
+            close.take_cause().is_none(),
+            "clean draining is not a writer failure"
+        );
     }
 }
