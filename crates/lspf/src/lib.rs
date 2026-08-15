@@ -13,6 +13,8 @@ mod engine;
 mod error;
 pub mod features;
 mod file_provider;
+#[cfg(feature = "proposed")]
+pub mod proposed;
 mod raw;
 mod runtime;
 mod service;
