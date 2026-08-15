@@ -111,14 +111,13 @@ mod tests {
     use std::str::FromStr;
 
     use lsp_types::{InitializeParams, TextDocumentItem, Uri};
-    use tokio::sync::mpsc;
 
     use super::*;
-    use crate::client::OutboundRegistry;
+    use crate::client::{OutboundQueue, OutboundRegistry};
     use crate::documents::Documents;
 
     fn context() -> (Context, Documents) {
-        let (out_tx, _out_rx) = mpsc::unbounded_channel();
+        let (out_tx, _out_rx) = OutboundQueue::new(crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD);
         let documents = Documents::new();
         let workspace = Workspace::from_params(&InitializeParams::default(), documents.clone());
         let client = Client::new(out_tx, OutboundRegistry::default());
