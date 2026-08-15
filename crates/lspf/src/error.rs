@@ -147,6 +147,10 @@ pub enum BuildError {
     /// A zero concurrency limit could never admit a user call.
     #[error("concurrency limit must be greater than zero")]
     InvalidConcurrencyLimit,
+
+    /// A zero outbound warning threshold could never be crossed from below.
+    #[error("outbound warning threshold must be greater than zero")]
+    InvalidOutboundWarningThreshold,
 }
 
 #[derive(Debug, Error)]
