@@ -45,6 +45,12 @@ mod markdown {
 
     #[doc = include_str!("../../../docs/guides/features-and-workspace.md")]
     pub struct FeaturesAndWorkspaceGuide;
+
+    #[doc = include_str!("../../../docs/guides/outgoing-client.md")]
+    pub struct OutgoingClientGuide;
+
+    #[doc = include_str!("../../../docs/guides/migrating-to-0.4.md")]
+    pub struct MigratingTo04Guide;
 }
 
 pub use builder::{InitializeRegistrar, Server, ServerBuilder};
