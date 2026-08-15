@@ -33,7 +33,7 @@ use lsp_types::{
     DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
     InitializeParams, InitializedParams, OneOf, ServerInfo, SetTraceParams, TextDocumentSyncKind,
     TextDocumentSyncOptions, TextDocumentSyncSaveOptions, WillSaveTextDocumentParams,
-    WorkspaceFoldersServerCapabilities, WorkspaceServerCapabilities,
+    WorkDoneProgressCancelParams, WorkspaceFoldersServerCapabilities, WorkspaceServerCapabilities,
 };
 use serde::Serialize;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
@@ -51,6 +51,7 @@ use crate::context::Context;
 use crate::documents::Documents;
 use crate::error::Error;
 use crate::file_provider::SharedFileProvider;
+use crate::progress::{ProgressCancel, ProgressRegistry};
 use crate::raw::{JsonRpcError, RawMessage, RequestId};
 use crate::runtime::{Runtime, TaskHandle, TaskSend, default_runtime};
 use crate::service::{IncomingCall, ServiceResult, UserLayer, UserService, build_service_stack};
@@ -418,6 +419,51 @@ struct CancelParams {
     id: RequestId,
 }
 
+/// Whether a protocol built-in's post-validation hook runs.
+///
+/// Most built-ins gate their hook on the `Result` of
+/// [`ProtocolEngine::process_protocol_notification`]; the work-done progress
+/// cancel built-in reports its own non-error rejections (malformed params) at
+/// debug level and signals the gate directly instead.
+enum BuiltInGate {
+    /// Decode — and any mutation — succeeded: dispatch the registered hook.
+    RunHook,
+    /// The notification was dropped before decode completed: no hook runs.
+    SkipHook,
+}
+
+/// Decode and apply one `window/workDoneProgress/cancel` notification against
+/// the connection's progress registry (ADR 0018).
+///
+/// A matching active and cancellable token fires the handle's cancellation
+/// token; cancellation never sends a work-done end by itself — the
+/// application decides the final message and calls `end`. Unknown, ended, and
+/// non-cancellable tokens, like malformed params, are logged at debug level
+/// and otherwise ignored, leaving the connection usable. The hook gate opens
+/// only after a successful decode, so a registered hook always observes the
+/// updated cancellation state.
+fn gate_progress_cancel(registry: &ProgressRegistry, raw_params: &Bytes) -> BuiltInGate {
+    let params = match decode_params::<WorkDoneProgressCancelParams>(raw_params) {
+        Ok(params) => params,
+        Err(error) => {
+            debug!(%error, "ignoring malformed window/workDoneProgress/cancel");
+            return BuiltInGate::SkipHook;
+        }
+    };
+    match registry.cancel(&params.token) {
+        ProgressCancel::Cancelled => {}
+        ProgressCancel::NotCancellable => debug!(
+            token = ?params.token,
+            "ignoring work-done progress cancel for a non-cancellable token"
+        ),
+        ProgressCancel::NotActive => debug!(
+            token = ?params.token,
+            "ignoring work-done progress cancel for an unknown or ended token"
+        ),
+    }
+    BuiltInGate::RunHook
+}
+
 async fn send_loop<W: TransportWriter>(
     mut writer: W,
     mut out_rx: UnboundedReceiver<RawMessage>,
@@ -782,7 +828,9 @@ where
                     // the hook below — and every later message — observes the
                     // mutated state. A failure reports the notification
                     // error and skips the hook, leaving the connection to
-                    // process the next message.
+                    // process the next message; a built-in may also skip its
+                    // own hook after logging a non-error rejection at debug
+                    // level (the work-done progress cancel built-in).
                     if let Some(built_in) = ProtocolNotification::from_method(other) {
                         if !self.accepts_protocol_notification(built_in) {
                             debug!(
@@ -791,9 +839,13 @@ where
                             );
                             return Flow::Continue;
                         }
-                        if let Err(error) = self.process_protocol_notification(built_in, &params) {
-                            warn!(method = other, %error, "protocol validation skipped its hook");
-                            return Flow::Continue;
+                        match self.process_protocol_notification(built_in, &params) {
+                            Ok(BuiltInGate::RunHook) => {}
+                            Ok(BuiltInGate::SkipHook) => return Flow::Continue,
+                            Err(error) => {
+                                warn!(method = other, %error, "protocol validation skipped its hook");
+                                return Flow::Continue;
+                            }
                         }
                     }
 
@@ -867,12 +919,14 @@ where
     /// ranges must be applicable under the negotiated encoding. Returning `Err`
     /// is what skips the notification's hook, so nothing partial is left for a
     /// hook to observe: a rejected `didChange` batch leaves the document at the
-    /// revision the last accepted notification produced.
+    /// revision the last accepted notification produced. The returned gate says
+    /// whether the hook runs — the work-done progress cancel built-in skips it
+    /// for malformed params without an error worth a warning.
     fn process_protocol_notification(
         &self,
         built_in: ProtocolNotification,
         raw_params: &Bytes,
-    ) -> std::result::Result<(), LspError> {
+    ) -> std::result::Result<BuiltInGate, LspError> {
         match built_in {
             ProtocolNotification::Open => {
                 let params: DidOpenTextDocumentParams = decode_params(raw_params)?;
@@ -934,15 +988,22 @@ where
                 let params: SetTraceParams = decode_params(raw_params)?;
                 self.established_workspace().set_trace(params.value);
             }
+            ProtocolNotification::ProgressCancel => {
+                return Ok(gate_progress_cancel(
+                    self.client.progress_registry(),
+                    raw_params,
+                ));
+            }
         }
-        Ok(())
+        Ok(BuiltInGate::RunHook)
     }
 
     fn accepts_protocol_notification(&self, built_in: ProtocolNotification) -> bool {
         match built_in {
             ProtocolNotification::WorkspaceFolders
             | ProtocolNotification::Configuration
-            | ProtocolNotification::Trace => true,
+            | ProtocolNotification::Trace
+            | ProtocolNotification::ProgressCancel => true,
             _ if self.document_sync.change == Some(TextDocumentSyncKind::NONE) => false,
             ProtocolNotification::Open | ProtocolNotification::Close => {
                 self.document_sync.open_close == Some(true)
@@ -1198,10 +1259,11 @@ where
     ///
     /// Every close cause runs exactly these steps, in this order, and a second
     /// call is a no-op: new outbound work is rejected, the session is
-    /// cancelled, every pending `Client` request is resolved, both registries
-    /// are emptied, every handler task is aborted and then joined, and the
-    /// outbound queue is closed before the writer task is joined. No task is
-    /// detached and no pending `Client` future is left unresolved.
+    /// cancelled, every pending `Client` request is resolved, the inbound,
+    /// outbound, and progress registries are emptied, every handler task is
+    /// aborted and then joined, and the outbound queue is closed before the
+    /// writer task is joined. No task is detached and no pending `Client`
+    /// future is left unresolved.
     async fn close(&mut self) {
         if matches!(self.lifecycle, Lifecycle::Exited) {
             return;
@@ -1214,6 +1276,12 @@ where
         // `ClientError::Cancelled`, allowing them to unblock and exit cleanly.
         self.client.outbound_registry().close_all();
         self.inbound.close_all();
+        // The progress registry is connection state too: clearing it leaves no
+        // stale tokens behind, so a handle that outlives the session observes
+        // `ProgressError::UnknownToken` rather than a still-active token. Each
+        // connection owns its registry through its own `Client`, so clearing
+        // cannot touch another connection.
+        self.client.progress_registry().clear();
         self.tasks.abort_and_join().await;
         // Closing the queue is the writer's stop signal: it drains what is
         // already enqueued, shuts the writer half down, and ends. Joining it
@@ -1281,7 +1349,107 @@ fn enqueue_error(out_tx: &UnboundedSender<RawMessage>, id: RequestId, err: LspEr
 
 #[cfg(test)]
 mod tests {
+    use lsp_types::ProgressToken;
+    use tracing_subscriber::layer::SubscriberExt;
+
     use super::*;
+
+    /// Run `gate_progress_cancel` against `registry` with `raw_params`,
+    /// capturing every tracing event the call emits on this thread.
+    fn gated_cancel(
+        registry: &ProgressRegistry,
+        raw_params: &'static [u8],
+    ) -> (BuiltInGate, crate::test_util::EventCapture) {
+        let events = crate::test_util::EventCapture::new();
+        let subscriber = tracing_subscriber::registry().with(events.clone());
+        let gate = tracing::subscriber::with_default(subscriber, || {
+            gate_progress_cancel(registry, &Bytes::from_static(raw_params))
+        });
+        (gate, events)
+    }
+
+    #[test]
+    fn a_matching_cancellable_token_fires_and_opens_the_hook_gate() {
+        let registry = ProgressRegistry::default();
+        let cancellation = CancellationToken::new();
+        registry.register(ProgressToken::Number(1), true, cancellation.clone());
+
+        let (gate, events) = gated_cancel(&registry, br#"{"token": 1}"#);
+
+        assert!(
+            matches!(gate, BuiltInGate::RunHook),
+            "a successful decode lets the hook run"
+        );
+        assert!(cancellation.is_cancelled());
+        assert!(
+            registry.is_active(&ProgressToken::Number(1)),
+            "cancellation never ends the progress: the token stays registered"
+        );
+        assert!(
+            events.messages().is_empty(),
+            "a matched cancel logs nothing, got {:?}",
+            events.messages()
+        );
+    }
+
+    #[test]
+    fn non_cancellable_and_inactive_tokens_log_at_debug_and_keep_the_gate_open() {
+        let registry = ProgressRegistry::default();
+        let plain = CancellationToken::new();
+        registry.register(ProgressToken::Number(1), false, plain.clone());
+
+        let (gate, events) = gated_cancel(&registry, br#"{"token": 1}"#);
+        assert!(matches!(gate, BuiltInGate::RunHook));
+        assert!(!plain.is_cancelled(), "a non-cancellable token never fires");
+        assert!(
+            events.contains_at(tracing::Level::DEBUG, "non-cancellable token"),
+            "got {:?}",
+            events.messages()
+        );
+
+        let (gate, events) = gated_cancel(&registry, br#"{"token": 99}"#);
+        assert!(matches!(gate, BuiltInGate::RunHook));
+        assert!(
+            events.contains_at(tracing::Level::DEBUG, "unknown or ended token"),
+            "got {:?}",
+            events.messages()
+        );
+        assert!(
+            registry.is_active(&ProgressToken::Number(1)),
+            "an unknown token leaves the registry untouched"
+        );
+    }
+
+    #[test]
+    fn malformed_cancel_params_log_at_debug_and_close_the_hook_gate() {
+        let registry = ProgressRegistry::default();
+        let cancellation = CancellationToken::new();
+        registry.register(ProgressToken::Number(1), true, cancellation.clone());
+
+        for raw in [
+            br#"{"token": true}"#.as_slice(),
+            br#"{}"#.as_slice(),
+            b"not json".as_slice(),
+        ] {
+            let (gate, events) = gated_cancel(&registry, raw);
+            assert!(
+                matches!(gate, BuiltInGate::SkipHook),
+                "malformed params {raw:?} skip the hook"
+            );
+            assert!(
+                events.contains_at(
+                    tracing::Level::DEBUG,
+                    "malformed window/workDoneProgress/cancel"
+                ),
+                "got {:?}",
+                events.messages()
+            );
+        }
+        assert!(
+            !cancellation.is_cancelled(),
+            "malformed params never cancel anything"
+        );
+    }
 
     fn content_change(with_range: bool) -> lsp_types::TextDocumentContentChangeEvent {
         lsp_types::TextDocumentContentChangeEvent {
