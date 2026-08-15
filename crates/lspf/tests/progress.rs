@@ -470,14 +470,15 @@ async fn connection_close_fails_every_further_progress_operation() {
         "begin after close fails fast, got {error:?}"
     );
 
-    // The still-active handle cannot report anymore.
+    // Session close cleared the progress registry: the still-held handle's
+    // token is unknown before any I/O is even attempted.
     let error = handle.report(None, Some(10)).unwrap_err();
     assert!(
         matches!(
             error,
-            ClientError::ConnectionClosed | ClientError::OutboundClosed
+            ClientError::Progress(lspf::ProgressError::UnknownToken)
         ),
-        "report after close fails fast, got {error:?}"
+        "report after close sees the cleared registry, got {error:?}"
     );
 
     // End still removes the token even though its enqueue fails.
