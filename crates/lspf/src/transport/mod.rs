@@ -1,6 +1,16 @@
+// Envelope helpers (ADR 0011) exist wherever a Transport adapter exists —
+// every adapter parses and serializes the same JSON-RPC envelopes.
+#[cfg(any(
+    feature = "stdio",
+    feature = "tcp",
+    feature = "websocket",
+    feature = "worker-channel"
+))]
 mod envelope;
+// `Content-Length` framing is the wire contract of stdio and TCP only.
+#[cfg(any(feature = "stdio", feature = "tcp"))]
 pub mod framing;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "stdio", not(target_arch = "wasm32")))]
 mod stdio;
 
 use std::future::Future;
@@ -8,11 +18,11 @@ use std::io;
 
 use thiserror::Error;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "stdio", not(target_arch = "wasm32")))]
 use crate::builder::Server;
 use crate::raw::RawMessage;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "stdio", not(target_arch = "wasm32")))]
 pub use stdio::{StdioReader, StdioTransport, StdioWriter};
 
 #[derive(Debug, Error)]
@@ -66,7 +76,7 @@ pub trait TransportWriter: Send + 'static {
     fn shutdown(self) -> impl Future<Output = std::result::Result<(), TransportError>> + Send;
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "stdio", not(target_arch = "wasm32")))]
 /// Entry point: serve a built [`Server`] over the default stdio adapter.
 ///
 /// The adapter supplies the transport and nothing else. Concurrency policy,
@@ -92,12 +102,12 @@ where
     StdioBuilder { server }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "stdio", not(target_arch = "wasm32")))]
 pub struct StdioBuilder<S> {
     server: Server<S>,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "stdio", not(target_arch = "wasm32")))]
 impl<S> StdioBuilder<S>
 where
     S: Send + Sync + 'static,
@@ -112,7 +122,15 @@ where
     }
 }
 
-#[cfg(test)]
+#[cfg(all(
+    test,
+    any(
+        feature = "stdio",
+        feature = "tcp",
+        feature = "websocket",
+        feature = "worker-channel"
+    )
+))]
 mod tests {
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
