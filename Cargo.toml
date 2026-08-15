@@ -11,7 +11,9 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/meymchen/lspf"
 
 [workspace.dependencies]
-lspf = { path = "crates/lspf", version = "0.4.0" }
+# Workspace consumers opt into exactly the stdio transport instead of
+# inheriting the crate's defaults, so no-default feature checks stay honest.
+lspf = { path = "crates/lspf", version = "0.4.0", default-features = false, features = ["stdio"] }
 bytes = "1"
 futures-util = { version = "0.3", default-features = false }
 lsp-types = "0.97"
@@ -20,6 +22,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt", "io-util", "sync"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake", "stream"] }
 tokio-util = { version = "0.7", features = ["codec", "rt"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

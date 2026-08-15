@@ -3,6 +3,13 @@
 //! See `CONTEXT.md` and `docs/adr/` at the repository root for the domain
 //! language and the architectural decisions that shape this crate.
 
+#[cfg(all(target_arch = "wasm32", not(feature = "wasm")))]
+compile_error!(
+    "the wasm32 target requires the `wasm` feature; \
+     build with `--no-default-features --features worker-channel`, \
+     or `--no-default-features --features wasm` plus your transports"
+);
+
 mod builder;
 mod capability;
 mod client;
@@ -68,7 +75,7 @@ pub use raw::{JsonRpcError, RawMessage, RequestId};
 #[doc(hidden)]
 pub use runtime::TaskSend;
 pub use service::{CallKind, IncomingCall, Layer, Next, ServiceFuture, ServiceResult};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "stdio", not(target_arch = "wasm32")))]
 pub use transport::{StdioBuilder, StdioReader, StdioTransport, StdioWriter, stdio};
 pub use transport::{Transport, TransportError, TransportReader, TransportWriter};
 pub use workspace::{Workspace, WorkspaceError};
