@@ -1,5 +1,13 @@
 # Single crate with feature flags
 
+Status note:
+The 0.5 Cargo feature graph (issue #126) ships this plan with the
+runtime glue renamed `runtime-tokio` and the browser adapter as the
+`worker-channel` feature, which implies `wasm`. Defaults pull in
+`stdio`, which implies `runtime-tokio`; `tcp` and `websocket` do too,
+and `websocket` additionally pulls `tokio-tungstenite`. The historical
+body below is unchanged.
+
 lspf ships as one crate, `lspf`, with optional feature flags for the
 transports (`stdio`, `tcp`, `websocket`) and target glue (`tokio`,
 `wasm`). Defaults pull in stdio + tokio. WASM users disable defaults
