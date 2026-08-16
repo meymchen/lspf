@@ -32,6 +32,10 @@ jobs:
   msrv:
     name: msrv
     runs-on: ubuntu-latest
+    # `rust-toolchain.toml` selects stable for development; RUSTUP_TOOLCHAIN
+    # outranks it so this job really checks the MSRV (1.96), not stable.
+    env:
+      RUSTUP_TOOLCHAIN: "1.96.0"
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@1.96.0
@@ -77,10 +81,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      # Must match `rust-toolchain.toml` (channel 1.96.0): cargo reads that
-      # file and builds on 1.96.0, so the wasm32 rust-std must be installed
-      # for 1.96.0 rather than for a different default toolchain.
-      - uses: dtolnay/rust-toolchain@1.96.0
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
