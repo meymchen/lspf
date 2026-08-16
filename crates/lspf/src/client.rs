@@ -4,6 +4,10 @@ use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
+use futures_channel::{
+    mpsc::{self, UnboundedReceiver, UnboundedSender},
+    oneshot,
+};
 use lsp_types::notification::{
     LogMessage, LogTrace, Notification, Progress, PublishDiagnostics, ShowMessage,
 };
@@ -20,10 +24,6 @@ use lsp_types::{
     ShowMessageRequestParams, TraceValue, UnregistrationParams, WorkspaceFolder,
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::{
-    mpsc::{self, UnboundedReceiver, UnboundedSender},
-    oneshot,
-};
 use tokio_util::sync::CancellationToken;
 use tracing::{trace, warn};
 
@@ -244,7 +244,7 @@ impl OutboundQueue {
     /// Create the queue with its receiving half. `threshold` is the depth at
     /// which one warning is emitted per upward crossing.
     pub(crate) fn new(threshold: usize) -> (Self, UnboundedReceiver<RawMessage>) {
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::unbounded();
         (
             Self {
                 tx,
@@ -263,12 +263,11 @@ impl OutboundQueue {
     /// Enqueue one message. The depth is counted before the send so the
     /// writer can never decrement a message that is not yet counted; a failed
     /// send means the writer half is gone, so the message is uncounted again.
-    pub(crate) fn send(
-        &self,
-        message: RawMessage,
-    ) -> Result<(), mpsc::error::SendError<RawMessage>> {
+    pub(crate) fn send(&self, message: RawMessage) -> Result<(), mpsc::TrySendError<RawMessage>> {
         self.record_enqueue();
-        self.tx.send(message).inspect_err(|_| self.record_done())
+        self.tx
+            .unbounded_send(message)
+            .inspect_err(|_| self.record_done())
     }
 
     pub(crate) fn is_closed(&self) -> bool {
@@ -1137,8 +1136,14 @@ mod tests {
         let (_id1, mut rx1) = insert_ok(&registry);
         let (_id2, mut rx2) = insert_ok(&registry);
         registry.close_all();
-        assert!(matches!(rx1.try_recv().unwrap(), PendingOutcome::Cancelled));
-        assert!(matches!(rx2.try_recv().unwrap(), PendingOutcome::Cancelled));
+        assert!(matches!(
+            rx1.try_recv().unwrap().unwrap(),
+            PendingOutcome::Cancelled
+        ));
+        assert!(matches!(
+            rx2.try_recv().unwrap().unwrap(),
+            PendingOutcome::Cancelled
+        ));
         // Registry is drained; nothing leaks.
         assert_eq!(registry.pending_len(), 0);
     }

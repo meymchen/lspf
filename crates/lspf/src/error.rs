@@ -13,6 +13,13 @@ pub enum Error {
 
     #[error(transparent)]
     Transport(#[from] TransportError),
+
+    /// Native serving was attempted without a running Tokio runtime. The
+    /// framework never starts a runtime implicitly (ADR 0020): start one —
+    /// for example with `#[tokio::main]` — before serving the connection.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[error("no Tokio runtime is running; start one before serving the connection")]
+    RuntimeRequired,
 }
 
 /// A failure to enqueue a typed server-to-client operation.

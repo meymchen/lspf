@@ -10,12 +10,21 @@ compile_error!(
      or `--no-default-features --features wasm` plus your transports"
 );
 
+// The worker-channel adapter is a browser MessagePort transport: it only
+// exists inside a Web Worker on `wasm32-unknown-unknown`.
+#[cfg(all(feature = "worker-channel", not(target_arch = "wasm32")))]
+compile_error!("the `worker-channel` feature requires the wasm32 target");
+
 mod builder;
 mod capability;
 mod client;
 mod codec;
 mod context;
 mod documents;
+// Serving needs an executor: the engine exists wherever a runtime is
+// available (ADR 0020). On native targets that is the `runtime-tokio`
+// feature; on wasm32 the `wasm` feature, which the check above enforces.
+#[cfg(any(feature = "runtime-tokio", target_arch = "wasm32"))]
 mod engine;
 mod error;
 pub mod features;
@@ -26,6 +35,7 @@ pub mod proposed;
 mod raw;
 mod runtime;
 mod service;
+mod sync;
 mod transport;
 mod uri_key;
 mod workspace;
@@ -64,11 +74,14 @@ pub use builder::{InitializeRegistrar, Server, ServerBuilder};
 pub use client::{Client, TelemetryEventParams};
 pub use context::Context;
 pub use documents::{Document, DocumentsView, PositionEncoding};
+#[cfg(any(feature = "runtime-tokio", target_arch = "wasm32"))]
 pub use engine::Outcome;
 pub use error::{BuildError, ClientError, Error, LspError, ProgressError, Result};
 pub use features::{FeatureSpec, NotificationFeatureSpec};
+#[cfg(target_arch = "wasm32")]
+pub use file_provider::EmptyFileProvider;
 pub use file_provider::{FileProvider, MemoryFileProvider};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "runtime-tokio"))]
 pub use file_provider::{OsFileProvider, OsFileProviderBuilder};
 pub use progress::{ProgressHandle, ProgressOptions};
 pub use raw::{JsonRpcError, RawMessage, RequestId};
