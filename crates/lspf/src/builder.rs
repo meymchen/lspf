@@ -37,6 +37,7 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
+use crate::FileProvider;
 use crate::capability::{CapabilityBuilder, GeneratedCapabilities};
 use crate::codec::erase_value;
 use crate::context::Context;
@@ -44,7 +45,6 @@ use crate::error::{BuildError, LspError};
 use crate::features::{FeatureSpec, NotificationFeatureSpec};
 use crate::file_provider::{SharedFileProvider, erase};
 use crate::service::{Layer, UserLayer};
-use crate::{FileProvider, MemoryFileProvider};
 
 /// Method names owned by the framework's lifecycle; a custom request or
 /// notification may not shadow one of them.
@@ -603,7 +603,7 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
     fn new(state: S) -> Self {
         Self {
             state: Arc::new(state),
-            file_provider: erase(MemoryFileProvider::new()),
+            file_provider: crate::file_provider::default_file_provider(),
             registrations: Registrations::new(),
             configure_initialize: None,
             on_initialize: None,
@@ -1097,7 +1097,10 @@ impl<S: Send + Sync + 'static> Server<S> {
     /// returned [`Outcome`](crate::Outcome) names that ending and carries the
     /// LSP exit code; serving never terminates the process, so the caller
     /// decides what the outcome means. A reader transport error is returned as
-    /// [`Error::Transport`](crate::Error::Transport) instead.
+    /// [`Error::Transport`](crate::Error::Transport) instead, and on native
+    /// targets serving without a running Tokio runtime returns
+    /// [`Error::RuntimeRequired`](crate::Error::RuntimeRequired).
+    #[cfg(any(feature = "runtime-tokio", target_arch = "wasm32"))]
     pub async fn serve<T>(self, transport: T) -> crate::Result<crate::Outcome>
     where
         T: crate::Transport,

@@ -32,11 +32,26 @@ jobs:
   msrv:
     name: msrv
     runs-on: ubuntu-latest
+    # `rust-toolchain.toml` selects stable for development; RUSTUP_TOOLCHAIN
+    # outranks it so this job really checks the MSRV (1.96), not stable.
+    env:
+      RUSTUP_TOOLCHAIN: "1.96.0"
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@1.96.0
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --workspace --all-targets --all-features --locked
+      - run: cargo check --workspace --all-targets --locked
+      - run: cargo check -p lspf --no-default-features --features stdio --locked
+      # The TCP/WebSocket adapters land after the feature graph; until they
+      # exist, `envelope` has no caller in these combinations, so the dead-code
+      # lint is suspended for the two rows only.
+      - run: cargo check -p lspf --no-default-features --features tcp --locked
+        env:
+          RUSTFLAGS: ""
+      - run: cargo check -p lspf --no-default-features --features websocket --locked
+        env:
+          RUSTFLAGS: ""
+      - run: cargo check -p lspf --no-default-features --features stdio,tcp,websocket,proposed --locked
 
   clippy:
     name: clippy
@@ -47,7 +62,9 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      # `worker-channel` is wasm32-only (ADR 0020), so "all native features" is
+      # spelled out rather than `--all-features`.
+      - run: cargo clippy --workspace --all-targets --features stdio,tcp,websocket,proposed -- -D warnings
 
   test:
     name: test
@@ -56,8 +73,22 @@ jobs:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace --all-features --all-targets
-      - run: cargo test --workspace --all-features --doc
+      - run: cargo test --workspace --features stdio,tcp,websocket,proposed --all-targets
+      - run: cargo test --workspace --features stdio,tcp,websocket,proposed --doc
+
+  wasm:
+    name: wasm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      # The pre-0.5 compile spike (ADR 0020): the protocol kernel must compile
+      # for wasm32 without enabling the Tokio runtime.
+      - run: cargo check -p lspf --target wasm32-unknown-unknown --no-default-features --features wasm --locked
+      - run: cargo check -p lspf --target wasm32-unknown-unknown --no-default-features --features wasm --example shared_server --locked
 
   coverage:
     name: coverage
@@ -68,7 +99,7 @@ jobs:
       - run: rustup component add llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
       - run: cargo install cargo-llvm-cov --version 0.6.21 --locked
-      - run: cargo llvm-cov --workspace --all-features --all-targets --no-report
+      - run: cargo llvm-cov --workspace --features stdio,tcp,websocket,proposed --all-targets --no-report
       - run: cargo llvm-cov report --html --output-dir target/coverage
       - run: cargo llvm-cov report --lcov --output-path target/coverage/lcov.info
       - uses: actions/upload-artifact@v5
