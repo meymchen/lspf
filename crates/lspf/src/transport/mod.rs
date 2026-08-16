@@ -1,5 +1,7 @@
 // Envelope helpers (ADR 0011) exist wherever a Transport adapter exists —
 // every adapter parses and serializes the same JSON-RPC envelopes.
+#[cfg(test)]
+mod conformance;
 #[cfg(any(
     feature = "stdio",
     feature = "tcp",

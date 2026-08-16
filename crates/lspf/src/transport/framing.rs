@@ -35,6 +35,21 @@ impl ContentLengthCodec {
             max_size,
         }
     }
+
+    pub(crate) fn validate_size(&self, length: usize) -> Result<(), TransportError> {
+        if length > self.max_size {
+            return Err(TransportError::OversizedMessage {
+                length,
+                limit: self.max_size,
+            });
+        }
+        Ok(())
+    }
+
+    pub(crate) fn header_for(&self, length: usize) -> Result<String, TransportError> {
+        self.validate_size(length)?;
+        Ok(format!("Content-Length: {length}\r\n\r\n"))
+    }
 }
 
 impl Decoder for ContentLengthCodec {
@@ -51,12 +66,7 @@ impl Decoder for ContentLengthCodec {
                     let headers = src.split_to(headers_end);
                     src.advance(4);
                     let length = parse_content_length(&headers)?;
-                    if length > self.max_size {
-                        return Err(TransportError::OversizedMessage {
-                            length,
-                            limit: self.max_size,
-                        });
-                    }
+                    self.validate_size(length)?;
                     self.state = State::Body { length };
                 }
                 State::Body { length } => {
@@ -77,7 +87,7 @@ impl Encoder<Bytes> for ContentLengthCodec {
     type Error = TransportError;
 
     fn encode(&mut self, item: Bytes, dst: &mut BytesMut) -> Result<(), TransportError> {
-        let header = format!("Content-Length: {}\r\n\r\n", item.len());
+        let header = self.header_for(item.len())?;
         dst.reserve(header.len() + item.len());
         dst.put_slice(header.as_bytes());
         dst.put_slice(&item);
@@ -149,6 +159,36 @@ mod tests {
         let mut buf = BytesMut::from(&b"Content-Length: 17\r\n\r\n"[..]);
         let err = codec.decode(&mut buf).unwrap_err();
         assert!(matches!(err, TransportError::OversizedMessage { .. }));
+    }
+
+    #[test]
+    fn rejects_oversized_on_encode() {
+        let mut codec = ContentLengthCodec::new(8);
+        let mut buf = BytesMut::new();
+        let err = codec
+            .encode(Bytes::from_static(b"123456789"), &mut buf)
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            TransportError::OversizedMessage {
+                length: 9,
+                limit: 8
+            }
+        ));
+        assert!(buf.is_empty(), "an oversized frame writes no partial bytes");
+    }
+
+    #[test]
+    fn default_limit_is_sixteen_mib_on_receive() {
+        let mut codec = ContentLengthCodec::default();
+        let mut buf =
+            BytesMut::from(format!("Content-Length: {}\r\n\r\n", DEFAULT_MAX_SIZE + 1).as_bytes());
+        let err = codec.decode(&mut buf).unwrap_err();
+        assert!(matches!(
+            err,
+            TransportError::OversizedMessage { length, limit }
+                if length == DEFAULT_MAX_SIZE + 1 && limit == DEFAULT_MAX_SIZE
+        ));
     }
 
     #[test]
