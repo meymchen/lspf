@@ -91,11 +91,43 @@ impl FileProvider for MemoryFileProvider {
     }
 }
 
+/// The empty [`FileProvider`] that serves no scheme at all.
+///
+/// Every lookup fails with [`WorkspaceError::UnsupportedScheme`], naming the
+/// requested scheme. It is the default provider on browser WASM, where there
+/// is no filesystem to read and no native OS provider to construct
+/// (ADR 0020); the builder still accepts any user provider.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EmptyFileProvider;
+
+impl FileProvider for EmptyFileProvider {
+    async fn read_text(&self, uri: &Uri) -> Result<Option<String>, WorkspaceError> {
+        let scheme = uri
+            .scheme()
+            .map(|scheme| scheme.as_str())
+            .unwrap_or_default();
+        Err(WorkspaceError::UnsupportedScheme(scheme.to_string()))
+    }
+}
+
+/// The connection's default [`FileProvider`]: an in-memory provider on native
+/// targets, the empty provider on browser WASM (ADR 0020).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn default_file_provider() -> SharedFileProvider {
+    erase(MemoryFileProvider::new())
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn default_file_provider() -> SharedFileProvider {
+    erase(EmptyFileProvider)
+}
+
 /// The production `FileProvider` adapter that reads `file:` URIs from the
 /// local filesystem (issue #80). Not compiled on browser WASM, which has no
 /// filesystem; its tokio I/O stays inside this native-only boundary
 /// (ADR 0020).
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "runtime-tokio"))]
 mod os {
     use std::path::PathBuf;
 
@@ -577,5 +609,35 @@ mod os {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "runtime-tokio"))]
 pub use os::{OsFileProvider, OsFileProviderBuilder};
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use std::str::FromStr;
+
+    use lsp_types::Uri;
+
+    use super::EmptyFileProvider;
+    use crate::file_provider::FileProvider;
+    use crate::workspace::WorkspaceError;
+
+    #[tokio::test]
+    async fn the_empty_provider_reports_every_scheme_as_unsupported() {
+        let provider = EmptyFileProvider;
+        for spelling in [
+            "file:///tmp/x.txt",
+            "untitled:Untitled-1",
+            "http://example.com/a.rs",
+            "/no/scheme",
+        ] {
+            let uri = Uri::from_str(spelling).expect("the test URI parses");
+            let expected_scheme = uri.scheme().map(|s| s.as_str()).unwrap_or_default();
+            let error = provider.read_text(&uri).await.unwrap_err();
+            assert!(
+                matches!(error, WorkspaceError::UnsupportedScheme(ref scheme) if scheme == expected_scheme),
+                "{spelling} should be unsupported, got {error:?}"
+            );
+        }
+    }
+}
