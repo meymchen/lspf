@@ -7,10 +7,10 @@ use std::sync::Arc;
 
 use futures_util::FutureExt;
 use serde_json::Value;
-use tokio::sync::Semaphore;
 use tracing::{Instrument, error, info_span};
 
 use crate::builder::Router;
+use crate::sync::Semaphore;
 use crate::{Context, LspError, RequestId};
 
 /// Whether a normalized user call came from a request or a notification.
@@ -239,10 +239,10 @@ impl<S: Send + Sync + 'static> Service<S> for ConcurrencyLimitService<S> {
         let permits = Arc::clone(&self.permits);
         Box::pin(async move {
             let _permit = permits
+                .clone()
                 .acquire_owned()
                 .instrument(info_span!("handler.acquire_permit"))
-                .await
-                .expect("service semaphore is never closed");
+                .await;
             inner.call(call).await
         })
     }
@@ -304,7 +304,7 @@ where
     }
     service = Arc::new(ConcurrencyLimitService {
         inner: service,
-        permits: Arc::new(Semaphore::new(concurrency_limit)),
+        permits: Semaphore::shared(concurrency_limit),
     });
     service = Arc::new(TracingService { inner: service });
     Arc::new(PanicIsolationService { inner: service })

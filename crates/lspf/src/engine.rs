@@ -27,7 +27,10 @@ use std::future::Future;
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
+use futures_channel::mpsc::UnboundedReceiver;
+use futures_util::FutureExt;
 use futures_util::future::{Either, select};
+use futures_util::select_biased;
 use lsp_types::{
     DidChangeConfigurationParams, DidChangeTextDocumentParams, DidChangeWorkspaceFoldersParams,
     DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
@@ -36,7 +39,6 @@ use lsp_types::{
     WorkDoneProgressCancelParams, WorkspaceFoldersServerCapabilities, WorkspaceServerCapabilities,
 };
 use serde::Serialize;
-use tokio::sync::mpsc::UnboundedReceiver;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Span, debug, info_span, warn};
 
@@ -53,7 +55,7 @@ use crate::error::Error;
 use crate::file_provider::SharedFileProvider;
 use crate::progress::{ProgressCancel, ProgressRegistry};
 use crate::raw::{JsonRpcError, RawMessage, RequestId};
-use crate::runtime::{Runtime, TaskHandle, TaskSend, default_runtime};
+use crate::runtime::{Runtime, TaskHandle, TaskSend, default_runtime, ensure_runtime_available};
 use crate::service::{IncomingCall, ServiceResult, UserLayer, UserService, build_service_stack};
 use crate::transport::{Transport, TransportError, TransportReader, TransportWriter};
 use crate::workspace::Workspace;
@@ -231,6 +233,10 @@ where
     S: Send + Sync + 'static,
     T: Transport,
 {
+    // Serving must not begin before the target's executor exists: a missing
+    // Tokio runtime is reported as an error instead of panicking inside the
+    // first spawn (ADR 0020). The framework never starts a runtime implicitly.
+    ensure_runtime_available()?;
     let (reader, writer) = transport.split();
     let (out_tx, out_rx) = OutboundQueue::new(server.outbound_warning_threshold);
     let client = Client::new(out_tx.clone(), OutboundRegistry::default());
@@ -472,15 +478,16 @@ async fn send_loop<W: TransportWriter>(
 ) {
     let outbound_closing = client.outbound_closing();
     loop {
-        let msg = tokio::select! {
-            biased;
-            msg = out_rx.recv() => msg,
-            () = outbound_closing.cancelled() => {
+        let msg = select_biased! {
+            msg = out_rx.recv().fuse() => msg,
+            () = outbound_closing.cancelled().fuse() => {
                 out_rx.close();
                 break;
             }
         };
-        let Some(msg) = msg else {
+        // A closed channel (its receiver half dropped) is a `RecvError`: the
+        // engine has shut the queue down, so nothing further can be enqueued.
+        let Ok(msg) = msg else {
             client.close_outbound();
             break;
         };
@@ -497,7 +504,7 @@ async fn send_loop<W: TransportWriter>(
             return;
         }
     }
-    while let Some(msg) = out_rx.recv().await {
+    while let Ok(msg) = out_rx.recv().await {
         let sent = writer.send(msg).await;
         client.record_done();
         if let Err(e) = sent {
@@ -625,12 +632,11 @@ where
         let requested = self.close.requested();
         loop {
             self.tasks.reap_finished().await;
-            let msg = tokio::select! {
+            let msg = select_biased! {
                 // `biased`: an already-requested close wins over a message that
                 // happens to be ready, so the ending stays deterministic.
-                biased;
-                () = requested.cancelled() => break,
-                msg = reader.recv() => msg,
+                () = requested.cancelled().fuse() => break,
+                msg = reader.recv().fuse() => msg,
             };
 
             match msg {
@@ -1596,6 +1602,60 @@ mod tests {
         assert_eq!(Outcome::TransportClosed.code(), 1);
         assert_eq!(Outcome::WriterFailed.code(), 1);
         assert_eq!(Outcome::InitializeFailed.code(), 1);
+    }
+
+    // --- Runtime presence detection -------------------------------------------
+
+    /// A transport that never starts: the runtime check fails before `split`
+    /// is reached, so its halves only need to exist.
+    struct DetectRuntimeTransport;
+
+    impl Transport for DetectRuntimeTransport {
+        type Reader = DetectRuntimeReader;
+        type Writer = DetectRuntimeWriter;
+
+        fn split(self) -> (Self::Reader, Self::Writer) {
+            (DetectRuntimeReader, DetectRuntimeWriter)
+        }
+    }
+
+    struct DetectRuntimeReader;
+
+    impl TransportReader for DetectRuntimeReader {
+        async fn recv(&mut self) -> std::result::Result<RawMessage, TransportError> {
+            Err(TransportError::Closed)
+        }
+    }
+
+    struct DetectRuntimeWriter;
+
+    impl TransportWriter for DetectRuntimeWriter {
+        async fn send(&mut self, _msg: RawMessage) -> std::result::Result<(), TransportError> {
+            Ok(())
+        }
+
+        async fn shutdown(self) -> std::result::Result<(), TransportError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn serving_without_a_tokio_runtime_reports_the_missing_runtime() {
+        // A plain `#[test]` runs on a thread without a Tokio runtime. The
+        // runtime check precedes every await, so one poll reports the error.
+        let server = Server::builder(()).build().expect("an empty server builds");
+        let mut serving = Box::pin(server.serve(DetectRuntimeTransport));
+        let waker = futures_util::task::noop_waker();
+        let mut cx = std::task::Context::from_waker(&waker);
+        let outcome = match std::future::Future::poll(serving.as_mut(), &mut cx) {
+            std::task::Poll::Ready(outcome) => outcome,
+            std::task::Poll::Pending => panic!("the missing runtime is reported on the first poll"),
+        };
+
+        assert!(
+            matches!(outcome, Err(Error::RuntimeRequired)),
+            "serving without a runtime reports the missing runtime, got {outcome:?}"
+        );
     }
 
     // --- Outbound queue depth observability tests ----------------------------

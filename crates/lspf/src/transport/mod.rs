@@ -50,6 +50,11 @@ pub enum TransportError {
 /// can own the two halves independently (ADR 0015). Framing
 /// (`Content-Length` for stdio/TCP, none for the message-framed
 /// transports) is the adapter's concern, never the engine's.
+///
+/// The `Send` supertrait applies to native targets only: on
+/// `wasm32-unknown-unknown` a transport may hold thread-affine JavaScript
+/// values across awaits (ADR 0020), and the framework never fakes `Send`.
+#[cfg(not(target_arch = "wasm32"))]
 pub trait Transport: Send + 'static {
     type Reader: TransportReader;
     type Writer: TransportWriter;
@@ -57,16 +62,31 @@ pub trait Transport: Send + 'static {
     fn split(self) -> (Self::Reader, Self::Writer);
 }
 
+#[cfg(target_arch = "wasm32")]
+pub trait Transport: 'static {
+    type Reader: TransportReader;
+    type Writer: TransportWriter;
+
+    fn split(self) -> (Self::Reader, Self::Writer);
+}
+
 /// Read half of a [`Transport`] (ADR 0011, ADR 0015).
+#[cfg(not(target_arch = "wasm32"))]
 pub trait TransportReader: Send + 'static {
     fn recv(
         &mut self,
     ) -> impl Future<Output = std::result::Result<RawMessage, TransportError>> + Send;
 }
 
+#[cfg(target_arch = "wasm32")]
+pub trait TransportReader: 'static {
+    fn recv(&mut self) -> impl Future<Output = std::result::Result<RawMessage, TransportError>>;
+}
+
 /// Write half of a [`Transport`] (ADR 0011, ADR 0015). `shutdown`
 /// consumes the writer so the send-loop task can flush remaining bytes
 /// after the outgoing channel is drained.
+#[cfg(not(target_arch = "wasm32"))]
 pub trait TransportWriter: Send + 'static {
     fn send(
         &mut self,
@@ -74,6 +94,16 @@ pub trait TransportWriter: Send + 'static {
     ) -> impl Future<Output = std::result::Result<(), TransportError>> + Send;
 
     fn shutdown(self) -> impl Future<Output = std::result::Result<(), TransportError>> + Send;
+}
+
+#[cfg(target_arch = "wasm32")]
+pub trait TransportWriter: 'static {
+    fn send(
+        &mut self,
+        msg: RawMessage,
+    ) -> impl Future<Output = std::result::Result<(), TransportError>>;
+
+    fn shutdown(self) -> impl Future<Output = std::result::Result<(), TransportError>>;
 }
 
 #[cfg(all(feature = "stdio", not(target_arch = "wasm32")))]

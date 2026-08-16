@@ -1,4 +1,7 @@
 [toolchain]
-channel = "1.96.0"
+# Development builds on stable; the minimum supported Rust version (MSRV)
+# is declared as `rust-version = "1.96"` in Cargo.toml and enforced by the
+# CI `msrv` job on the 1.96.0 toolchain.
+channel = "stable"
 components = ["rustfmt", "clippy"]
 profile = "minimal"

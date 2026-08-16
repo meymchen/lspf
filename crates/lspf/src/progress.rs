@@ -518,9 +518,9 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
+    use futures_channel::mpsc;
     use lsp_types::notification::Notification;
     use serde_json::{Value, json};
-    use tokio::sync::mpsc;
     use tracing_subscriber::layer::SubscriberExt;
 
     use super::*;

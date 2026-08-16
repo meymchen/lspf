@@ -1,8 +1,15 @@
+// Exactly one concrete runtime exists in these configurations. On wasm32 the
+// `wasm` feature is enforced by `lib.rs`'s compile_error, so the target check
+// alone is enough there; on native targets a runtime needs `runtime-tokio`.
+#[cfg(any(
+    all(not(target_arch = "wasm32"), feature = "runtime-tokio"),
+    target_arch = "wasm32",
+))]
 use std::future::Future;
 
-#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+#[cfg(target_arch = "wasm32")]
 use std::cell::Cell;
-#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+#[cfg(target_arch = "wasm32")]
 use std::rc::Rc;
 
 mod sealed {
@@ -13,8 +20,8 @@ mod sealed {
 
 /// Target-dependent task mobility bound.
 ///
-/// Native tasks can move between Tokio worker threads, whereas a future WASM
-/// runtime will keep them on the worker thread that spawned them.
+/// Native tasks can move between Tokio worker threads, whereas the browser
+/// WASM runtime keeps them on the worker thread that spawned them.
 #[cfg(not(target_arch = "wasm32"))]
 #[doc(hidden)]
 pub trait TaskSend: sealed::Sealed + Send {}
@@ -29,24 +36,43 @@ pub trait TaskSend: sealed::Sealed {}
 #[cfg(target_arch = "wasm32")]
 impl<T: ?Sized> TaskSend for T {}
 
-/// Crate-private task execution boundary.
+/// Crate-private task execution boundary (ADR 0020).
+///
+/// The protocol kernel reaches an executor only through this trait: it owns
+/// spawning, cooperative yielding, and — through the returned [`TaskHandle`] —
+/// abort and join. It holds no protocol state and is never nameable by users.
+/// It exists only where a runtime does: native targets with `runtime-tokio`,
+/// or wasm32 (whose `wasm` feature `lib.rs` enforces).
+#[cfg(any(
+    all(not(target_arch = "wasm32"), feature = "runtime-tokio"),
+    target_arch = "wasm32",
+))]
 pub(crate) trait Runtime {
     fn spawn<F>(&self, future: F) -> TaskHandle
     where
         F: Future<Output = ()> + TaskSend + 'static;
+
+    /// Yield execution back to the runtime so other tasks can run.
+    ///
+    /// The kernel reaches an executor-specific yield only through this seam.
+    /// Today's kernel sites all await task joins or channel receives, which
+    /// yield naturally, so the method is exercised by the runtime's own tests
+    /// rather than by kernel call sites.
+    #[allow(dead_code)]
+    fn yield_now(&self) -> impl Future<Output = ()>;
 }
 
-/// Runtime selected for native targets.
-#[cfg(not(target_arch = "wasm32"))]
+/// Runtime selected for native targets, delegating to the Tokio runtime.
+#[cfg(all(not(target_arch = "wasm32"), feature = "runtime-tokio"))]
 #[derive(Default)]
 pub(crate) struct TokioRuntime;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "runtime-tokio"))]
 pub(crate) fn default_runtime() -> TokioRuntime {
     TokioRuntime
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "runtime-tokio"))]
 impl Runtime for TokioRuntime {
     fn spawn<F>(&self, future: F) -> TaskHandle
     where
@@ -54,33 +80,66 @@ impl Runtime for TokioRuntime {
     {
         TaskHandle(tokio::spawn(future))
     }
+
+    async fn yield_now(&self) {
+        tokio::task::yield_now().await;
+    }
 }
 
-/// Runtime selected for browser WASM targets.
-#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+/// Serving must not begin before the target's executor exists. On native
+/// targets that means a Tokio runtime the caller started — the framework
+/// never starts one implicitly (ADR 0020). On browser WASM the worker's
+/// `wasm-bindgen` glue owns the executor and cannot be detected from Rust.
+#[cfg(all(not(target_arch = "wasm32"), feature = "runtime-tokio"))]
+pub(crate) fn ensure_runtime_available() -> crate::Result<()> {
+    tokio::runtime::Handle::try_current()
+        .map(|_| ())
+        .map_err(|_| crate::Error::RuntimeRequired)
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn ensure_runtime_available() -> crate::Result<()> {
+    Ok(())
+}
+
+/// Runtime selected for browser WASM targets, delegating to
+/// `wasm_bindgen_futures::spawn_local` on the worker's single thread.
+#[cfg(target_arch = "wasm32")]
 #[derive(Default)]
 pub(crate) struct WasmRuntime;
 
-#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+#[cfg(target_arch = "wasm32")]
 pub(crate) fn default_runtime() -> WasmRuntime {
     WasmRuntime
 }
 
-#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+#[cfg(target_arch = "wasm32")]
 impl Runtime for WasmRuntime {
     fn spawn<F>(&self, future: F) -> TaskHandle
     where
         F: Future<Output = ()> + TaskSend + 'static,
     {
-        use futures_util::future::{AbortHandle, Abortable};
+        use futures_util::future::{AbortHandle, Abortable, FutureExt};
 
         let (abort, registration) = AbortHandle::new_pair();
-        let (completed_tx, completed_rx) = tokio::sync::oneshot::channel();
+        let (completed_tx, completed_rx) = futures_channel::oneshot::channel();
         let finished = Rc::new(Cell::new(false));
         let finished_for_task = Rc::clone(&finished);
 
         wasm_bindgen_futures::spawn_local(async move {
-            let _ = Abortable::new(future, registration).await;
+            // A panicking task must never unwind across the JavaScript
+            // boundary (ADR 0020). The wasm32 target defaults to
+            // `panic = "abort"`, which ends the worker outright; for builds
+            // that opt into unwinding, this containment catches the panic,
+            // reports it through tracing, and still signals completion so the
+            // engine's cancel-then-join close path cannot hang on it.
+            if std::panic::AssertUnwindSafe(Abortable::new(future, registration))
+                .catch_unwind()
+                .await
+                .is_err()
+            {
+                tracing::error!("task panicked on the WASM runtime");
+            }
             finished_for_task.set(true);
             let _ = completed_tx.send(());
         });
@@ -91,52 +150,67 @@ impl Runtime for WasmRuntime {
             finished,
         }
     }
+
+    async fn yield_now(&self) {
+        // On the single-threaded worker, yielding means handing control back
+        // to the microtask queue: a task spawned through `spawn_local` runs
+        // only after this future suspends.
+        let (tx, rx) = futures_channel::oneshot::channel();
+        wasm_bindgen_futures::spawn_local(async move {
+            let _ = tx.send(());
+        });
+        let _ = rx.await;
+    }
 }
 
 /// An abortable task that can be joined without detaching its work.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "runtime-tokio"))]
 pub(crate) struct TaskHandle(tokio::task::JoinHandle<()>);
 
-#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+#[cfg(target_arch = "wasm32")]
 pub(crate) struct TaskHandle {
     abort: futures_util::future::AbortHandle,
-    completed: tokio::sync::oneshot::Receiver<()>,
+    completed: futures_channel::oneshot::Receiver<()>,
     finished: Rc<Cell<bool>>,
 }
 
+#[cfg(any(
+    all(not(target_arch = "wasm32"), feature = "runtime-tokio"),
+    target_arch = "wasm32",
+))]
 impl TaskHandle {
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "runtime-tokio"))]
     pub(crate) fn abort(&self) {
         self.0.abort();
     }
 
-    #[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn abort(&self) {
         self.abort.abort();
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "runtime-tokio"))]
     pub(crate) fn is_finished(&self) -> bool {
         self.0.is_finished()
     }
 
-    #[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn is_finished(&self) -> bool {
         self.finished.get()
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "runtime-tokio"))]
     pub(crate) async fn join(self) {
         let _ = self.0.await;
     }
 
-    #[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+    #[cfg(target_arch = "wasm32")]
     pub(crate) async fn join(self) {
         let _ = self.completed.await;
     }
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(all(test, not(target_arch = "wasm32"), feature = "runtime-tokio"))]
 mod tests {
     use std::future::pending;
     use std::sync::Arc;
@@ -169,5 +243,20 @@ mod tests {
         handle.join().await;
 
         assert!(dropped.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn yield_now_hands_execution_back_to_the_runtime() {
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        let handle = TokioRuntime.spawn(async move {
+            TokioRuntime.yield_now().await;
+            let _ = tx.send(());
+        });
+
+        handle.join().await;
+        assert!(
+            rx.try_recv().is_ok(),
+            "the yielding task completes after yielding"
+        );
     }
 }
