@@ -5,7 +5,9 @@ use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio_util::codec::FramedRead;
 
 use super::framing::ContentLengthCodec;
-use super::{Transport, TransportError, TransportReader, TransportWriter, envelope};
+use super::{
+    Transport, TransportError, TransportReader, TransportWriter, classify_write_error, envelope,
+};
 use crate::raw::RawMessage;
 
 pub struct StdioTransport {
@@ -104,58 +106,14 @@ impl TransportWriter for StdioWriter {
     }
 }
 
-fn classify_write_error(error: std::io::Error) -> TransportError {
-    match error.kind() {
-        std::io::ErrorKind::BrokenPipe
-        | std::io::ErrorKind::ConnectionAborted
-        | std::io::ErrorKind::ConnectionReset
-        | std::io::ErrorKind::NotConnected
-        | std::io::ErrorKind::UnexpectedEof => TransportError::Closed,
-        _ => TransportError::Io(error),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::borrow::Cow;
 
-    use bytes::{Bytes, BytesMut};
-    use serde_json::Value;
-    use tokio::io::{AsyncWriteExt, ReadHalf, WriteHalf};
-    use tokio_util::codec::{Encoder, FramedRead};
+    use bytes::Bytes;
 
     use super::*;
-    use crate::transport::conformance::{self, WireClient};
-
-    struct ContentLengthClient {
-        reader: FramedRead<ReadHalf<tokio::io::DuplexStream>, ContentLengthCodec>,
-        writer: WriteHalf<tokio::io::DuplexStream>,
-        codec: ContentLengthCodec,
-    }
-
-    impl WireClient for ContentLengthClient {
-        async fn send(&mut self, message: Value) {
-            let body = serde_json::to_vec(&message).expect("the test message serializes");
-            let mut frame = BytesMut::new();
-            self.codec
-                .encode(Bytes::from(body), &mut frame)
-                .expect("the test message fits");
-            self.writer
-                .write_all(&frame)
-                .await
-                .expect("write test frame");
-        }
-
-        async fn receive(&mut self) -> Value {
-            let body = self
-                .reader
-                .next()
-                .await
-                .expect("the server writes a frame")
-                .expect("the server frame is well-formed");
-            serde_json::from_slice(&body).expect("the server frame contains JSON")
-        }
-    }
+    use crate::transport::conformance::{self, ContentLengthClient};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn stdio_passes_the_shared_transport_conformance_journey() {
@@ -165,11 +123,7 @@ mod tests {
         let transport = StdioTransport::from_io(server_reader, server_writer);
         let serving = tokio::spawn(conformance::server().serve(transport));
         let serving = async move { serving.await.expect("the serving task does not panic") };
-        let mut client = ContentLengthClient {
-            reader: FramedRead::new(client_reader, ContentLengthCodec::default()),
-            writer: client_writer,
-            codec: ContentLengthCodec::default(),
-        };
+        let mut client = ContentLengthClient::new(client_reader, client_writer);
 
         conformance::run(&mut client, serving).await;
     }

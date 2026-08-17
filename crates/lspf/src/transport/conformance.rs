@@ -20,6 +20,68 @@ pub(crate) trait WireClient {
     fn receive(&mut self) -> impl Future<Output = Value> + crate::TaskSend;
 }
 
+/// A `Content-Length`-framed wire client shared by the stdio and TCP adapter
+/// tests: one end of the byte stream, split into read and write halves.
+#[cfg(all(not(target_arch = "wasm32"), any(feature = "stdio", feature = "tcp")))]
+pub(crate) struct ContentLengthClient<R, W> {
+    pub(crate) reader:
+        tokio_util::codec::FramedRead<R, crate::transport::framing::ContentLengthCodec>,
+    pub(crate) writer: W,
+    codec: crate::transport::framing::ContentLengthCodec,
+}
+
+#[cfg(all(not(target_arch = "wasm32"), any(feature = "stdio", feature = "tcp")))]
+impl<R, W> ContentLengthClient<R, W>
+where
+    R: tokio::io::AsyncRead + Send + Unpin,
+    W: tokio::io::AsyncWrite + Send + Unpin,
+{
+    pub(crate) fn new(reader: R, writer: W) -> Self {
+        Self {
+            reader: tokio_util::codec::FramedRead::new(
+                reader,
+                crate::transport::framing::ContentLengthCodec::default(),
+            ),
+            writer,
+            codec: crate::transport::framing::ContentLengthCodec::default(),
+        }
+    }
+}
+
+#[cfg(all(not(target_arch = "wasm32"), any(feature = "stdio", feature = "tcp")))]
+impl<R, W> WireClient for ContentLengthClient<R, W>
+where
+    R: tokio::io::AsyncRead + Send + Unpin,
+    W: tokio::io::AsyncWrite + Send + Unpin,
+{
+    async fn send(&mut self, message: Value) {
+        use tokio::io::AsyncWriteExt;
+        use tokio_util::codec::Encoder;
+
+        let body = serde_json::to_vec(&message).expect("the test message serializes");
+        let mut frame = bytes::BytesMut::new();
+        self.codec
+            .encode(bytes::Bytes::from(body), &mut frame)
+            .expect("the test message fits");
+        self.writer
+            .write_all(&frame)
+            .await
+            .expect("write test frame");
+    }
+
+    async fn receive(&mut self) -> Value {
+        use futures_util::StreamExt;
+
+        let body = self
+            .reader
+            .next()
+            .await
+            .expect("the server writes a frame")
+            .expect("the server frame is well-formed");
+        serde_json::from_slice(&body).expect("the server frame contains JSON")
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct ObserveParams {
     sequence: usize,
