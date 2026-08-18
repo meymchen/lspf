@@ -44,7 +44,7 @@ tokio = { workspace = true, optional = true, features = ["rt-multi-thread", "io-
 # runtime that serves it (the 0.5 feature graph, ADR 0013).
 default = ["stdio"]
 stdio = ["runtime-tokio", "tokio-util/codec"]
-tcp = ["runtime-tokio", "tokio-util/codec"]
+tcp = ["runtime-tokio", "tokio-util/codec", "tokio/net"]
 websocket = ["runtime-tokio", "dep:tokio-tungstenite"]
 runtime-tokio = ["dep:tokio"]
 wasm = ["dep:wasm-bindgen-futures"]
@@ -60,5 +60,5 @@ proposed = []
 # them, so tokio's native-only features never reach the wasm32 target.
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 tempfile.workspace = true
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "time"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "time", "net"] }
 tracing-subscriber.workspace = true

@@ -14,6 +14,8 @@ mod envelope;
 pub mod framing;
 #[cfg(all(feature = "stdio", not(target_arch = "wasm32")))]
 mod stdio;
+#[cfg(all(feature = "tcp", not(target_arch = "wasm32")))]
+mod tcp;
 
 use std::future::Future;
 use std::io;
@@ -26,6 +28,22 @@ use crate::raw::RawMessage;
 
 #[cfg(all(feature = "stdio", not(target_arch = "wasm32")))]
 pub use stdio::{StdioReader, StdioTransport, StdioWriter};
+#[cfg(all(feature = "tcp", not(target_arch = "wasm32")))]
+pub use tcp::{TcpBuilder, TcpReader, TcpTransport, TcpWriter, tcp};
+
+/// Write failures that mean the peer is gone collapse to
+/// [`TransportError::Closed`]; every other I/O failure keeps its source.
+#[cfg(all(any(feature = "stdio", feature = "tcp"), not(target_arch = "wasm32")))]
+pub(crate) fn classify_write_error(error: io::Error) -> TransportError {
+    match error.kind() {
+        io::ErrorKind::BrokenPipe
+        | io::ErrorKind::ConnectionAborted
+        | io::ErrorKind::ConnectionReset
+        | io::ErrorKind::NotConnected
+        | io::ErrorKind::UnexpectedEof => TransportError::Closed,
+        _ => TransportError::Io(error),
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum TransportError {
