@@ -90,6 +90,8 @@ pub use runtime::TaskSend;
 pub use service::{CallKind, IncomingCall, Layer, Next, ServiceFuture, ServiceResult};
 #[cfg(all(feature = "stdio", not(target_arch = "wasm32")))]
 pub use transport::{StdioBuilder, StdioReader, StdioTransport, StdioWriter, stdio};
+#[cfg(all(feature = "tcp", not(target_arch = "wasm32")))]
+pub use transport::{TcpBuilder, TcpReader, TcpTransport, TcpWriter, tcp};
 pub use transport::{Transport, TransportError, TransportReader, TransportWriter};
 pub use workspace::{Workspace, WorkspaceError};
 
