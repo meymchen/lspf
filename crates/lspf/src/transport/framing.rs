@@ -3,7 +3,7 @@ use tokio_util::codec::{Decoder, Encoder};
 
 use super::TransportError;
 
-const DEFAULT_MAX_SIZE: usize = 16 * 1024 * 1024;
+pub(crate) const DEFAULT_MAX_SIZE: usize = 16 * 1024 * 1024;
 
 /// `Content-Length`-framed codec shared by stdio and TCP (ADR 0011).
 ///
