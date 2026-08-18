@@ -93,6 +93,10 @@ pub use transport::{StdioBuilder, StdioReader, StdioTransport, StdioWriter, stdi
 #[cfg(all(feature = "tcp", not(target_arch = "wasm32")))]
 pub use transport::{TcpBuilder, TcpReader, TcpTransport, TcpWriter, tcp};
 pub use transport::{Transport, TransportError, TransportReader, TransportWriter};
+#[cfg(all(feature = "websocket", not(target_arch = "wasm32")))]
+pub use transport::{
+    WebSocketBuilder, WebSocketReader, WebSocketTransport, WebSocketWriter, websocket,
+};
 pub use workspace::{Workspace, WorkspaceError};
 
 /// Cancellation primitive passed to every request handler (ADR 0007).

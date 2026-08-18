@@ -6,7 +6,7 @@ use tokio_util::codec::FramedRead;
 
 use super::framing::ContentLengthCodec;
 use super::{
-    Transport, TransportError, TransportReader, TransportWriter, classify_write_error, envelope,
+    Transport, TransportError, TransportReader, TransportWriter, classify_io_error, envelope,
 };
 use crate::raw::RawMessage;
 
@@ -91,17 +91,17 @@ impl TransportWriter for StdioWriter {
         self.stdout
             .write_all(header.as_bytes())
             .await
-            .map_err(classify_write_error)?;
+            .map_err(classify_io_error)?;
         self.stdout
             .write_all(&body)
             .await
-            .map_err(classify_write_error)?;
-        self.stdout.flush().await.map_err(classify_write_error)?;
+            .map_err(classify_io_error)?;
+        self.stdout.flush().await.map_err(classify_io_error)?;
         Ok(())
     }
 
     async fn shutdown(mut self) -> Result<(), TransportError> {
-        self.stdout.flush().await.map_err(classify_write_error)?;
+        self.stdout.flush().await.map_err(classify_io_error)?;
         Ok(())
     }
 }
