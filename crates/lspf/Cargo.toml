@@ -45,7 +45,7 @@ tokio = { workspace = true, optional = true, features = ["rt-multi-thread", "io-
 default = ["stdio"]
 stdio = ["runtime-tokio", "tokio-util/codec"]
 tcp = ["runtime-tokio", "tokio-util/codec", "tokio/net"]
-websocket = ["runtime-tokio", "dep:tokio-tungstenite"]
+websocket = ["runtime-tokio", "dep:tokio-tungstenite", "tokio/net"]
 runtime-tokio = ["dep:tokio"]
 wasm = ["dep:wasm-bindgen-futures"]
 # The browser MessagePort transport rides on the WASM runtime.
