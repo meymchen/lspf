@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1](https://github.com/meymchen/lspf/compare/v0.4.0...v0.4.1) - 2026-08-19
+
+### Other
+
+- Ship Transport selection guides and buildable examples ([#134](https://github.com/meymchen/lspf/pull/134))
+- Enforce the target and Cargo-feature matrix in CI ([#133](https://github.com/meymchen/lspf/pull/133))
+- Run the shared Transport conformance journey in a Worker ([#132](https://github.com/meymchen/lspf/pull/132))
+- Serve one WASM worker channel through MessagePort ([#131](https://github.com/meymchen/lspf/pull/131)) ([#143](https://github.com/meymchen/lspf/pull/143))
+- Serve one WebSocket connection as framed JSON ([#130](https://github.com/meymchen/lspf/pull/130)) ([#142](https://github.com/meymchen/lspf/pull/142))
+- Serve one TCP connection through Content-Length framing ([#129](https://github.com/meymchen/lspf/pull/129)) ([#141](https://github.com/meymchen/lspf/pull/141))
+- Make stdio the Transport conformance reference ([#128](https://github.com/meymchen/lspf/pull/128)) ([#140](https://github.com/meymchen/lspf/pull/140))
+- Run the portable protocol kernel on TokioRuntime and WasmRuntime ([#127](https://github.com/meymchen/lspf/pull/127)) ([#139](https://github.com/meymchen/lspf/pull/139))
+- Fence optional adapters behind the 0.5 Cargo feature graph ([#126](https://github.com/meymchen/lspf/pull/126)) ([#135](https://github.com/meymchen/lspf/pull/135))
+
 ## [0.4.0](https://github.com/meymchen/lspf/compare/v0.3.0...v0.4.0) - 2026-08-15
 
 ### Added
