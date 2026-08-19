@@ -203,6 +203,25 @@ mod tests {
         assert!(out_str.contains(r#""params":{"foo":42}"#), "got: {out_str}");
     }
 
+    // Adapted from clangd's JSON transport coverage: JSON-RPC permits request
+    // ids to be strings, and the exact value must survive the wire round trip.
+    #[test]
+    fn roundtrips_string_request_id() {
+        let body = Bytes::from_static(
+            br#"{"jsonrpc":"2.0","id":"editor-request","method":"initialize","params":{}}"#,
+        );
+        let msg = parse(body);
+
+        assert!(matches!(
+            msg.id(),
+            Some(NumberOrString::String(id)) if id == "editor-request"
+        ));
+        assert_eq!(
+            serialize(&msg).unwrap(),
+            br#"{"jsonrpc":"2.0","id":"editor-request","method":"initialize","params":{}}"#
+        );
+    }
+
     #[test]
     fn roundtrips_notification() {
         let body = Bytes::from_static(br#"{"jsonrpc":"2.0","method":"initialized","params":{}}"#);

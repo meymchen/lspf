@@ -374,6 +374,25 @@ mod tests {
     }
 
     #[test]
+    fn roots_preserve_non_file_workspace_folders_in_order() {
+        // Unlike gopls, the framework has no language-specific view policy:
+        // workspace folder URIs are retained verbatim regardless of scheme.
+        let announced = vec![
+            folder("virtual:///generated", "generated"),
+            folder("file:///source", "source"),
+            folder("untitled:workspace", "scratch"),
+        ];
+        let params = InitializeParams {
+            workspace_folders: Some(announced.clone()),
+            ..InitializeParams::default()
+        };
+        let workspace = Workspace::from_params(&params, Documents::new());
+
+        assert_eq!(workspace.folders(), announced);
+        assert_eq!(workspace.roots(), announced);
+    }
+
+    #[test]
     fn roots_falls_back_to_one_synthetic_root_from_root_uri() {
         let workspace = Workspace::from_params(
             &params_with_root(Some("file:///workspace/root")),

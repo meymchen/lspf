@@ -544,6 +544,29 @@ mod tests {
     }
 
     #[test]
+    fn separate_document_stores_keep_same_uri_overlays_isolated() {
+        // Mirrors gopls's simultaneous-editor regression at the framework
+        // boundary: each connection owns its own overlay for the same URI.
+        let first = Documents::new();
+        let second = Documents::new();
+        let u = uri("file:///shared.txt");
+        first.open(text_item(u.clone(), "first editor"));
+        second.open(text_item(u.clone(), "second editor"));
+
+        first
+            .apply_changes(&u, 2, [change(None, "first editor changed")])
+            .expect("the first editor changes its own overlay");
+        second.close(&u);
+
+        let remaining = first
+            .get(&u)
+            .expect("closing the second overlay is isolated");
+        assert_eq!(remaining.text(), "first editor changed");
+        assert_eq!(remaining.version(), Some(2));
+        assert!(second.get(&u).is_none());
+    }
+
+    #[test]
     fn position_encoding_defaults_to_utf16() {
         assert_eq!(
             Documents::new().position_encoding(),
@@ -611,6 +634,97 @@ mod tests {
     }
 
     #[test]
+    fn invalid_utf16_edit_positions_are_rejected_without_changing_the_document() {
+        // Adapted from clangd's PositionToOffset and invalid edit endpoint
+        // tests. UTF-16 position 2 bisects the emoji's surrogate pair.
+        let (docs, u) = opened("file:///invalid-utf16.txt", "a👋b");
+        let invalid_ranges = [
+            Range {
+                start: at(0, 2),
+                end: at(0, 2),
+            },
+            Range {
+                start: at(0, 5),
+                end: at(0, 5),
+            },
+            Range {
+                start: at(1, 0),
+                end: at(1, 0),
+            },
+        ];
+
+        for invalid_range in invalid_ranges {
+            assert!(
+                docs.apply_changes(&u, 2, [change(Some(invalid_range), "x")])
+                    .is_err(),
+                "an invalid UTF-16 endpoint must reject the whole change"
+            );
+            let doc = docs.get(&u).expect("the rejected edit keeps the document");
+            assert_eq!(doc.text(), "a👋b");
+            assert_eq!(doc.version(), Some(1));
+        }
+
+        assert_eq!(
+            docs.position_to_offset(&u, at(0, 3)),
+            Some(5),
+            "a later valid lookup still works"
+        );
+    }
+
+    #[test]
+    fn utf8_and_utf16_positions_round_trip_complex_unicode_across_lines() {
+        // Covers a mixed-width sample: composed and decomposed text,
+        // BMP characters, a surrogate pair, and a line boundary.
+        let text = "äa\u{0308}錯誤😋\näa\u{0308}錯誤😋";
+        let (docs, u) = opened("file:///position-round-trip.txt", text);
+
+        for encoding in [PositionEncoding::Utf8, PositionEncoding::Utf16] {
+            docs.set_position_encoding(encoding);
+            let mut line_start = 0;
+
+            for (line_index, line) in text.split('\n').enumerate() {
+                let mut character = 0;
+                for (byte_in_line, ch) in line.char_indices() {
+                    let position = at(line_index as u32, character);
+                    let offset = line_start + byte_in_line;
+                    assert_eq!(docs.position_to_offset(&u, position), Some(offset));
+                    assert_eq!(docs.offset_to_position(&u, offset), Some(position));
+                    character += match encoding {
+                        PositionEncoding::Utf8 => ch.len_utf8() as u32,
+                        PositionEncoding::Utf16 => ch.len_utf16() as u32,
+                    };
+                }
+
+                let line_end = at(line_index as u32, character);
+                assert_eq!(
+                    docs.position_to_offset(&u, line_end),
+                    Some(line_start + line.len())
+                );
+                assert_eq!(
+                    docs.offset_to_position(&u, line_start + line.len()),
+                    Some(line_end)
+                );
+                line_start += line.len() + 1;
+            }
+        }
+    }
+
+    #[test]
+    fn positions_use_line_content_before_crlf_and_lf_endings() {
+        let (docs, u) = opened("file:///line-endings.txt", "x\r\ny\n");
+
+        for encoding in [PositionEncoding::Utf8, PositionEncoding::Utf16] {
+            docs.set_position_encoding(encoding);
+            assert_eq!(docs.position_to_offset(&u, at(0, 1)), Some(1));
+            assert_eq!(docs.offset_to_position(&u, 1), Some(at(0, 1)));
+            assert_eq!(docs.position_to_offset(&u, at(1, 0)), Some(3));
+            assert_eq!(docs.offset_to_position(&u, 3), Some(at(1, 0)));
+            assert_eq!(docs.position_to_offset(&u, at(1, 1)), Some(4));
+            assert_eq!(docs.position_to_offset(&u, at(2, 0)), Some(5));
+        }
+    }
+
+    #[test]
     fn a_change_advances_the_version_and_replaces_the_range() {
         let (docs, u) = opened("file:///change.txt", "hello world");
 
@@ -619,6 +733,90 @@ mod tests {
 
         let doc = docs.get(&u).unwrap();
         assert_eq!(doc.text(), "hello lspf");
+        assert_eq!(doc.version(), Some(2));
+    }
+
+    #[test]
+    fn successful_changes_record_no_op_and_non_monotonic_versions() {
+        // Adapted from clangd's DraftStore.Versions regression: the client
+        // owns the version value, even when text is unchanged or it decreases.
+        let docs = Documents::new();
+        let u = uri("file:///versions.txt");
+        docs.open(TextDocumentItem {
+            uri: u.clone(),
+            language_id: "plaintext".to_string(),
+            version: 25,
+            text: "contents".to_string(),
+        });
+
+        docs.apply_changes(&u, 27, [change(None, "contents")])
+            .expect("a no-op replacement still records its version");
+        let no_op = docs.get(&u).unwrap();
+        assert_eq!(no_op.text(), "contents");
+        assert_eq!(no_op.version(), Some(27));
+
+        docs.apply_changes(&u, 7, [change(None, "new contents")])
+            .expect("the store accepts the client's non-monotonic version");
+        let regressed = docs.get(&u).unwrap();
+        assert_eq!(regressed.text(), "new contents");
+        assert_eq!(regressed.version(), Some(7));
+    }
+
+    #[test]
+    fn a_change_batch_reinterprets_later_ranges_after_unicode_multiline_edits() {
+        // Ported from rust-analyzer's `test_apply_document_changes`: the
+        // second range is expressed against the text produced by the first.
+        let (docs, u) = opened("file:///sequential-edits.txt", "a\nb");
+        let changes = [
+            change(
+                Some(Range {
+                    start: at(0, 1),
+                    end: at(1, 0),
+                }),
+                "\nțc",
+            ),
+            change(
+                Some(Range {
+                    start: at(0, 1),
+                    end: at(1, 1),
+                }),
+                "d",
+            ),
+        ];
+
+        docs.apply_changes(&u, 2, changes)
+            .expect("each range is interpreted against the preceding edit");
+
+        let doc = docs.get(&u).unwrap();
+        assert_eq!(doc.text(), "adcb");
+        assert_eq!(doc.version(), Some(2));
+    }
+
+    #[test]
+    fn an_incremental_change_can_insert_into_an_empty_document() {
+        let (docs, u) = opened("file:///empty.txt", "");
+
+        docs.apply_changes(&u, 2, [change(Some(range(0, 0)), "f")])
+            .expect("the insertion applies at the empty document's only position");
+
+        let doc = docs.get(&u).unwrap();
+        assert_eq!(doc.text(), "f");
+        assert_eq!(doc.version(), Some(2));
+    }
+
+    #[test]
+    fn an_incremental_change_can_insert_after_a_trailing_newline() {
+        let (docs, u) = opened("file:///eof.txt", "first\nsecond\n");
+        let eof = Range {
+            start: at(2, 0),
+            end: at(2, 0),
+        };
+
+        docs.apply_changes(&u, 2, [change(Some(eof), "third")])
+            .expect("the trailing newline exposes an empty final line");
+
+        let doc = docs.get(&u).unwrap();
+        assert_eq!(doc.text(), "first\nsecond\nthird");
         assert_eq!(doc.version(), Some(2));
     }
 
