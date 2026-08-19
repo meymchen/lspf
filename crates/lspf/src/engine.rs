@@ -29,7 +29,6 @@ use std::sync::{Arc, Mutex};
 use bytes::Bytes;
 use futures_channel::mpsc::UnboundedReceiver;
 use futures_util::FutureExt;
-use futures_util::future::{Either, select};
 use futures_util::select_biased;
 use lsp_types::{
     DidChangeConfigurationParams, DidChangeTextDocumentParams, DidChangeWorkspaceFoldersParams,
@@ -250,7 +249,23 @@ where
 
 struct TaskGroup<R> {
     runtime: R,
-    handles: Vec<TaskHandle>,
+    handles: Vec<TrackedTask>,
+}
+
+#[derive(Clone, Copy, Default, Eq, PartialEq)]
+struct RequestGeneration(u64);
+
+impl RequestGeneration {
+    fn take_next(&mut self) -> Self {
+        let generation = *self;
+        self.0 += 1;
+        generation
+    }
+}
+
+struct TrackedTask {
+    request_generation: RequestGeneration,
+    handle: TaskHandle,
 }
 
 impl<R: Runtime> TaskGroup<R> {
@@ -261,35 +276,55 @@ impl<R: Runtime> TaskGroup<R> {
         }
     }
 
-    fn spawn<F>(&mut self, future: F)
+    fn spawn_request<F>(&mut self, generation: RequestGeneration, future: F)
     where
         F: Future<Output = ()> + TaskSend + 'static,
     {
-        self.handles.push(self.runtime.spawn(future));
+        self.handles.push(TrackedTask {
+            request_generation: generation,
+            handle: self.runtime.spawn(future),
+        });
     }
 
     async fn reap_finished(&mut self) {
         let mut running = Vec::with_capacity(self.handles.len());
-        for handle in std::mem::take(&mut self.handles) {
-            if handle.is_finished() {
-                handle.join().await;
+        for task in std::mem::take(&mut self.handles) {
+            if task.handle.is_finished() {
+                task.handle.join().await;
             } else {
-                running.push(handle);
+                running.push(task);
             }
         }
         self.handles = running;
     }
 
     async fn abort_and_join(&mut self) {
-        for handle in &self.handles {
-            handle.abort();
+        for task in &self.handles {
+            task.handle.abort();
         }
         self.join_all().await;
     }
 
+    async fn abort_and_join_request(&mut self, generation: RequestGeneration) {
+        let Some(index) = self
+            .handles
+            .iter()
+            .position(|task| task.request_generation == generation)
+        else {
+            return;
+        };
+        let task = self.handles.swap_remove(index);
+        // Let cooperative handlers observe their CancellationToken before the
+        // runtime abort drops the future. This preserves the explicit-token
+        // contract while still making abort-then-join the terminal guarantee.
+        self.runtime.yield_now().await;
+        task.handle.abort();
+        task.handle.join().await;
+    }
+
     async fn join_all(&mut self) {
-        for handle in std::mem::take(&mut self.handles) {
-            handle.join().await;
+        for task in std::mem::take(&mut self.handles) {
+            task.handle.join().await;
         }
     }
 }
@@ -306,11 +341,11 @@ impl<R: Runtime> TaskGroup<R> {
 #[derive(Clone)]
 struct Reservation {
     id: RequestId,
-    generation: u64,
+    generation: RequestGeneration,
 }
 
 struct InboundEntry {
-    generation: u64,
+    generation: RequestGeneration,
     /// `None` for `initialize`, the one request that is not cancellable.
     cancellation: Option<CancellationToken>,
 }
@@ -318,7 +353,7 @@ struct InboundEntry {
 #[derive(Default)]
 struct InboundInner {
     entries: HashMap<RequestId, InboundEntry>,
-    next_generation: u64,
+    next_generation: RequestGeneration,
 }
 
 #[derive(Clone, Default)]
@@ -338,8 +373,7 @@ impl InboundRegistry {
         if inner.entries.contains_key(&id) {
             return None;
         }
-        let generation = inner.next_generation;
-        inner.next_generation += 1;
+        let generation = inner.next_generation.take_next();
         inner.entries.insert(
             id.clone(),
             InboundEntry {
@@ -372,21 +406,24 @@ impl InboundRegistry {
         }
     }
 
-    fn complete_cancellation(&self, out_tx: &OutboundQueue, id: &RequestId) {
-        let token = {
+    fn claim_cancellation(&self, id: &RequestId) -> Option<Reservation> {
+        let entry = {
             let mut inner = self.inner.lock().unwrap();
             match inner.entries.get(id) {
-                Some(entry) if entry.cancellation.is_some() => inner
-                    .entries
-                    .remove(id)
-                    .and_then(|entry| entry.cancellation),
+                Some(entry) if entry.cancellation.is_some() => inner.entries.remove(id),
                 _ => None,
             }
         };
-        if let Some(token) = token {
+        entry.map(|entry| {
+            let token = entry
+                .cancellation
+                .expect("only cancellable entries are claimed");
             token.cancel();
-            enqueue_encoded(out_tx, id.clone(), Err(LspError::RequestCancelled));
-        }
+            Reservation {
+                id: id.clone(),
+                generation: entry.generation,
+            }
+        })
     }
 
     /// Cancel and answer every still-registered request, emptying the registry.
@@ -775,7 +812,7 @@ where
                             self.client.clone(),
                             self.established_workspace(),
                         );
-                        hook(Arc::clone(&self.state), ctx).await;
+                        hook.invoke((Arc::clone(&self.state), ctx)).await;
                     }
                     // The LSP exit code comes from protocol-owned lifecycle
                     // state: 0 only when `shutdown` completed first.
@@ -788,7 +825,18 @@ where
                 "$/cancelRequest" => {
                     let bytes: &[u8] = if params.is_empty() { b"{}" } else { &params };
                     match serde_json::from_slice::<CancelParams>(bytes) {
-                        Ok(cancel) => self.inbound.complete_cancellation(&self.out_tx, &cancel.id),
+                        Ok(cancel) => {
+                            if let Some(reservation) = self.inbound.claim_cancellation(&cancel.id) {
+                                self.tasks
+                                    .abort_and_join_request(reservation.generation)
+                                    .await;
+                                enqueue_encoded(
+                                    &self.out_tx,
+                                    reservation.id,
+                                    Err(LspError::RequestCancelled),
+                                );
+                            }
+                        }
                         Err(error) => {
                             debug!(%error, "ignoring malformed $/cancelRequest");
                         }
@@ -822,7 +870,7 @@ where
                         self.client.clone(),
                         self.established_workspace(),
                     );
-                    hook(Arc::clone(&self.state), ctx, params).await;
+                    hook.invoke((Arc::clone(&self.state), ctx, params)).await;
                 }
                 other => {
                     // Outside the running state only the lifecycle and
@@ -1095,7 +1143,7 @@ where
         // dropped, so nothing partial leaks.
         let mut registrar = InitializeRegistrar::new(registrations);
         let committed = match configure_initialize {
-            Some(callback) => callback(&params, &mut registrar),
+            Some(callback) => callback.invoke(&params, &mut registrar),
             None => Ok(()),
         }
         .and_then(|()| registrar.commit().map_err(LspError::internal));
@@ -1181,14 +1229,15 @@ where
                     self.client.clone(),
                     established,
                 );
-                match hook(
-                    Arc::clone(&self.state),
-                    ctx,
-                    params,
-                    self.session.child_token(),
-                )
-                .instrument(span.clone())
-                .await
+                match hook
+                    .invoke((
+                        Arc::clone(&self.state),
+                        ctx,
+                        params,
+                        self.session.child_token(),
+                    ))
+                    .instrument(span.clone())
+                    .await
                 {
                     Ok(server_info) => server_info,
                     Err(err) => {
@@ -1225,10 +1274,10 @@ where
         )
     }
 
-    /// Spawn one user request into the engine's task group, racing user
-    /// dispatch against the request's cancellation so a cancelled request stops
-    /// at its next yield point, then hand whichever finished first to the
-    /// completion gate.
+    /// Spawn one user request into the engine's task group. Cancellation first
+    /// fires the explicit token, then aborts and joins this tracked task; the
+    /// completion gate rejects any result produced after another path claimed
+    /// the reservation.
     fn spawn_service_request(
         &mut self,
         service: UserService<S>,
@@ -1243,20 +1292,13 @@ where
         let out_tx = self.out_tx.clone();
         let client = self.client.clone();
         let inbound = self.inbound.clone();
-        self.tasks.spawn(async move {
+        let generation = reservation.generation;
+        self.tasks.spawn_request(generation, async move {
             let id = reservation.id.clone();
             let ctx = Context::for_request(id.clone(), span, client, workspace)
-                .with_cancellation(cancellation.clone());
+                .with_cancellation(cancellation);
             let call = IncomingCall::request(method, id, params, ctx, state);
-            let result = match select(
-                Box::pin(service.call(call)),
-                Box::pin(cancellation.cancelled()),
-            )
-            .await
-            {
-                Either::Left((result, _)) => result,
-                Either::Right(((), _)) => ServiceResult::Error(LspError::RequestCancelled),
-            };
+            let result = service.call(call).await;
             let result = match result {
                 ServiceResult::Response(value) => encode_body(&value),
                 ServiceResult::Error(error) => Err(error),
@@ -1314,7 +1356,13 @@ where
 /// against a connection nobody owns.
 impl<S, R> Drop for ProtocolEngine<S, R> {
     fn drop(&mut self) {
-        for handle in self.tasks.handles.iter().chain(self.send_task.iter()) {
+        for handle in self
+            .tasks
+            .handles
+            .iter()
+            .map(|task| &task.handle)
+            .chain(self.send_task.iter())
+        {
             handle.abort();
         }
     }
@@ -1563,7 +1611,10 @@ mod tests {
         );
 
         // `$/cancelRequest` claims the gate and answers the first request.
-        registry.complete_cancellation(&out_tx, &id);
+        let cancelled = registry
+            .claim_cancellation(&id)
+            .expect("the first request is cancellable");
+        enqueue_encoded(&out_tx, cancelled.id, Err(LspError::RequestCancelled));
         // The peer then reuses the id for a new request.
         let second = registry
             .reserve(id.clone(), Some(CancellationToken::new()))

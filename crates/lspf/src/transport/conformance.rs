@@ -9,25 +9,24 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use lsp_types::notification::Notification;
 use lsp_types::request::Request;
-use lsp_types::{LogMessageParams, MessageType};
+use lsp_types::{InitializedParams, LogMessageParams, MessageType};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::{Context, Outcome, Server};
+use super::conformance_support::{self, Context, LspError, Outcome, Server, TaskSend};
 
 pub(crate) trait WireClient {
-    fn send(&mut self, message: Value) -> impl Future<Output = ()> + crate::TaskSend;
-    fn receive(&mut self) -> impl Future<Output = Value> + crate::TaskSend;
+    fn send(&mut self, message: Value) -> impl Future<Output = ()> + TaskSend;
+    fn receive(&mut self) -> impl Future<Output = Value> + TaskSend;
 }
 
 /// A `Content-Length`-framed wire client shared by the stdio and TCP adapter
 /// tests: one end of the byte stream, split into read and write halves.
 #[cfg(all(not(target_arch = "wasm32"), any(feature = "stdio", feature = "tcp")))]
 pub(crate) struct ContentLengthClient<R, W> {
-    pub(crate) reader:
-        tokio_util::codec::FramedRead<R, crate::transport::framing::ContentLengthCodec>,
+    pub(crate) reader: tokio_util::codec::FramedRead<R, conformance_support::ContentLengthCodec>,
     pub(crate) writer: W,
-    codec: crate::transport::framing::ContentLengthCodec,
+    codec: conformance_support::ContentLengthCodec,
 }
 
 #[cfg(all(not(target_arch = "wasm32"), any(feature = "stdio", feature = "tcp")))]
@@ -40,10 +39,10 @@ where
         Self {
             reader: tokio_util::codec::FramedRead::new(
                 reader,
-                crate::transport::framing::ContentLengthCodec::default(),
+                conformance_support::ContentLengthCodec::default(),
             ),
             writer,
-            codec: crate::transport::framing::ContentLengthCodec::default(),
+            codec: conformance_support::ContentLengthCodec::default(),
         }
     }
 }
@@ -80,6 +79,26 @@ where
             .expect("the server frame is well-formed");
         serde_json::from_slice(&body).expect("the server frame contains JSON")
     }
+}
+
+/// Establish an initialized session through the shared wire surface.
+pub(crate) async fn initialize<C: WireClient>(client: &mut C) {
+    client
+        .send(json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": { "processId": null, "rootUri": null, "capabilities": {} },
+        }))
+        .await;
+    let response = client.receive().await;
+    assert_eq!(response["id"], 1);
+    client
+        .send(json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }))
+        .await;
+    let observed = client.receive().await;
+    assert_eq!(observed["method"], "window/logMessage");
+    assert_eq!(observed["params"]["message"], "initialized observed");
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -129,11 +148,114 @@ impl Request for WaitForCancellation {
     const METHOD: &'static str = "conformance/waitForCancellation";
 }
 
-pub(crate) fn server() -> Server<AtomicUsize> {
-    Server::builder(AtomicUsize::new(0))
+enum WaitForSessionClose {}
+
+impl Request for WaitForSessionClose {
+    type Params = Value;
+    type Result = ();
+    const METHOD: &'static str = "conformance/waitForSessionClose";
+}
+
+pub(crate) struct ConformanceState {
+    observed_sequence: AtomicUsize,
+    task_drops: Arc<TaskDrops>,
+}
+
+#[derive(Default)]
+struct TaskDrops {
+    cancelled: Arc<AtomicUsize>,
+    session_close: Arc<AtomicUsize>,
+}
+
+#[derive(Clone, Copy)]
+enum TaskKind {
+    Cancelled,
+    SessionClose,
+}
+
+impl TaskKind {
+    fn start(self, drops: &TaskDrops) -> (&'static str, TaskDropGuard) {
+        match self {
+            Self::Cancelled => (
+                "cancellation handler started",
+                TaskDropGuard(Arc::clone(&drops.cancelled)),
+            ),
+            Self::SessionClose => (
+                "session-close handler started",
+                TaskDropGuard(Arc::clone(&drops.session_close)),
+            ),
+        }
+    }
+}
+
+struct TaskDropGuard(Arc<AtomicUsize>);
+
+impl Drop for TaskDropGuard {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) struct TaskProbe(Arc<TaskDrops>);
+
+#[cfg(target_arch = "wasm32")]
+impl TaskProbe {
+    pub(crate) fn cancelled_task_dropped(&self) -> bool {
+        self.0.cancelled.load(Ordering::SeqCst) == 1
+    }
+
+    pub(crate) fn session_close_task_dropped(&self) -> bool {
+        self.0.session_close.load(Ordering::SeqCst) == 1
+    }
+}
+
+async fn pending_task(ctx: Context, drops: Arc<TaskDrops>, kind: TaskKind) -> Result<(), LspError> {
+    let (started_message, _drop_guard) = kind.start(&drops);
+    ctx.client()
+        .log_message(LogMessageParams {
+            typ: MessageType::INFO,
+            message: started_message.to_string(),
+        })
+        .map_err(|error| LspError::internal(error.to_string()))?;
+    std::future::pending().await
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn server() -> Server<ConformanceState> {
+    build_server().0
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn server_with_task_probe() -> (Server<ConformanceState>, TaskProbe) {
+    let (server, task_drops) = build_server();
+    (server, TaskProbe(task_drops))
+}
+
+fn build_server() -> (Server<ConformanceState>, Arc<TaskDrops>) {
+    let task_drops = Arc::new(TaskDrops::default());
+    let state = ConformanceState {
+        observed_sequence: AtomicUsize::new(0),
+        task_drops: Arc::clone(&task_drops),
+    };
+    #[cfg(target_arch = "wasm32")]
+    let non_send_value = std::rc::Rc::new(wasm_bindgen::JsValue::from_str("héllo"));
+    let server = Server::builder(state)
+        .on_initialized(
+            |_state: Arc<ConformanceState>, ctx: Context, _params: InitializedParams| async move {
+                ctx.client()
+                    .log_message(LogMessageParams {
+                        typ: MessageType::INFO,
+                        message: "initialized observed".to_string(),
+                    })
+                    .expect("the initialized connection is open");
+            },
+        )
         .notification::<Observe, _, _>(
-            |state: Arc<AtomicUsize>, ctx: Context, params: ObserveParams| async move {
-                state.store(params.sequence, Ordering::SeqCst);
+            |state: Arc<ConformanceState>, ctx: Context, params: ObserveParams| async move {
+                state
+                    .observed_sequence
+                    .store(params.sequence, Ordering::SeqCst);
                 ctx.client()
                     .log_message(LogMessageParams {
                         typ: MessageType::INFO,
@@ -143,125 +265,130 @@ pub(crate) fn server() -> Server<AtomicUsize> {
             },
         )
         .request::<Journey, _, _>(
-            |state: Arc<AtomicUsize>, ctx: Context, params: JourneyParams, _ct| async move {
-                let echoed = ctx
-                    .client()
-                    .request::<EchoFromClient>(params.value)
-                    .await
-                    .map_err(|error| crate::LspError::internal(error.to_string()))?;
-                ctx.client()
-                    .log_message(LogMessageParams {
-                        typ: MessageType::INFO,
-                        message: "conformance notification".to_string(),
+            move |state: Arc<ConformanceState>, ctx: Context, params: JourneyParams, _ct| {
+                #[cfg(target_arch = "wasm32")]
+                let non_send_value = std::rc::Rc::clone(&non_send_value);
+                async move {
+                    let echoed = ctx
+                        .client()
+                        .request::<EchoFromClient>(params.value)
+                        .await
+                        .map_err(|error| LspError::internal(error.to_string()))?;
+                    #[cfg(target_arch = "wasm32")]
+                    assert_eq!(non_send_value.as_string().as_deref(), Some("héllo"));
+                    ctx.client()
+                        .log_message(LogMessageParams {
+                            typ: MessageType::INFO,
+                            message: "conformance notification".to_string(),
+                        })
+                        .map_err(|error| LspError::internal(error.to_string()))?;
+                    Ok(JourneyResult {
+                        echoed,
+                        observed_sequence: state.observed_sequence.load(Ordering::SeqCst),
                     })
-                    .map_err(|error| crate::LspError::internal(error.to_string()))?;
-                Ok(JourneyResult {
-                    echoed,
-                    observed_sequence: state.load(Ordering::SeqCst),
-                })
+                }
             },
         )
         .request::<WaitForCancellation, _, _>(
-            |_state: Arc<AtomicUsize>, _ctx, _params: Value, cancellation| async move {
-                cancellation.cancelled().await;
-                Ok(())
+            |state: Arc<ConformanceState>, ctx, _params: Value, _cancellation| {
+                pending_task(ctx, Arc::clone(&state.task_drops), TaskKind::Cancelled)
+            },
+        )
+        .request::<WaitForSessionClose, _, _>(
+            |state: Arc<ConformanceState>, ctx, _params: Value, _cancellation| {
+                pending_task(ctx, Arc::clone(&state.task_drops), TaskKind::SessionClose)
             },
         )
         .build()
-        .expect("the conformance Server builds")
+        .expect("the conformance Server builds");
+    (server, task_drops)
 }
 
 /// Run the single journey shared by every first-party Transport adapter.
 pub(crate) async fn run<C, F>(client: &mut C, serving: F)
 where
     C: WireClient,
-    F: Future<Output = crate::Result<Outcome>>,
+    F: Future<Output = conformance_support::Result<Outcome>>,
 {
-    client
-        .send(json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": { "processId": null, "rootUri": null, "capabilities": {} },
-        }))
-        .await;
-    let initialized = client.receive().await;
-    assert_eq!(initialized["id"], 1);
+    let journey = async {
+        initialize(client).await;
+        client
+            .send(json!({
+                "jsonrpc": "2.0",
+                "method": "conformance/observe",
+                "params": { "sequence": 7 },
+            }))
+            .await;
+        let observed = client.receive().await;
+        assert_eq!(observed["method"], "window/logMessage");
+        assert_eq!(observed["params"]["message"], "conformance observed");
+        client
+            .send(json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "conformance/journey",
+                "params": { "value": "héllo" },
+            }))
+            .await;
 
-    client
-        .send(json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }))
-        .await;
-    client
-        .send(json!({
-            "jsonrpc": "2.0",
-            "method": "conformance/observe",
-            "params": { "sequence": 7 },
-        }))
-        .await;
-    let observed = client.receive().await;
-    assert_eq!(observed["method"], "window/logMessage");
-    assert_eq!(observed["params"]["message"], "conformance observed");
-    client
-        .send(json!({
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "conformance/journey",
-            "params": { "value": "héllo" },
-        }))
-        .await;
+        let outbound_request = client.receive().await;
+        assert_eq!(outbound_request["method"], "conformance/echoFromClient");
+        assert_eq!(outbound_request["params"], "héllo");
+        let outbound_id = outbound_request["id"].clone();
+        client
+            .send(json!({ "jsonrpc": "2.0", "id": outbound_id, "result": "echoed" }))
+            .await;
 
-    let outbound_request = client.receive().await;
-    assert_eq!(outbound_request["method"], "conformance/echoFromClient");
-    assert_eq!(outbound_request["params"], "héllo");
-    let outbound_id = outbound_request["id"].clone();
-    client
-        .send(json!({ "jsonrpc": "2.0", "id": outbound_id, "result": "echoed" }))
-        .await;
+        let notification = client.receive().await;
+        assert_eq!(notification["method"], "window/logMessage");
+        assert_eq!(
+            notification["params"]["message"],
+            "conformance notification"
+        );
+        let journey = client.receive().await;
+        assert_eq!(journey["id"], 2);
+        assert_eq!(
+            journey["result"],
+            json!({ "echoed": "echoed", "observed_sequence": 7 })
+        );
 
-    let notification = client.receive().await;
-    assert_eq!(notification["method"], "window/logMessage");
-    assert_eq!(
-        notification["params"]["message"],
-        "conformance notification"
-    );
-    let journey = client.receive().await;
-    assert_eq!(journey["id"], 2);
-    assert_eq!(
-        journey["result"],
-        json!({ "echoed": "echoed", "observed_sequence": 7 })
-    );
+        client
+            .send(json!({
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "conformance/waitForCancellation",
+                "params": {},
+            }))
+            .await;
+        let cancellation_started = client.receive().await;
+        assert_eq!(cancellation_started["method"], "window/logMessage");
+        assert_eq!(
+            cancellation_started["params"]["message"],
+            "cancellation handler started"
+        );
+        client
+            .send(json!({
+                "jsonrpc": "2.0",
+                "method": "$/cancelRequest",
+                "params": { "id": 3 },
+            }))
+            .await;
+        let cancelled = client.receive().await;
+        assert_eq!(cancelled["id"], 3);
+        assert_eq!(cancelled["error"]["code"], -32800);
 
-    client
-        .send(json!({
-            "jsonrpc": "2.0",
-            "id": 3,
-            "method": "conformance/waitForCancellation",
-            "params": {},
-        }))
-        .await;
-    client
-        .send(json!({
-            "jsonrpc": "2.0",
-            "method": "$/cancelRequest",
-            "params": { "id": 3 },
-        }))
-        .await;
-    let cancelled = client.receive().await;
-    assert_eq!(cancelled["id"], 3);
-    assert_eq!(cancelled["error"]["code"], -32800);
+        client
+            .send(json!({ "jsonrpc": "2.0", "id": 4, "method": "shutdown" }))
+            .await;
+        let shutdown = client.receive().await;
+        assert_eq!(shutdown["id"], 4);
+        assert_eq!(shutdown["result"], Value::Null);
+        client
+            .send(json!({ "jsonrpc": "2.0", "method": "exit" }))
+            .await;
+    };
 
-    client
-        .send(json!({ "jsonrpc": "2.0", "id": 4, "method": "shutdown" }))
-        .await;
-    let shutdown = client.receive().await;
-    assert_eq!(shutdown["id"], 4);
-    assert_eq!(shutdown["result"], Value::Null);
-    client
-        .send(json!({ "jsonrpc": "2.0", "method": "exit" }))
-        .await;
-
-    let outcome = serving
-        .await
-        .expect("the conformance journey serves without a transport error");
+    let ((), outcome) = futures_util::join!(journey, serving);
+    let outcome = outcome.expect("the conformance journey serves without a transport error");
     assert_eq!(outcome, Outcome::Exit { code: 0 });
 }
