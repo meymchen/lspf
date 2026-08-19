@@ -199,13 +199,13 @@ impl OutboundRegistry {
     }
 
     /// Override the next candidate ID (test-only, for exhaustion coverage).
-    #[cfg(test)]
+    #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(crate) fn set_next_id(&self, id: u32) {
         self.inner.lock().unwrap().next_id = id;
     }
 
     /// Number of entries currently pending (test-only, for leak assertions).
-    #[cfg(test)]
+    #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(crate) fn pending_len(&self) -> usize {
         self.inner.lock().unwrap().pending.len()
     }
@@ -275,7 +275,7 @@ impl OutboundQueue {
     }
 
     /// The current queue depth.
-    #[cfg(test)]
+    #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(crate) fn depth(&self) -> usize {
         self.inner.state.lock().unwrap().depth
     }
@@ -1002,7 +1002,7 @@ impl Client {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use lsp_types::NumberOrString;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};

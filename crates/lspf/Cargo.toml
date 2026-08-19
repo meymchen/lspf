@@ -21,12 +21,6 @@ ropey.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-# The Tokio runtime behind every native Transport (ADR 0013): optional, pulled
-# in only through the `runtime-tokio` feature.
-tokio = { workspace = true, optional = true }
-# The WebSocket adapter's framing library (ADR 0011): optional, pulled in only
-# through the `websocket` feature.
-tokio-tungstenite = { workspace = true, optional = true }
 # Only the runtime-neutral `CancellationToken` primitive of ADR 0007 is used;
 # `default-features = false` keeps tokio's runtime out of the wasm build, and
 # `codec` (the stdio/TCP framing decoder) is enabled per feature below.
@@ -46,7 +40,13 @@ web-sys = { workspace = true, optional = true, features = [
 wasm-bindgen-futures = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# The Tokio runtime behind every native Transport (ADR 0013): optional, pulled
+# in only through the `runtime-tokio` feature. Keeping it native-only lets lspf
+# emit its own diagnostic before socket dependencies reject wasm32.
 tokio = { workspace = true, optional = true, features = ["rt-multi-thread", "io-std", "fs"] }
+# The WebSocket adapter's framing library (ADR 0011): optional, pulled in only
+# through the `websocket` feature and never resolved for browser WASM.
+tokio-tungstenite = { workspace = true, optional = true }
 
 [features]
 # Native stdio is the default experience: opting in also selects the Tokio
@@ -64,10 +64,123 @@ worker-channel = ["wasm", "dep:js-sys", "dep:wasm-bindgen", "dep:web-sys"]
 # `proposed` module and the gated `Client` helpers. It pulls in no Transport.
 proposed = []
 
+# Native integration journeys exercise the Tokio-backed server. Keeping their
+# runtime requirement in the manifest gives Cargo one authoritative gate.
+
+[[test]]
+name = "catalog"
+required-features = ["runtime-tokio"]
+
+[[test]]
+name = "client_notifications"
+required-features = ["runtime-tokio"]
+
+[[test]]
+name = "client_requests"
+required-features = ["runtime-tokio"]
+
+[[test]]
+name = "commands"
+required-features = ["runtime-tokio"]
+
+[[test]]
+name = "completion_resolve"
+required-features = ["runtime-tokio"]
+
+[[test]]
+name = "custom_notification"
+required-features = ["runtime-tokio"]
+
+[[test]]
+name = "custom_request"
+required-features = ["runtime-tokio"]
+
+[[test]]
+name = "diagnostics"
+required-features = ["runtime-tokio"]
+
+[[test]]
+name = "document_hooks"
+required-features = ["runtime-tokio"]
+
+[[test]]
+name = "editing_presentation"
+required-features = ["runtime-tokio"]
+
+[[test]]
+name = "file_provider"
+required-features = ["runtime-tokio"]
+
+[[test]]
+name = "hierarchy_semantic_tokens"
+required-features = ["runtime-tokio"]
+
+[[test]]
+name = "hover_completion"
+required-features = ["runtime-tokio"]
+
+[[test]]
+name = "inbound_completion"
+required-features = ["runtime-tokio"]
+
+[[test]]
+name = "initialize_transaction"
+required-features = ["runtime-tokio"]
+
+[[test]]
+name = "lifecycle_hooks"
+required-features = ["runtime-tokio"]
+
+[[test]]
+name = "navigation_lookup"
+required-features = ["runtime-tokio"]
+
+[[test]]
+name = "outgoing_notifications"
+required-features = ["runtime-tokio"]
+
+[[test]]
+name = "outgoing_requests"
+required-features = ["runtime-tokio"]
+
+[[test]]
+name = "progress"
+required-features = ["runtime-tokio"]
+
+[[test]]
+name = "progress_cancellation"
+required-features = ["runtime-tokio"]
+
+[[test]]
+name = "resolve_prepare_families"
+required-features = ["runtime-tokio"]
+
+[[test]]
+name = "service_stack"
+required-features = ["runtime-tokio"]
+
+[[test]]
+name = "session_close"
+required-features = ["runtime-tokio"]
+
+[[test]]
+name = "workspace_hooks"
+required-features = ["runtime-tokio"]
+
+[[test]]
+name = "workspace_queries"
+required-features = ["runtime-tokio"]
+
+[[test]]
+name = "workspace_requests"
+required-features = ["runtime-tokio"]
+
 # Dev-dependencies drive the native test suite and the native half of the
 # shared example; a wasm32 build (including `--example`) resolves none of
 # them, so tokio's native-only features never reach the wasm32 target.
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+syn = { version = "2", features = ["full", "visit"] }
+proc-macro2 = "1"
 tempfile.workspace = true
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "time", "net"] }
 tracing-subscriber.workspace = true
