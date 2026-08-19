@@ -18,6 +18,8 @@ mod stdio;
 mod tcp;
 #[cfg(all(feature = "websocket", not(target_arch = "wasm32")))]
 mod websocket;
+#[cfg(all(feature = "worker-channel", target_arch = "wasm32"))]
+mod worker_channel;
 
 use std::future::Future;
 use std::io;
@@ -35,6 +37,11 @@ pub use tcp::{TcpBuilder, TcpReader, TcpTransport, TcpWriter, tcp};
 #[cfg(all(feature = "websocket", not(target_arch = "wasm32")))]
 pub use websocket::{
     WebSocketBuilder, WebSocketReader, WebSocketTransport, WebSocketWriter, websocket,
+};
+#[cfg(all(feature = "worker-channel", target_arch = "wasm32"))]
+pub use worker_channel::{
+    WorkerChannelBuilder, WorkerChannelReader, WorkerChannelTransport, WorkerChannelWriter,
+    worker_channel,
 };
 
 /// I/O failures that mean the peer is gone collapse to
