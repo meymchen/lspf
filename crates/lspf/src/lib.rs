@@ -70,6 +70,8 @@ mod markdown {
     pub struct MigratingTo04Guide;
 }
 
+#[doc(hidden)]
+pub use builder::SharedHandler;
 pub use builder::{InitializeRegistrar, Server, ServerBuilder};
 pub use client::{Client, TelemetryEventParams};
 pub use context::Context;
@@ -86,7 +88,7 @@ pub use file_provider::{OsFileProvider, OsFileProviderBuilder};
 pub use progress::{ProgressHandle, ProgressOptions};
 pub use raw::{JsonRpcError, RawMessage, RequestId};
 #[doc(hidden)]
-pub use runtime::TaskSend;
+pub use runtime::{TaskFuture, TaskSend};
 pub use service::{CallKind, IncomingCall, Layer, Next, ServiceFuture, ServiceResult};
 #[cfg(all(feature = "stdio", not(target_arch = "wasm32")))]
 pub use transport::{StdioBuilder, StdioReader, StdioTransport, StdioWriter, stdio};

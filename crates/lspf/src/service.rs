@@ -1,6 +1,5 @@
 //! Normalized user dispatch and the fixed Service stack (ADR 0019).
 
-use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -11,7 +10,7 @@ use tracing::{Instrument, error, info_span};
 
 use crate::builder::Router;
 use crate::sync::Semaphore;
-use crate::{Context, LspError, RequestId};
+use crate::{Context, LspError, RequestId, TaskFuture, TaskSend};
 
 /// Whether a normalized user call came from a request or a notification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,11 +107,20 @@ pub enum ServiceResult {
 }
 
 /// Boxed future returned by a user [`Layer`].
-pub type ServiceFuture = Pin<Box<dyn Future<Output = ServiceResult> + Send + 'static>>;
+pub type ServiceFuture = Pin<Box<dyn TaskFuture<ServiceResult> + 'static>>;
 
-pub(crate) trait Service<S>: Send + Sync {
-    fn call(&self, call: IncomingCall<S>) -> ServiceFuture;
+macro_rules! service_trait {
+    ($($native_bound:tt)*) => {
+        pub(crate) trait Service<S>: TaskSend $($native_bound)* {
+            fn call(&self, call: IncomingCall<S>) -> ServiceFuture;
+        }
+    };
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+service_trait!(+ Sync);
+#[cfg(target_arch = "wasm32")]
+service_trait!();
 
 /// The next inner Service in a user Layer chain.
 pub struct Next<S> {
@@ -133,14 +141,23 @@ impl<S: Send + Sync + 'static> Next<S> {
     }
 }
 
-/// Adds cross-cutting behavior around normalized user dispatch.
-///
-/// The last Layer registered on [`ServerBuilder`](crate::ServerBuilder) is
-/// outermost among user Layers. Framework panic isolation, tracing, and
-/// concurrency limiting always remain outside every user Layer.
-pub trait Layer<S>: Send + Sync + 'static {
-    fn call(&self, call: IncomingCall<S>, next: Next<S>) -> ServiceFuture;
+macro_rules! layer_trait {
+    ($($native_bound:tt)*) => {
+        /// Adds cross-cutting behavior around normalized user dispatch.
+        ///
+        /// The last Layer registered on [`ServerBuilder`](crate::ServerBuilder) is
+        /// outermost among user Layers. Framework panic isolation, tracing, and
+        /// concurrency limiting always remain outside every user Layer.
+        pub trait Layer<S>: TaskSend $($native_bound)* + 'static {
+            fn call(&self, call: IncomingCall<S>, next: Next<S>) -> ServiceFuture;
+        }
+    };
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+layer_trait!(+ Sync);
+#[cfg(target_arch = "wasm32")]
+layer_trait!();
 
 pub(crate) type UserLayer<S> = Arc<dyn Layer<S>>;
 pub(crate) type UserService<S> = Arc<dyn Service<S>>;
@@ -188,7 +205,13 @@ impl<S: Send + Sync + 'static> Service<S> for RouterService<S> {
                             };
                         match router.command(&params.command) {
                             Some(handler) => {
-                                handler(call.state, call.context, params.arguments, cancellation)
+                                handler
+                                    .invoke((
+                                        call.state,
+                                        call.context,
+                                        params.arguments,
+                                        cancellation,
+                                    ))
                                     .await
                             }
                             None => Err(LspError::invalid_params(format!(
@@ -199,7 +222,9 @@ impl<S: Send + Sync + 'static> Service<S> for RouterService<S> {
                     } else {
                         match router.request(&call.method) {
                             Some(handler) => {
-                                handler(call.state, call.context, call.params, cancellation).await
+                                handler
+                                    .invoke((call.state, call.context, call.params, cancellation))
+                                    .await
                             }
                             None => Err(LspError::MethodNotFound(call.method)),
                         }
@@ -219,7 +244,9 @@ impl<S: Send + Sync + 'static> Service<S> for RouterService<S> {
                         .notification(&call.method)
                         .or_else(|| router.built_in_hook(&call.method));
                     if let Some(handler) = handler {
-                        handler(call.state, call.context, call.params).await;
+                        handler
+                            .invoke((call.state, call.context, call.params))
+                            .await;
                     }
                     ServiceResult::NoResponse
                 }
