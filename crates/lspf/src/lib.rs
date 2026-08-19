@@ -97,6 +97,11 @@ pub use transport::{Transport, TransportError, TransportReader, TransportWriter}
 pub use transport::{
     WebSocketBuilder, WebSocketReader, WebSocketTransport, WebSocketWriter, websocket,
 };
+#[cfg(all(feature = "worker-channel", target_arch = "wasm32"))]
+pub use transport::{
+    WorkerChannelBuilder, WorkerChannelReader, WorkerChannelTransport, WorkerChannelWriter,
+    worker_channel,
+};
 pub use workspace::{Workspace, WorkspaceError};
 
 /// Cancellation primitive passed to every request handler (ADR 0007).

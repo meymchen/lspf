@@ -85,10 +85,15 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
+      - run: cargo install wasm-bindgen-cli --version 0.2.126 --locked
       # The pre-0.5 compile spike (ADR 0020): the protocol kernel must compile
       # for wasm32 without enabling the Tokio runtime.
       - run: cargo check -p lspf --target wasm32-unknown-unknown --no-default-features --features wasm --locked
       - run: cargo check -p lspf --target wasm32-unknown-unknown --no-default-features --features wasm --example shared_server --locked
+      - run: cargo check -p lspf --target wasm32-unknown-unknown --no-default-features --features worker-channel --locked
+      - run: cargo test -p lspf --target wasm32-unknown-unknown --no-default-features --features worker-channel --test worker_channel --locked
+        env:
+          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
 
   coverage:
     name: coverage
