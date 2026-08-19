@@ -130,7 +130,9 @@ at [`crates/lspf-hello/src/main.rs`](./crates/lspf-hello/src/main.rs), the
 installable template server described under [Editor setup](#editor-setup),
 with an end-to-end stdio test beside it. The
 [features, capabilities, and the workspace](./docs/guides/features-and-workspace.md)
-guide walks through each piece.
+guide walks through each piece. To choose a Transport adapter, enable only
+its Cargo dependencies, or implement another message-framed channel, see
+[Choosing and implementing a Transport](./docs/guides/transports.md).
 
 ## Install
 
@@ -223,6 +225,9 @@ The full design lives next to the code:
   doctest.
 - [`docs/guides/migrating-to-0.4.md`](./docs/guides/migrating-to-0.4.md)
   — the 0.3 → 0.4 breaking changes and how to update.
+- [`docs/guides/transports.md`](./docs/guides/transports.md) — the 0.5
+  Transport selection and target/feature matrices, buildable native and WASM
+  examples, custom Transport contract, and explicit deployment non-goals.
 
 ## Roadmap
 
@@ -244,6 +249,12 @@ Available today:
 - Rope-backed documents with UTF-8/UTF-16 position negotiation.
 
 ## Examples
+
+Transport-specific examples reuse one shared handler module, demonstrating
+that business logic does not fork between native and WASM hosts. See the
+[Transport guide](./docs/guides/transports.md#buildable-examples-and-shared-handlers)
+for native TCP, native WebSocket, and browser/Node worker-channel build
+commands.
 
 Run the template server straight from the workspace, or point any
 LSP-aware tool at the spawned process:

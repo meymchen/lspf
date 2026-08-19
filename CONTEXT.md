@@ -192,8 +192,8 @@ _Avoid_: Session, server-state.
 **Transport**:
 The message-framed channel over which LSP JSON-RPC envelopes flow into
 and out of the framework. v1 ships four: stdio, TCP, WebSocket (all
-native + tokio), and worker-channel (WASM in browser, wrapping a JS
-`MessagePort`). The trait sees one envelope at a time; framing
+native + tokio), and worker-channel (WASM in a browser or Node Worker,
+wrapping a JS `MessagePort`). The trait sees one envelope at a time; framing
 (`Content-Length` for stdio/TCP, none for the others) is the adapter's
 concern.
 _Avoid_: Connection (overloaded with TCP-specific meaning), socket
@@ -213,7 +213,8 @@ _Avoid_: Exit code (only one part of it), close reason, status.
 **Runtime**:
 The internal, crate-private trait through which the framework spawns and
 cancels tasks (ADR 0020). Exactly two implementations exist —
-`TokioRuntime` on native targets and `WasmRuntime` on browser WASM —
+`TokioRuntime` on native targets and `WasmRuntime` on browser or Node Worker
+WASM —
 selected by compile target, with no runtime-selection API. `Runtime`
 executes spawn, abort, and join but owns no protocol state; it is not
 implementable or nameable by users.

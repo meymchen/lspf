@@ -1,0 +1,12 @@
+{
+  "name": "lspf-worker-channel-browser-example",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "cargo build --manifest-path ../../../../../Cargo.toml -p lspf --example worker_channel --target wasm32-unknown-unknown --no-default-features --features worker-channel --locked && wasm-bindgen --target web --out-dir pkg ../../../../../target/wasm32-unknown-unknown/debug/examples/worker_channel.wasm && npm run check",
+    "check": "node --check main.mjs && node --check worker.mjs"
+  }
+}
