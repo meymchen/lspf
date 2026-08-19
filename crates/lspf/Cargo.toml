@@ -26,8 +26,9 @@ thiserror.workspace = true
 # `codec` (the stdio/TCP framing decoder) is enabled per feature below.
 tokio-util = { workspace = true, default-features = false }
 tracing.workspace = true
-# JavaScript interop behind the browser MessagePort adapter. All three are
-# optional so native builds keep no browser bindings in their dependency tree.
+# JavaScript interop behind the browser/Node Worker MessagePort adapter. All
+# three are optional so native builds keep no Worker bindings in their
+# dependency tree.
 js-sys = { workspace = true, optional = true }
 wasm-bindgen = { workspace = true, optional = true }
 web-sys = { workspace = true, optional = true, features = [
@@ -35,8 +36,8 @@ web-sys = { workspace = true, optional = true, features = [
     "MessageEvent",
     "MessagePort",
 ] }
-# The browser WASM task spawner behind the `wasm` feature (ADR 0020): optional
-# so the native default tree never carries WASM-only dependencies.
+# The Worker-hosted WASM task spawner behind the `wasm` feature (ADR 0020):
+# optional so the native default tree never carries WASM-only dependencies.
 wasm-bindgen-futures = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -45,7 +46,7 @@ wasm-bindgen-futures = { workspace = true, optional = true }
 # emit its own diagnostic before socket dependencies reject wasm32.
 tokio = { workspace = true, optional = true, features = ["rt-multi-thread", "io-std", "fs"] }
 # The WebSocket adapter's framing library (ADR 0011): optional, pulled in only
-# through the `websocket` feature and never resolved for browser WASM.
+# through the `websocket` feature and never resolved for Worker-hosted WASM.
 tokio-tungstenite = { workspace = true, optional = true }
 
 [features]
@@ -57,12 +58,28 @@ tcp = ["runtime-tokio", "tokio-util/codec", "tokio/net"]
 websocket = ["runtime-tokio", "dep:tokio-tungstenite", "tokio/net"]
 runtime-tokio = ["dep:tokio"]
 wasm = ["dep:wasm-bindgen-futures"]
-# The browser MessagePort transport rides on the WASM runtime.
+# The browser/Node Worker MessagePort transport rides on the WASM runtime.
 worker-channel = ["wasm", "dep:js-sys", "dep:wasm-bindgen", "dep:web-sys"]
 # Proposed (not yet stabilized) LSP protocol surface. Off by default so the
 # stable API stays exactly the 3.17 catalog; enabling it only adds the
 # `proposed` module and the gated `Client` helpers. It pulls in no Transport.
 proposed = []
+
+# Transport examples name feature-gated APIs directly. `required-features`
+# keeps each example out of unrelated feature rows while CI builds it in the
+# row that provides its adapter.
+
+[[example]]
+name = "native_tcp"
+required-features = ["tcp"]
+
+[[example]]
+name = "native_websocket"
+required-features = ["websocket"]
+
+[[example]]
+name = "worker_channel"
+required-features = ["worker-channel"]
 
 # Native integration journeys exercise the Tokio-backed server. Keeping their
 # runtime requirement in the manifest gives Cargo one authoritative gate.

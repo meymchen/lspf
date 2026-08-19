@@ -21,7 +21,7 @@ use crate::workspace::WorkspaceError;
 /// never cache: every lookup asks the provider again.
 ///
 /// The returned future is `Send` on native targets and may remain local on
-/// browser WASM, matching the framework's runtime task boundary.
+/// Worker-hosted WASM, matching the framework's runtime task boundary.
 ///
 /// [`Document`]: crate::Document
 pub trait FileProvider: Send + Sync + 'static {
@@ -94,9 +94,10 @@ impl FileProvider for MemoryFileProvider {
 /// The empty [`FileProvider`] that serves no scheme at all.
 ///
 /// Every lookup fails with [`WorkspaceError::UnsupportedScheme`], naming the
-/// requested scheme. It is the default provider on browser WASM, where there
-/// is no filesystem to read and no native OS provider to construct
-/// (ADR 0020); the builder still accepts any user provider.
+/// requested scheme. It is the default provider on Worker-hosted WASM, where
+/// lspf assumes no host filesystem and compiles no native OS provider
+/// (ADR 0020); the builder still accepts any user provider, including one
+/// backed by host JavaScript APIs.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct EmptyFileProvider;
@@ -112,7 +113,7 @@ impl FileProvider for EmptyFileProvider {
 }
 
 /// The connection's default [`FileProvider`]: an in-memory provider on native
-/// targets, the empty provider on browser WASM (ADR 0020).
+/// targets, the empty provider on Worker-hosted WASM (ADR 0020).
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn default_file_provider() -> SharedFileProvider {
     erase(MemoryFileProvider::new())
@@ -124,9 +125,8 @@ pub(crate) fn default_file_provider() -> SharedFileProvider {
 }
 
 /// The production `FileProvider` adapter that reads `file:` URIs from the
-/// local filesystem (issue #80). Not compiled on browser WASM, which has no
-/// filesystem; its tokio I/O stays inside this native-only boundary
-/// (ADR 0020).
+/// local filesystem (issue #80). Not compiled on Worker-hosted WASM; its tokio
+/// I/O stays inside this native-only boundary (ADR 0020).
 #[cfg(all(not(target_arch = "wasm32"), feature = "runtime-tokio"))]
 mod os {
     use std::path::PathBuf;

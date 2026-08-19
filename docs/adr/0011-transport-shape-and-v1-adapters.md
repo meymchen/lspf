@@ -1,13 +1,17 @@
 # Transport is message-framed; v1 ships four adapters
 
 Status note:
-[ADR 0020](0020-runtime-and-native-wasm-send-model.md) retains this
-Transport shape and its four v1 adapters while updating the execution
-constraints: the `Send + 'static` supertrait shown below applies to native
-targets only, and on `wasm32` the worker-channel adapter is not `Send`. The
-historical body below is unchanged.
+The 0.5 implementation retains this message-framed contract and its four v1
+adapters while revising the Rust ownership surface: `Transport::split`
+transfers a `TransportReader::recv` half and a `TransportWriter` half with
+`send` and consuming `shutdown` to the engine's independent loops. Custom
+adapters are passed directly to `Server::serve`. This supersedes the trait
+sketch and `from_transport` name in the historical body below.
+[ADR 0020](0020-runtime-and-native-wasm-send-model.md) updates the execution
+constraints: the `Send + 'static` supertraits apply to the native Transport
+and both halves only; on `wasm32` the worker-channel values are not `Send`.
 
-The `Transport` trait is message-framed:
+The historical `Transport` trait sketch was message-framed:
 
 ```rust
 pub trait Transport: Send + 'static {

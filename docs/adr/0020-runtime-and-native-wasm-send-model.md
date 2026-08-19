@@ -9,7 +9,7 @@ Status: Accepted. Fixes the interface of the `Runtime` ownership boundary
 named by [ADR 0017](0017-typed-router-and-capability-catalog.md) and the
 execution seam for the task group and close path that `ProtocolEngine` owns
 per [ADR 0018](0018-protocol-engine-and-outbound-request-broker.md).
-Retains the Transport shape of
+Retains the message-framed Transport contract of
 [ADR 0011](0011-transport-shape-and-v1-adapters.md) while updating its
 execution constraints. Concretizes the per-target executors chosen in
 [ADR 0001](0001-async-only-runtime.md).
@@ -17,8 +17,9 @@ execution constraints. Concretizes the per-target executors chosen in
 ## Context
 
 ADR 0001 makes lspf async-only, running on tokio natively and
-`wasm-bindgen-futures` in browser WASM. ADR 0017 names `Runtime` as the owner
-of task spawning, cancellation primitives, and target-specific execution, but
+`wasm-bindgen-futures` in browser or Node Worker WASM. ADR 0017 names
+`Runtime` as the owner of task spawning, cancellation primitives, and
+target-specific execution, but
 leaves its exact interface to a later ADR. ADR 0018 gives `ProtocolEngine`
 exclusive ownership of the connection task group and the cancel-then-join
 close path, with a `Runtime` executing engine-requested spawning without
@@ -182,10 +183,11 @@ WebSocket adapters remain tokio-based.
 
 On `wasm32-unknown-unknown`, one Web Worker runs the whole connection.
 `WasmRuntime::spawn` delegates to `spawn_local`; futures interleave at await
-points on the single thread and there is no parallelism. The `Transport`
-trait drops the `Send` supertrait on this target while keeping the same
-three methods, so the worker-channel adapter holds its `MessagePort` without
-pretending to be `Send`. The ADR 0012 concurrency limit still bounds
+points on the single thread and there is no parallelism. `Transport` and the
+reader and writer halves returned by `Transport::split` drop their `Send`
+supertraits on this target, so the worker-channel adapter holds its
+`MessagePort` without pretending to be `Send`. The message operations remain
+`recv`, `send`, and `shutdown`. The ADR 0012 concurrency limit still bounds
 in-flight handler tasks; it limits interleaved tasks rather than parallel
 ones.
 
@@ -247,7 +249,7 @@ the Worker to stop a task. Thread termination corrupts shared state,
 terminating the Worker destroys the whole connection rather than one task,
 and ADR 0007 already fixes cooperative cancellation as the model.
 
-We rejected running tokio's executor on `wasm32`. The browser event loop
+We rejected running tokio's executor on `wasm32`. The Worker event loop
 must remain the driver inside a Worker, tokio's I/O and time drivers do not
 function there, and `wasm-bindgen-futures` already bridges Rust futures onto
 the JS microtask queue.
@@ -267,8 +269,8 @@ accidentally acquire a `Send` requirement it cannot meet.
 
 Portability is asymmetric by design: native-valid handler code is always
 WASM-valid, while WASM-only handler code may not compile natively. Teams
-targeting both build against native bounds; teams targeting only the browser
-gain the freedom to hold non-`Send` values across awaits.
+targeting both build against native bounds; teams targeting only browser or
+Node Worker WASM gain the freedom to hold non-`Send` values across awaits.
 
 Custom executors (async-std, smol, embedded runtimes) are not supported in
 v1. Applications with such constraints run the native tokio path or build
@@ -281,11 +283,12 @@ a swap is contained and does not change public API.
 
 ## Migration impact
 
-ADR 0011's Transport shape — message-framed `recv`, `send`, `shutdown`, and
-the four v1 adapters — is retained. Its trait-level `Send + 'static`
-supertrait now applies to native targets only; on `wasm32` the bound is
-`'static`. ADR 0011 carries a status note pointing here; its historical body
-is unchanged.
+ADR 0011's message-framed `recv`, `send`, `shutdown` contract and four v1
+adapters are retained. The 0.5 ownership surface places those operations on
+the reader and writer halves returned by `Transport::split`. The
+`Send + 'static` supertraits on `Transport` and both halves apply to native
+targets only; on `wasm32` the bounds are `'static`. ADR 0011's status note
+records that final ownership surface while preserving its historical body.
 
 ADR 0017 is completed, not changed: the WASM relaxation it assigned to this
 ADR is now fixed as the `TaskSend` marker, and its builder methods and typed

@@ -19,13 +19,13 @@ compile_error!(
      or `--no-default-features --features wasm` plus your transports"
 );
 
-// The worker-channel adapter is a browser MessagePort transport: it only
-// exists inside a Web Worker on `wasm32-unknown-unknown`.
+// The worker-channel adapter wraps a browser or Node Worker MessagePort: it
+// only exists inside a Worker on `wasm32-unknown-unknown`.
 #[cfg(all(feature = "worker-channel", not(target_arch = "wasm32")))]
 compile_error!("the `worker-channel` feature requires the wasm32 target");
 
 // Native socket adapters depend on Tokio's reactor and are deliberately not
-// part of the browser-WASM surface. Keep these diagnostics here, next to the
+// part of the Worker-hosted WASM surface. Keep these diagnostics here, next to
 // target/feature contract, so an unsupported feature combination fails for a
 // reason that tells the caller how to fix it.
 #[cfg(all(target_arch = "wasm32", feature = "tcp"))]
@@ -87,6 +87,9 @@ mod markdown {
 
     #[doc = include_str!("../../../docs/guides/migrating-to-0.4.md")]
     pub struct MigratingTo04Guide;
+
+    #[doc = include_str!("../../../docs/guides/transports.md")]
+    pub struct TransportsGuide;
 }
 
 #[doc(hidden)]
