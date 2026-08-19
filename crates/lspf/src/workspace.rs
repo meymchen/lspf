@@ -277,7 +277,7 @@ impl Workspace {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use std::str::FromStr;
     use std::sync::Barrier;
@@ -289,10 +289,13 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    #[cfg(feature = "runtime-tokio")]
+    use crate::OsFileProvider;
     use crate::documents::Documents;
     use crate::file_provider::erase;
+    #[cfg(feature = "runtime-tokio")]
     use crate::test_util::file_uri;
-    use crate::{MemoryFileProvider, OsFileProvider, WorkspaceError};
+    use crate::{MemoryFileProvider, WorkspaceError};
 
     fn uri(spelling: &str) -> Uri {
         Uri::from_str(spelling).expect("the test URI parses")
@@ -588,7 +591,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(feature = "runtime-tokio")]
     async fn os_provider_snapshots_are_versionless_not_cached_and_not_opened() {
         let dir = tempfile::tempdir().expect("a tempdir is created");
         let file = dir.path().join("provider.rs");
@@ -620,7 +623,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(feature = "runtime-tokio")]
     async fn os_provider_reads_files_outside_every_workspace_root() {
         let dir = tempfile::tempdir().expect("a tempdir is created");
         let file = dir.path().join("outside.rs");
@@ -640,7 +643,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(feature = "runtime-tokio")]
     async fn os_provider_missing_file_is_not_found() {
         let dir = tempfile::tempdir().expect("a tempdir is created");
         let requested = file_uri(&dir.path().join("absent.rs"));
@@ -658,7 +661,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(feature = "runtime-tokio")]
     async fn os_provider_rejects_non_file_schemes() {
         let requested = uri("untitled:Untitled-1");
         let workspace = Workspace::from_params_with_provider(
@@ -675,7 +678,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(feature = "runtime-tokio")]
     async fn os_provider_io_failures_surface_through_text_document() {
         let dir = tempfile::tempdir().expect("a tempdir is created");
         let requested = file_uri(dir.path());

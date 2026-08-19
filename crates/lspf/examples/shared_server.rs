@@ -115,8 +115,14 @@ fn main() {
     let server = build().expect("the static registrations are valid");
 
     // Native: serve over the stdio transport on the caller's Tokio runtime.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "stdio"))]
     serve_native(server);
+
+    // Feature-matrix checks also compile every example for the TCP- and
+    // WebSocket-only rows. Those rows have a runtime but deliberately do not
+    // expose the stdio entry point, so the host-specific example stops here.
+    #[cfg(all(not(target_arch = "wasm32"), not(feature = "stdio")))]
+    drop(server);
 
     // WASM: the browser host drives `Server::serve` over its worker-channel
     // transport; an example binary has no host, so it just drops the server.
@@ -124,7 +130,7 @@ fn main() {
     drop(server);
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "stdio"))]
 fn serve_native(server: Server<State>) {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

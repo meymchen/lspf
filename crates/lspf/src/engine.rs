@@ -1408,7 +1408,7 @@ fn enqueue_error(out_tx: &OutboundQueue, id: RequestId, err: LspError) {
     let _ = out_tx.send(error_response(id, &err));
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use lsp_types::ProgressToken;
     use tracing_subscriber::layer::SubscriberExt;
