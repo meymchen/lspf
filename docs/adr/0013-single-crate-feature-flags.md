@@ -2,8 +2,11 @@
 
 Status note:
 The 0.5 Cargo feature graph (issue #126) ships this plan with the
-runtime glue renamed `runtime-tokio` and the browser adapter as the
-`worker-channel` feature, which implies `wasm`. Defaults pull in
+runtime glue renamed `runtime-tokio` and the browser/Node Worker adapter as
+the `worker-channel` feature, which implies `wasm`. Both hosts consume the
+same `wasm32-unknown-unknown` artifact through target-specific wasm-bindgen
+glue; CI builds both glue targets and runs the Node host through an LSP
+startup/shutdown journey. Defaults pull in
 `stdio`, which implies `runtime-tokio`; `tcp` and `websocket` do too,
 and `websocket` additionally pulls `tokio-tungstenite`. The historical
 body below is unchanged.
