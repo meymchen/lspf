@@ -144,6 +144,40 @@ mod tests {
     }
 
     #[test]
+    fn decodes_a_message_split_at_every_byte_boundary() {
+        let mut codec = ContentLengthCodec::default();
+        let mut buf = BytesMut::new();
+        let frame = b"Content-Length: 17\r\n\r\n{\"jsonrpc\":\"2.0\"}";
+
+        for (index, byte) in frame.iter().enumerate() {
+            buf.extend_from_slice(std::slice::from_ref(byte));
+            let decoded = codec.decode(&mut buf).unwrap();
+            if index + 1 == frame.len() {
+                assert_eq!(decoded.as_deref(), Some(&br#"{"jsonrpc":"2.0"}"#[..]));
+            } else {
+                assert!(decoded.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn decodes_consecutive_messages_without_losing_buffered_bytes() {
+        let mut codec = ContentLengthCodec::default();
+        let mut buf =
+            BytesMut::from(&b"Content-Length: 3\r\n\r\noneContent-Length: 3\r\n\r\ntwo"[..]);
+
+        assert_eq!(
+            codec.decode(&mut buf).unwrap().as_deref(),
+            Some(&b"one"[..])
+        );
+        assert_eq!(
+            codec.decode(&mut buf).unwrap().as_deref(),
+            Some(&b"two"[..])
+        );
+        assert!(buf.is_empty());
+    }
+
+    #[test]
     fn ignores_extra_headers() {
         let mut codec = ContentLengthCodec::default();
         let mut buf = BytesMut::from(
@@ -151,6 +185,28 @@ mod tests {
         );
         let body = codec.decode(&mut buf).unwrap().unwrap();
         assert_eq!(&body[..], br#"{"jsonrpc":"2.0"}"#);
+    }
+
+    #[test]
+    fn rejects_a_message_without_content_length() {
+        let mut codec = ContentLengthCodec::default();
+        let mut buf = BytesMut::from(&b"Not-Content-Length: 17\r\n\r\n"[..]);
+
+        let error = codec.decode(&mut buf).unwrap_err();
+        assert!(
+            matches!(error, TransportError::Malformed(message) if message == "missing Content-Length header")
+        );
+    }
+
+    #[test]
+    fn rejects_a_non_numeric_content_length() {
+        let mut codec = ContentLengthCodec::default();
+        let mut buf = BytesMut::from(&b"Content-Length: NaN\r\n\r\n"[..]);
+
+        let error = codec.decode(&mut buf).unwrap_err();
+        assert!(
+            matches!(error, TransportError::Malformed(message) if message.starts_with("invalid Content-Length:"))
+        );
     }
 
     #[test]
