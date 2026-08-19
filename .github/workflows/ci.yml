@@ -114,6 +114,8 @@ jobs:
       - run: cargo check -p lspf --target wasm32-unknown-unknown --no-default-features --features wasm --locked
       - run: cargo check -p lspf --target wasm32-unknown-unknown --no-default-features --features wasm --example shared_server --locked
       - run: cargo check -p lspf --target wasm32-unknown-unknown --no-default-features --features worker-channel --locked
+      - run: cargo check -p lspf --target wasm32-unknown-unknown --no-default-features --features worker-channel --example worker_channel --locked
+      - run: bash ci/check-worker-channel-examples.sh
       - run: cargo clippy -p lspf --target wasm32-unknown-unknown --no-default-features --features worker-channel --all-targets --locked -- -D warnings
       - run: cargo test -p lspf --target wasm32-unknown-unknown --no-default-features --features worker-channel --all-targets --locked
         env:

@@ -3,7 +3,7 @@
 lspf supports only an async execution model. There is no sync mode, no
 `std::thread`-based event loop, no `block_on` shim hiding inside the
 dispatcher. Every handler is `async fn`; the framework runs on tokio
-natively and `wasm-bindgen-futures` in browser WASM.
+natively and `wasm-bindgen-futures` in browser or Node Worker WASM.
 
 We chose this because the project's other constraints — browser-WASM
 support, WebSocket transport, and a single well-tuned core for "extreme

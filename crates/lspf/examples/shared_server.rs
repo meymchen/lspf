@@ -3,8 +3,8 @@
 //!
 //! On native targets the same `Server` serves over stdio on `TokioRuntime`;
 //! the identical registrations compile for `wasm32-unknown-unknown` as well,
-//! where the browser host owns the connection and the framework runs the
-//! handlers on `WasmRuntime`. No registration method, parameter, or return
+//! where a browser or Node Worker host owns the connection. The framework runs
+//! the handlers on `WasmRuntime`. No registration method, parameter, or return
 //! shape forks between the two targets — only the internal task bounds
 //! differ, expressed through the hidden `TaskSend` marker.
 //!
@@ -14,92 +14,10 @@
 //!   --target wasm32-unknown-unknown --no-default-features --features wasm
 //! ```
 
-use std::sync::Arc;
+mod shared;
 
-use lspf::types::notification::DidOpenTextDocument;
-use lspf::types::{
-    CompletionItem, CompletionOptions, CompletionParams, CompletionResponse,
-    DidOpenTextDocumentParams, Hover, HoverParams,
-};
-use lspf::{CancellationToken, Context, LspError, Server};
-
-/// The example server's shared application state.
-struct State {
-    label: String,
-}
-
-impl State {
-    fn new() -> Self {
-        Self {
-            label: "shared".to_string(),
-        }
-    }
-}
-
-/// The typed `textDocument/hover` feature.
-async fn hover(
-    state: Arc<State>,
-    ctx: Context,
-    _params: HoverParams,
-    _ct: CancellationToken,
-) -> Result<Option<Hover>, LspError> {
-    let _ = ctx.workspace().roots();
-    Ok(Some(Hover {
-        contents: lspf::types::HoverContents::Scalar(lspf::types::MarkedString::String(
-            state.label.clone(),
-        )),
-        range: None,
-    }))
-}
-
-/// The typed `textDocument/completion` feature.
-async fn completion(
-    _state: Arc<State>,
-    _ctx: Context,
-    _params: CompletionParams,
-    _ct: CancellationToken,
-) -> Result<Option<CompletionResponse>, LspError> {
-    Ok(Some(CompletionResponse::Array(vec![CompletionItem {
-        label: "shared".to_string(),
-        ..CompletionItem::default()
-    }])))
-}
-
-/// A typed custom request marker: same method, params, and result on both
-/// targets.
-enum SharedPing {}
-
-impl lspf::types::request::Request for SharedPing {
-    type Params = String;
-    type Result = String;
-    const METHOD: &'static str = "shared/ping";
-}
-
-async fn ping(
-    state: Arc<State>,
-    _ctx: Context,
-    params: String,
-    _ct: CancellationToken,
-) -> Result<String, LspError> {
-    Ok(format!("{}:{}", state.label, params))
-}
-
-/// The post-mutation hook for the built-in `textDocument/didOpen`.
-async fn on_did_open(_state: Arc<State>, _ctx: Context, _params: DidOpenTextDocumentParams) {}
-
-/// The one shared registration surface. Both binaries below hand the same
-/// `Server` to their target's serving path.
-fn build() -> std::result::Result<Server<State>, lspf::BuildError> {
-    Server::builder(State::new())
-        .feature(lspf::features::hover(), hover)
-        .feature(
-            lspf::features::completion(CompletionOptions::default()),
-            completion,
-        )
-        .request::<SharedPing, _, _>(ping)
-        .notification::<DidOpenTextDocument, _, _>(on_did_open)
-        .build()
-}
+#[cfg(all(not(target_arch = "wasm32"), feature = "stdio"))]
+use lspf::Server;
 
 // `TaskSend` carries the whole target-dependent mobility difference: `Send`
 // on native, nothing on wasm32. These assertions are compile-time evidence
@@ -112,7 +30,7 @@ const _: fn() = || {
 };
 
 fn main() {
-    let server = build().expect("the static registrations are valid");
+    let server = shared::build().expect("the static registrations are valid");
 
     // Native: serve over the stdio transport on the caller's Tokio runtime.
     #[cfg(all(not(target_arch = "wasm32"), feature = "stdio"))]
@@ -124,14 +42,15 @@ fn main() {
     #[cfg(all(not(target_arch = "wasm32"), not(feature = "stdio")))]
     drop(server);
 
-    // WASM: the browser host drives `Server::serve` over its worker-channel
-    // transport; an example binary has no host, so it just drops the server.
+    // WASM: the browser or Node host drives `Server::serve` over its
+    // worker-channel transport; an example binary has no host, so it just
+    // drops the server.
     #[cfg(target_arch = "wasm32")]
     drop(server);
 }
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "stdio"))]
-fn serve_native(server: Server<State>) {
+fn serve_native(server: Server<shared::State>) {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

@@ -16,8 +16,8 @@ mod sealed {
 
 /// Target-dependent task mobility bound.
 ///
-/// Native tasks can move between Tokio worker threads, whereas the browser
-/// WASM runtime keeps them on the worker thread that spawned them.
+/// Native tasks can move between Tokio worker threads, whereas the
+/// Worker-hosted WASM runtime keeps them on the thread that spawned them.
 #[cfg(not(target_arch = "wasm32"))]
 #[doc(hidden)]
 pub trait TaskSend: sealed::Sealed + Send {}
@@ -94,7 +94,7 @@ impl Runtime for TokioRuntime {
 
 /// Serving must not begin before the target's executor exists. On native
 /// targets that means a Tokio runtime the caller started — the framework
-/// never starts one implicitly (ADR 0020). On browser WASM the worker's
+/// never starts one implicitly (ADR 0020). On Worker-hosted WASM the host's
 /// `wasm-bindgen` glue owns the executor and cannot be detected from Rust.
 #[cfg(all(not(target_arch = "wasm32"), feature = "runtime-tokio"))]
 pub(crate) fn ensure_runtime_available() -> crate::Result<()> {
@@ -108,7 +108,7 @@ pub(crate) fn ensure_runtime_available() -> crate::Result<()> {
     Ok(())
 }
 
-/// Runtime selected for browser WASM targets, delegating to
+/// Runtime selected for Worker-hosted WASM targets, delegating to
 /// `wasm_bindgen_futures::spawn_local` on the worker's single thread.
 #[cfg(target_arch = "wasm32")]
 #[derive(Default)]
