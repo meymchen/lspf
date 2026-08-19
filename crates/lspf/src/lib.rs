@@ -3,6 +3,15 @@
 //! See `CONTEXT.md` and `docs/adr/` at the repository root for the domain
 //! language and the architectural decisions that shape this crate.
 
+// A protocol-only feature row intentionally has no serving engine. The
+// public registration and protocol types remain useful there, while the
+// engine-owned internals are necessarily dormant until a Transport selects a
+// runtime. All other warnings stay denied in CI for this row.
+#![cfg_attr(
+    all(not(target_arch = "wasm32"), not(feature = "runtime-tokio")),
+    allow(dead_code)
+)]
+
 #[cfg(all(target_arch = "wasm32", not(feature = "wasm")))]
 compile_error!(
     "the wasm32 target requires the `wasm` feature; \
@@ -14,6 +23,16 @@ compile_error!(
 // exists inside a Web Worker on `wasm32-unknown-unknown`.
 #[cfg(all(feature = "worker-channel", not(target_arch = "wasm32")))]
 compile_error!("the `worker-channel` feature requires the wasm32 target");
+
+// Native socket adapters depend on Tokio's reactor and are deliberately not
+// part of the browser-WASM surface. Keep these diagnostics here, next to the
+// target/feature contract, so an unsupported feature combination fails for a
+// reason that tells the caller how to fix it.
+#[cfg(all(target_arch = "wasm32", feature = "tcp"))]
+compile_error!("the `tcp` feature is not supported on the wasm32 target");
+
+#[cfg(all(target_arch = "wasm32", feature = "websocket"))]
+compile_error!("the `websocket` feature is not supported on the wasm32 target");
 
 mod builder;
 mod capability;
@@ -40,7 +59,7 @@ mod transport;
 mod uri_key;
 mod workspace;
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod test_util;
 
 pub mod types {

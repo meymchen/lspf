@@ -1,13 +1,13 @@
 // Envelope helpers (ADR 0011) exist wherever a Transport adapter exists —
 // every adapter parses and serializes the same JSON-RPC envelopes.
-#[cfg(test)]
+#[cfg(all(test, feature = "runtime-tokio", not(target_arch = "wasm32")))]
 mod conformance_support {
     pub(crate) use crate::{Context, LspError, Outcome, Result, Server, TaskSend};
 
     #[cfg(all(not(target_arch = "wasm32"), any(feature = "stdio", feature = "tcp")))]
     pub(crate) use crate::transport::framing::ContentLengthCodec;
 }
-#[cfg(test)]
+#[cfg(all(test, feature = "runtime-tokio", not(target_arch = "wasm32")))]
 mod conformance;
 #[cfg(any(
     feature = "stdio",
@@ -197,6 +197,7 @@ where
 
 #[cfg(all(
     test,
+    not(target_arch = "wasm32"),
     any(
         feature = "stdio",
         feature = "tcp",

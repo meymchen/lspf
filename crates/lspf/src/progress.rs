@@ -179,13 +179,13 @@ impl ProgressRegistry {
     }
 
     /// Number of active tokens (test-only, for leak assertions).
-    #[cfg(test)]
+    #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(crate) fn active_len(&self) -> usize {
         self.inner.lock().unwrap().active.len()
     }
 
     /// Override the next candidate token (test-only, for exhaustion coverage).
-    #[cfg(test)]
+    #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(crate) fn set_next_token(&self, token: u32) {
         self.inner.lock().unwrap().next_token = token;
     }
@@ -515,7 +515,7 @@ impl Client {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use bytes::Bytes;
     use futures_channel::mpsc;
