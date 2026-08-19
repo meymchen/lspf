@@ -32,6 +32,15 @@ tokio-tungstenite = { workspace = true, optional = true }
 # `codec` (the stdio/TCP framing decoder) is enabled per feature below.
 tokio-util = { workspace = true, default-features = false }
 tracing.workspace = true
+# JavaScript interop behind the browser MessagePort adapter. All three are
+# optional so native builds keep no browser bindings in their dependency tree.
+js-sys = { workspace = true, optional = true }
+wasm-bindgen = { workspace = true, optional = true }
+web-sys = { workspace = true, optional = true, features = [
+    "Event",
+    "MessageEvent",
+    "MessagePort",
+] }
 # The browser WASM task spawner behind the `wasm` feature (ADR 0020): optional
 # so the native default tree never carries WASM-only dependencies.
 wasm-bindgen-futures = { workspace = true, optional = true }
@@ -49,7 +58,7 @@ websocket = ["runtime-tokio", "dep:tokio-tungstenite", "tokio/net"]
 runtime-tokio = ["dep:tokio"]
 wasm = ["dep:wasm-bindgen-futures"]
 # The browser MessagePort transport rides on the WASM runtime.
-worker-channel = ["wasm"]
+worker-channel = ["wasm", "dep:js-sys", "dep:wasm-bindgen", "dep:web-sys"]
 # Proposed (not yet stabilized) LSP protocol surface. Off by default so the
 # stable API stays exactly the 3.17 catalog; enabling it only adds the
 # `proposed` module and the gated `Client` helpers. It pulls in no Transport.
@@ -62,3 +71,7 @@ proposed = []
 tempfile.workspace = true
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "time", "net"] }
 tracing-subscriber.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test.workspace = true
+web-sys = { workspace = true, features = ["MessageChannel"] }

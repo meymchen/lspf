@@ -16,8 +16,8 @@
 > 功能的封闭（sealed）功能目录、Command、多根 `Workspace`、基于 `FileProvider`
 > 的未打开文件查找，以及可配置的文档同步，下面的示例均基于该接口。0.3 尚未发布：
 > crates.io 上仍是 **0.2**，0.3 相对 0.2 的新增内容见[变更日志](./CHANGELOG.md)。
-> 0.2 中已实现的标准功能为 hover、completion 和 Command；内置 TCP 与 WebSocket
-> 传输已经实现，WASM worker 传输仍在规划中。
+> 0.2 中已实现的标准功能为 hover、completion 和 Command；内置 TCP、WebSocket
+> 与 WASM worker-channel 传输已经实现。
 
 ## 快速开始
 
@@ -155,8 +155,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
   `$/cancelRequest` 通过 `CancellationToken` 传播。
 - **代为处理协议细节。** 生命周期顺序、JSON-RPC framing、文本同步以及
   UTF-8/UTF-16 位置编码协商均由框架处理。
-- **内置与自定义传输。** 框架内置 `stdio`、单客户端 TCP 与单客户端 WebSocket
-  adapter；也可以实现公开的 `Transport` trait，将 lspf 嵌入测试或其他消息通道。
+- **内置与自定义传输。** 框架内置 `stdio`、单客户端 TCP、单客户端 WebSocket
+  与 WASM worker-channel adapter；也可以实现公开的 `Transport` trait，将 lspf
+  嵌入测试或其他消息通道。
 
 ## 核心概念
 
@@ -202,7 +203,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 当前已经可用：
 
-- `stdio`、单客户端 TCP 与 WebSocket adapter，以及公开的自定义传输接口。
+- `stdio`、单客户端 TCP、WebSocket 与 WASM worker-channel adapter，以及公开的
+  自定义传输接口。
 - 构建出的 `Server`：带类型的请求、通知、Command、覆盖稳定 LSP 3.17 功能的封闭
   功能目录、用户 `Layer`，以及唯一的 `configure_initialize` 事务。
 - 生命周期、增量或全量文本文档同步，以及变更后文档钩子。
@@ -210,10 +212,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 - 通过 `Client` 发送带类型的服务端通知与可关联响应的请求。
 - 并发分发、有界并发、请求取消和 `tracing` span。
 - 基于 rope 的文档，以及 UTF-8/UTF-16 位置编码协商。
-
-已有规划，但尚未承诺发布版本：
-
-- 内置 WASM worker 传输。
 
 ## 示例
 
