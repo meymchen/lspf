@@ -21,7 +21,8 @@ lifecycle, document synchronization, cancellation, bounded concurrency,
 > not published yet: crates.io still carries **0.2**, and the
 > [changelog](./CHANGELOG.md) records what 0.3 adds on top of it. Hover,
 > completion, and commands were the standard features implemented in 0.2; the
-> first-party TCP, WebSocket, and WASM worker transports are still planned.
+> first-party TCP and WebSocket transports are implemented; the WASM worker
+> transport is still planned.
 
 ## Quick start
 
@@ -172,7 +173,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 - **Protocol details handled for you.** Lifecycle ordering, JSON-RPC
   framing, text synchronization, and UTF-8/UTF-16 position negotiation
   are built in.
-- **Transport escape hatch.** `stdio` is provided; implement the public
+- **First-party and custom transports.** `stdio`, single-client TCP, and
+  single-client WebSocket adapters are provided; implement the public
   `Transport` traits to embed lspf in tests or another message channel.
 
 ## Concepts
@@ -225,7 +227,8 @@ The full design lives next to the code:
 
 Available today:
 
-- `stdio` plus the public custom-transport interface.
+- `stdio`, single-client TCP and WebSocket adapters, plus the public
+  custom-transport interface.
 - The built `Server`: typed requests, notifications, commands, the sealed
   feature catalog covering the stable LSP 3.17 features, user `Layer`s, and
   the one `configure_initialize` transaction.
@@ -241,7 +244,7 @@ Available today:
 
 Planned, without a committed release number:
 
-- First-party TCP, WebSocket, and WASM worker transports.
+- The first-party WASM worker transport.
 
 ## Examples
 
