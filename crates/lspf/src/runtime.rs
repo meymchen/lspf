@@ -1,10 +1,6 @@
 // Exactly one concrete runtime exists in these configurations. On wasm32 the
 // `wasm` feature is enforced by `lib.rs`'s compile_error, so the target check
 // alone is enough there; on native targets a runtime needs `runtime-tokio`.
-#[cfg(any(
-    all(not(target_arch = "wasm32"), feature = "runtime-tokio"),
-    target_arch = "wasm32",
-))]
 use std::future::Future;
 
 #[cfg(target_arch = "wasm32")]
@@ -35,6 +31,16 @@ pub trait TaskSend: sealed::Sealed {}
 
 #[cfg(target_arch = "wasm32")]
 impl<T: ?Sized> TaskSend for T {}
+
+/// A type-erased future that preserves the target's task mobility bound.
+///
+/// This behavioral trait lets public and internal boxed-future aliases name
+/// [`TaskSend`] once instead of spelling target-specific `dyn Future + Send`
+/// forks at every erasure site.
+#[doc(hidden)]
+pub trait TaskFuture<T>: Future<Output = T> + TaskSend {}
+
+impl<T, F> TaskFuture<T> for F where F: Future<Output = T> + TaskSend + ?Sized {}
 
 /// Crate-private task execution boundary (ADR 0020).
 ///

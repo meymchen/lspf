@@ -44,6 +44,7 @@ use crate::context::Context;
 use crate::error::{BuildError, LspError};
 use crate::features::{FeatureSpec, NotificationFeatureSpec};
 use crate::file_provider::{SharedFileProvider, erase};
+use crate::runtime::{TaskFuture, TaskSend};
 use crate::service::{Layer, UserLayer};
 
 /// Method names owned by the framework's lifecycle; a custom request or
@@ -116,12 +117,81 @@ pub(crate) struct DocumentSyncSettings {
 
 /// The future produced by an erased request or command handler: its decoded,
 /// method-erased result or the error to report.
-type HandlerFuture = Pin<Box<dyn Future<Output = Result<Value, LspError>> + Send>>;
+type HandlerFuture = Pin<Box<dyn TaskFuture<Result<Value, LspError>>>>;
 
 /// The future produced by an erased notification handler. A notification has no
 /// response, so it resolves to `()`; when decoding fails the future logs the
 /// error and returns without invoking the typed handler.
-type NotificationFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
+type NotificationFuture = Pin<Box<dyn TaskFuture<()>>>;
+
+/// One target-aware erasure boundary for handlers shared by runtime tasks.
+///
+/// On native targets a stored handler must also be `Sync` because multiple
+/// Tokio tasks can invoke it through shared framework state. In a Web Worker
+/// all invocations stay on one thread. Futures retain their separate mobility
+/// requirement through [`TaskFuture`].
+#[cfg(not(target_arch = "wasm32"))]
+#[doc(hidden)]
+pub trait SharedHandler<Args, Output>: TaskSend + Sync {
+    fn invoke(&self, args: Args) -> Output;
+}
+
+#[cfg(target_arch = "wasm32")]
+#[doc(hidden)]
+pub trait SharedHandler<Args, Output>: TaskSend {
+    fn invoke(&self, args: Args) -> Output;
+}
+
+macro_rules! impl_shared_handler {
+    ($($arg:ident),+) => {
+        #[cfg(not(target_arch = "wasm32"))]
+        impl<F, Output, $($arg),+> SharedHandler<($($arg,)+), Output> for F
+        where
+            F: Fn($($arg),+) -> Output + TaskSend + Sync,
+        {
+            #[allow(non_snake_case)]
+            fn invoke(&self, ($($arg,)+): ($($arg,)+)) -> Output {
+                self($($arg),+)
+            }
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        impl<F, Output, $($arg),+> SharedHandler<($($arg,)+), Output> for F
+        where
+            F: Fn($($arg),+) -> Output + TaskSend,
+        {
+            #[allow(non_snake_case)]
+            fn invoke(&self, ($($arg,)+): ($($arg,)+)) -> Output {
+                self($($arg),+)
+            }
+        }
+    };
+}
+
+impl_shared_handler!(A, B);
+impl_shared_handler!(A, B, C);
+impl_shared_handler!(A, B, C, D);
+
+pub(crate) trait ConfigureInitializeCallback<S>: TaskSend {
+    fn invoke(
+        self: Box<Self>,
+        params: &InitializeParams,
+        registrar: &mut InitializeRegistrar<S>,
+    ) -> Result<(), LspError>;
+}
+
+impl<S, F> ConfigureInitializeCallback<S> for F
+where
+    F: FnOnce(&InitializeParams, &mut InitializeRegistrar<S>) -> Result<(), LspError> + TaskSend,
+{
+    fn invoke(
+        self: Box<Self>,
+        params: &InitializeParams,
+        registrar: &mut InitializeRegistrar<S>,
+    ) -> Result<(), LspError> {
+        self(params, registrar)
+    }
+}
 
 /// A type-erased custom request handler stored in the frozen [`Router`].
 ///
@@ -130,7 +200,7 @@ type NotificationFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 /// the success value once. Malformed parameters become
 /// [`LspError::InvalidParams`] without ever calling the typed handler.
 pub(crate) type ErasedRequestHandler<S> =
-    Box<dyn Fn(Arc<S>, Context, Value, CancellationToken) -> HandlerFuture + Send + Sync>;
+    Box<dyn SharedHandler<(Arc<S>, Context, Value, CancellationToken), HandlerFuture>>;
 
 /// A type-erased notification handler stored in the frozen [`Router`].
 ///
@@ -138,7 +208,7 @@ pub(crate) type ErasedRequestHandler<S> =
 /// it encodes nothing: notifications have no response. Malformed parameters are
 /// logged and dropped without ever calling the typed handler.
 pub(crate) type ErasedNotificationHandler<S> =
-    Box<dyn Fn(Arc<S>, Context, Value) -> NotificationFuture + Send + Sync>;
+    Box<dyn SharedHandler<(Arc<S>, Context, Value), NotificationFuture>>;
 
 /// A type-erased command handler stored in the frozen [`Router`].
 ///
@@ -149,28 +219,24 @@ pub(crate) type ErasedNotificationHandler<S> =
 ///
 /// [`ExecuteCommandParams`]: lsp_types::ExecuteCommandParams
 pub(crate) type ErasedCommandHandler<S> =
-    Box<dyn Fn(Arc<S>, Context, Vec<Value>, CancellationToken) -> HandlerFuture + Send + Sync>;
+    Box<dyn SharedHandler<(Arc<S>, Context, Vec<Value>, CancellationToken), HandlerFuture>>;
 
 /// The synchronous, run-at-most-once initialization-dependent registration
 /// callback (ADR 0017). It receives read-only `InitializeParams` and a
 /// transactional [`InitializeRegistrar`]; returning `Err` discards the whole
 /// transaction. Boxed `FnOnce` because the engine invokes it exactly once.
-pub(crate) type ConfigureInitialize<S> =
-    Box<dyn FnOnce(&InitializeParams, &mut InitializeRegistrar<S>) -> Result<(), LspError> + Send>;
+pub(crate) type ConfigureInitialize<S> = Box<dyn ConfigureInitializeCallback<S>>;
 
 /// The future produced by the erased `on_initialize` hook: optional
 /// [`ServerInfo`] to combine with the generated capabilities, or an
 /// [`LspError`] that fails initialization.
-type OnInitializeFuture =
-    Pin<Box<dyn Future<Output = Result<Option<ServerInfo>, LspError>> + Send>>;
+type OnInitializeFuture = Pin<Box<dyn TaskFuture<Result<Option<ServerInfo>, LspError>>>>;
 
 /// The erased `on_initialize` lifecycle hook (ADR 0018). It has the request
 /// handler shape but returns optional [`ServerInfo`]; it cannot register routes
 /// or replace the generated capabilities.
 pub(crate) type OnInitialize<S> = Box<
-    dyn Fn(Arc<S>, Context, InitializeParams, CancellationToken) -> OnInitializeFuture
-        + Send
-        + Sync,
+    dyn SharedHandler<(Arc<S>, Context, InitializeParams, CancellationToken), OnInitializeFuture>,
 >;
 
 /// The erased `on_initialized` lifecycle hook. It has the notification handler
@@ -178,13 +244,13 @@ pub(crate) type OnInitialize<S> = Box<
 /// resolves to `()`. The engine invokes it at most once, only after the
 /// initialize transaction succeeded.
 pub(crate) type OnInitialized<S> =
-    Box<dyn Fn(Arc<S>, Context, InitializedParams) -> NotificationFuture + Send + Sync>;
+    Box<dyn SharedHandler<(Arc<S>, Context, InitializedParams), NotificationFuture>>;
 
 /// The erased `on_exit` lifecycle hook. `exit` carries no parameters, so the
 /// typed hook receives only the shared state and a [`Context`]; it resolves to
 /// `()`, which is what keeps the engine's lifecycle-derived [`Outcome`] beyond
 /// its reach.
-pub(crate) type OnExit<S> = Box<dyn Fn(Arc<S>, Context) -> NotificationFuture + Send + Sync>;
+pub(crate) type OnExit<S> = Box<dyn SharedHandler<(Arc<S>, Context), NotificationFuture>>;
 
 /// Wrap a typed request handler in the erased closure the [`Router`] stores.
 /// Shared by [`ServerBuilder::request`] and [`ServerBuilder::feature`], which
@@ -193,16 +259,18 @@ fn erase_request<S, R, H, Fut>(handler: H) -> ErasedRequestHandler<S>
 where
     S: Send + Sync + 'static,
     R: Request,
-    H: Fn(Arc<S>, Context, R::Params, CancellationToken) -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = Result<R::Result, LspError>> + Send + 'static,
+    H: Fn(Arc<S>, Context, R::Params, CancellationToken) -> Fut
+        + SharedHandler<(Arc<S>, Context, R::Params, CancellationToken), Fut>
+        + 'static,
+    Fut: Future<Output = Result<R::Result, LspError>> + TaskSend + 'static,
 {
     let handler = Arc::new(handler);
-    Box::new(move |state, ctx, params, ct| {
+    Box::new(move |state, ctx, params, ct| -> HandlerFuture {
         let handler = Arc::clone(&handler);
         Box::pin(async move {
             let parsed: R::Params =
                 serde_json::from_value(params).map_err(LspError::invalid_params)?;
-            let result = handler(state, ctx, parsed, ct).await?;
+            let result = handler.invoke((state, ctx, parsed, ct)).await?;
             erase_value(result)
         })
     })
@@ -217,11 +285,13 @@ fn erase_notification<S, N, H, Fut>(handler: H) -> ErasedNotificationHandler<S>
 where
     S: Send + Sync + 'static,
     N: Notification,
-    H: Fn(Arc<S>, Context, N::Params) -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = ()> + Send + 'static,
+    H: Fn(Arc<S>, Context, N::Params) -> Fut
+        + SharedHandler<(Arc<S>, Context, N::Params), Fut>
+        + 'static,
+    Fut: Future<Output = ()> + TaskSend + 'static,
 {
     let handler = Arc::new(handler);
-    Box::new(move |state, ctx, params| {
+    Box::new(move |state, ctx, params| -> NotificationFuture {
         let handler = Arc::clone(&handler);
         Box::pin(async move {
             let parsed: N::Params = match serde_json::from_value(params) {
@@ -238,7 +308,7 @@ where
                     return;
                 }
             };
-            handler(state, ctx, parsed).await;
+            handler.invoke((state, ctx, parsed)).await;
         })
     })
 }
@@ -279,10 +349,16 @@ impl<S: Send + Sync + 'static> Registrations<S> {
     where
         F: FeatureSpec,
         H: Fn(Arc<S>, Context, <F::Marker as Request>::Params, CancellationToken) -> Fut
-            + Send
-            + Sync
-            + 'static,
-        Fut: Future<Output = Result<<F::Marker as Request>::Result, LspError>> + Send + 'static,
+            + SharedHandler<
+                (
+                    Arc<S>,
+                    Context,
+                    <F::Marker as Request>::Params,
+                    CancellationToken,
+                ),
+                Fut,
+            > + 'static,
+        Fut: Future<Output = Result<<F::Marker as Request>::Result, LspError>> + TaskSend + 'static,
     {
         let method = <F::Marker as Request>::METHOD.to_string();
         let erased = erase_request::<S, F::Marker, H, Fut>(handler);
@@ -294,8 +370,10 @@ impl<S: Send + Sync + 'static> Registrations<S> {
     fn add_request<R, H, Fut>(&mut self, handler: H) -> Result<(), BuildError>
     where
         R: Request,
-        H: Fn(Arc<S>, Context, R::Params, CancellationToken) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<R::Result, LspError>> + Send + 'static,
+        H: Fn(Arc<S>, Context, R::Params, CancellationToken) -> Fut
+            + SharedHandler<(Arc<S>, Context, R::Params, CancellationToken), Fut>
+            + 'static,
+        Fut: Future<Output = Result<R::Result, LspError>> + TaskSend + 'static,
     {
         let method = R::METHOD.to_string();
         let erased = erase_request::<S, R, H, Fut>(handler);
@@ -324,8 +402,10 @@ impl<S: Send + Sync + 'static> Registrations<S> {
     fn add_notification<N, H, Fut>(&mut self, handler: H) -> Result<(), BuildError>
     where
         N: Notification,
-        H: Fn(Arc<S>, Context, N::Params) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
+        H: Fn(Arc<S>, Context, N::Params) -> Fut
+            + SharedHandler<(Arc<S>, Context, N::Params), Fut>
+            + 'static,
+        Fut: Future<Output = ()> + TaskSend + 'static,
     {
         let method = N::METHOD.to_string();
         let erased = erase_notification::<S, N, H, Fut>(handler);
@@ -339,8 +419,10 @@ impl<S: Send + Sync + 'static> Registrations<S> {
     fn add_feature_notification<F, H, Fut>(&mut self, spec: F, handler: H) -> Result<(), BuildError>
     where
         F: NotificationFeatureSpec,
-        H: Fn(Arc<S>, Context, <F::Marker as Notification>::Params) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
+        H: Fn(Arc<S>, Context, <F::Marker as Notification>::Params) -> Fut
+            + SharedHandler<(Arc<S>, Context, <F::Marker as Notification>::Params), Fut>
+            + 'static,
+        Fut: Future<Output = ()> + TaskSend + 'static,
     {
         let method = <F::Marker as Notification>::METHOD.to_string();
         let erased = erase_notification::<S, F::Marker, H, Fut>(handler);
@@ -378,24 +460,27 @@ impl<S: Send + Sync + 'static> Registrations<S> {
         handler: H,
     ) -> Result<(), BuildError>
     where
-        Args: DeserializeOwned + Send + 'static,
+        Args: DeserializeOwned + TaskSend + 'static,
         Output: Serialize + 'static,
-        H: Fn(Arc<S>, Context, Args, CancellationToken) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<Output, LspError>> + Send + 'static,
+        H: Fn(Arc<S>, Context, Args, CancellationToken) -> Fut
+            + SharedHandler<(Arc<S>, Context, Args, CancellationToken), Fut>
+            + 'static,
+        Fut: Future<Output = Result<Output, LspError>> + TaskSend + 'static,
     {
         if name.is_empty() {
             return Err(BuildError::EmptyCommandName);
         }
         let handler = Arc::new(handler);
-        let erased: ErasedCommandHandler<S> = Box::new(move |state, ctx, arguments, ct| {
-            let handler = Arc::clone(&handler);
-            Box::pin(async move {
-                let args: Args = serde_json::from_value(Value::Array(arguments))
-                    .map_err(LspError::invalid_params)?;
-                let result = handler(state, ctx, args, ct).await?;
-                erase_value(result)
-            })
-        });
+        let erased: ErasedCommandHandler<S> =
+            Box::new(move |state, ctx, arguments, ct| -> HandlerFuture {
+                let handler = Arc::clone(&handler);
+                Box::pin(async move {
+                    let args: Args = serde_json::from_value(Value::Array(arguments))
+                        .map_err(LspError::invalid_params)?;
+                    let result = handler.invoke((state, ctx, args, ct)).await?;
+                    erase_value(result)
+                })
+            });
         if self.commands.insert(name.clone(), erased).is_some() {
             return Err(BuildError::DuplicateCommand(name));
         }
@@ -649,10 +734,16 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
     where
         F: FeatureSpec,
         H: Fn(Arc<S>, Context, <F::Marker as Request>::Params, CancellationToken) -> Fut
-            + Send
-            + Sync
-            + 'static,
-        Fut: Future<Output = Result<<F::Marker as Request>::Result, LspError>> + Send + 'static,
+            + SharedHandler<
+                (
+                    Arc<S>,
+                    Context,
+                    <F::Marker as Request>::Params,
+                    CancellationToken,
+                ),
+                Fut,
+            > + 'static,
+        Fut: Future<Output = Result<<F::Marker as Request>::Result, LspError>> + TaskSend + 'static,
     {
         if let Err(err) = self.registrations.add_feature(spec, handler) {
             self.record(err);
@@ -674,8 +765,10 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
     pub fn request<R, H, Fut>(mut self, handler: H) -> Self
     where
         R: Request,
-        H: Fn(Arc<S>, Context, R::Params, CancellationToken) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<R::Result, LspError>> + Send + 'static,
+        H: Fn(Arc<S>, Context, R::Params, CancellationToken) -> Fut
+            + SharedHandler<(Arc<S>, Context, R::Params, CancellationToken), Fut>
+            + 'static,
+        Fut: Future<Output = Result<R::Result, LspError>> + TaskSend + 'static,
     {
         if let Err(err) = self.registrations.add_request::<R, H, Fut>(handler) {
             self.record(err);
@@ -699,8 +792,10 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
     pub fn notification<N, H, Fut>(mut self, handler: H) -> Self
     where
         N: Notification,
-        H: Fn(Arc<S>, Context, N::Params) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
+        H: Fn(Arc<S>, Context, N::Params) -> Fut
+            + SharedHandler<(Arc<S>, Context, N::Params), Fut>
+            + 'static,
+        Fut: Future<Output = ()> + TaskSend + 'static,
     {
         if let Err(err) = self.registrations.add_notification::<N, H, Fut>(handler) {
             self.record(err);
@@ -725,8 +820,10 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
     pub fn feature_notification<F, H, Fut>(mut self, spec: F, handler: H) -> Self
     where
         F: NotificationFeatureSpec,
-        H: Fn(Arc<S>, Context, <F::Marker as Notification>::Params) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
+        H: Fn(Arc<S>, Context, <F::Marker as Notification>::Params) -> Fut
+            + SharedHandler<(Arc<S>, Context, <F::Marker as Notification>::Params), Fut>
+            + 'static,
+        Fut: Future<Output = ()> + TaskSend + 'static,
     {
         if let Err(err) = self.registrations.add_feature_notification(spec, handler) {
             self.record(err);
@@ -752,10 +849,12 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
     /// is a [`BuildError`] reported by [`build`](Self::build).
     pub fn command<Args, Output, H, Fut>(mut self, name: impl Into<String>, handler: H) -> Self
     where
-        Args: DeserializeOwned + Send + 'static,
+        Args: DeserializeOwned + TaskSend + 'static,
         Output: Serialize + 'static,
-        H: Fn(Arc<S>, Context, Args, CancellationToken) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<Output, LspError>> + Send + 'static,
+        H: Fn(Arc<S>, Context, Args, CancellationToken) -> Fut
+            + SharedHandler<(Arc<S>, Context, Args, CancellationToken), Fut>
+            + 'static,
+        Fut: Future<Output = Result<Output, LspError>> + TaskSend + 'static,
     {
         if let Err(err) = self
             .registrations
@@ -781,7 +880,7 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
     pub fn configure_initialize<F>(mut self, callback: F) -> Self
     where
         F: FnOnce(&InitializeParams, &mut InitializeRegistrar<S>) -> Result<(), LspError>
-            + Send
+            + TaskSend
             + 'static,
     {
         if self.configure_initialize.is_some() {
@@ -804,17 +903,21 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
     /// [`BuildError::DuplicateLifecycleHook`] reported by [`build`](Self::build).
     pub fn on_initialize<H, Fut>(mut self, hook: H) -> Self
     where
-        H: Fn(Arc<S>, Context, InitializeParams, CancellationToken) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<Option<ServerInfo>, LspError>> + Send + 'static,
+        H: Fn(Arc<S>, Context, InitializeParams, CancellationToken) -> Fut
+            + SharedHandler<(Arc<S>, Context, InitializeParams, CancellationToken), Fut>
+            + 'static,
+        Fut: Future<Output = Result<Option<ServerInfo>, LspError>> + TaskSend + 'static,
     {
         if self.on_initialize.is_some() {
             self.record(BuildError::DuplicateLifecycleHook("on_initialize"));
         } else {
             // The hook runs once, so — unlike the many-shot request handlers —
             // it needs no `Arc`; the erasing closure just boxes its future.
-            self.on_initialize = Some(Box::new(move |state, ctx, params, ct| {
-                Box::pin(hook(state, ctx, params, ct))
-            }));
+            self.on_initialize = Some(Box::new(
+                move |state, ctx, params, ct| -> OnInitializeFuture {
+                    Box::pin(hook.invoke((state, ctx, params, ct)))
+                },
+            ));
         }
         self
     }
@@ -833,14 +936,16 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
     /// [`BuildError::DuplicateLifecycleHook`] reported by [`build`](Self::build).
     pub fn on_initialized<H, Fut>(mut self, hook: H) -> Self
     where
-        H: Fn(Arc<S>, Context, InitializedParams) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
+        H: Fn(Arc<S>, Context, InitializedParams) -> Fut
+            + SharedHandler<(Arc<S>, Context, InitializedParams), Fut>
+            + 'static,
+        Fut: Future<Output = ()> + TaskSend + 'static,
     {
         if self.on_initialized.is_some() {
             self.record(BuildError::DuplicateLifecycleHook("on_initialized"));
         } else {
-            self.on_initialized = Some(Box::new(move |state, ctx, params| {
-                Box::pin(hook(state, ctx, params))
+            self.on_initialized = Some(Box::new(move |state, ctx, params| -> NotificationFuture {
+                Box::pin(hook.invoke((state, ctx, params)))
             }));
         }
         self
@@ -862,13 +967,15 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
     /// [`BuildError::DuplicateLifecycleHook`] reported by [`build`](Self::build).
     pub fn on_exit<H, Fut>(mut self, hook: H) -> Self
     where
-        H: Fn(Arc<S>, Context) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
+        H: Fn(Arc<S>, Context) -> Fut + SharedHandler<(Arc<S>, Context), Fut> + 'static,
+        Fut: Future<Output = ()> + TaskSend + 'static,
     {
         if self.on_exit.is_some() {
             self.record(BuildError::DuplicateLifecycleHook("on_exit"));
         } else {
-            self.on_exit = Some(Box::new(move |state, ctx| Box::pin(hook(state, ctx))));
+            self.on_exit = Some(Box::new(move |state, ctx| -> NotificationFuture {
+                Box::pin(hook.invoke((state, ctx)))
+            }));
         }
         self
     }
@@ -973,10 +1080,16 @@ impl<S: Send + Sync + 'static> InitializeRegistrar<S> {
     where
         F: FeatureSpec,
         H: Fn(Arc<S>, Context, <F::Marker as Request>::Params, CancellationToken) -> Fut
-            + Send
-            + Sync
-            + 'static,
-        Fut: Future<Output = Result<<F::Marker as Request>::Result, LspError>> + Send + 'static,
+            + SharedHandler<
+                (
+                    Arc<S>,
+                    Context,
+                    <F::Marker as Request>::Params,
+                    CancellationToken,
+                ),
+                Fut,
+            > + 'static,
+        Fut: Future<Output = Result<<F::Marker as Request>::Result, LspError>> + TaskSend + 'static,
     {
         self.try_register(|r| r.add_feature(spec, handler))
     }
@@ -986,8 +1099,10 @@ impl<S: Send + Sync + 'static> InitializeRegistrar<S> {
     pub fn request<R, H, Fut>(&mut self, handler: H) -> &mut Self
     where
         R: Request,
-        H: Fn(Arc<S>, Context, R::Params, CancellationToken) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<R::Result, LspError>> + Send + 'static,
+        H: Fn(Arc<S>, Context, R::Params, CancellationToken) -> Fut
+            + SharedHandler<(Arc<S>, Context, R::Params, CancellationToken), Fut>
+            + 'static,
+        Fut: Future<Output = Result<R::Result, LspError>> + TaskSend + 'static,
     {
         self.try_register(|r| r.add_request::<R, H, Fut>(handler))
     }
@@ -997,8 +1112,10 @@ impl<S: Send + Sync + 'static> InitializeRegistrar<S> {
     pub fn notification<N, H, Fut>(&mut self, handler: H) -> &mut Self
     where
         N: Notification,
-        H: Fn(Arc<S>, Context, N::Params) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
+        H: Fn(Arc<S>, Context, N::Params) -> Fut
+            + SharedHandler<(Arc<S>, Context, N::Params), Fut>
+            + 'static,
+        Fut: Future<Output = ()> + TaskSend + 'static,
     {
         self.try_register(|r| r.add_notification::<N, H, Fut>(handler))
     }
@@ -1008,8 +1125,10 @@ impl<S: Send + Sync + 'static> InitializeRegistrar<S> {
     pub fn feature_notification<F, H, Fut>(&mut self, spec: F, handler: H) -> &mut Self
     where
         F: NotificationFeatureSpec,
-        H: Fn(Arc<S>, Context, <F::Marker as Notification>::Params) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
+        H: Fn(Arc<S>, Context, <F::Marker as Notification>::Params) -> Fut
+            + SharedHandler<(Arc<S>, Context, <F::Marker as Notification>::Params), Fut>
+            + 'static,
+        Fut: Future<Output = ()> + TaskSend + 'static,
     {
         self.try_register(|r| r.add_feature_notification(spec, handler))
     }
@@ -1021,10 +1140,12 @@ impl<S: Send + Sync + 'static> InitializeRegistrar<S> {
         handler: H,
     ) -> &mut Self
     where
-        Args: DeserializeOwned + Send + 'static,
+        Args: DeserializeOwned + TaskSend + 'static,
         Output: Serialize + 'static,
-        H: Fn(Arc<S>, Context, Args, CancellationToken) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<Output, LspError>> + Send + 'static,
+        H: Fn(Arc<S>, Context, Args, CancellationToken) -> Fut
+            + SharedHandler<(Arc<S>, Context, Args, CancellationToken), Fut>
+            + 'static,
+        Fut: Future<Output = Result<Output, LspError>> + TaskSend + 'static,
     {
         self.try_register(|r| r.add_command::<Args, Output, H, Fut>(name.into(), handler))
     }
