@@ -78,3 +78,16 @@ fn the_framework_never_fakes_send_or_sync() {
         );
     }
 }
+
+#[test]
+fn task_send_is_the_only_conditional_runtime_marker() {
+    let runtime =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/runtime.rs"))
+            .expect("the runtime source is readable");
+
+    assert!(runtime.contains("pub trait TaskSend"));
+    assert!(
+        !runtime.contains("pub trait TaskSync"),
+        "ADR 0020 assigns the complete native/WASM task-bound difference to TaskSend"
+    );
+}

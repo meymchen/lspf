@@ -69,6 +69,15 @@ signatures do not gain target-specific variants; only the internal task and
 handler bounds differ, expressed through `TaskSend`. The business call shape
 of ADR 0017 is unchanged.
 
+Rust trait objects cannot combine `Fn` or `Future` with a non-auto marker
+trait such as `TaskSend`. The framework may therefore expose doc-hidden,
+blanket-implemented behavioral adapter traits solely to erase those values.
+Such an adapter is not another conditional marker or an extension point: it
+must include the callable or awaitable operation it erases, retain `TaskSend`
+as the complete target-dependent `Send` constraint, and may add native-only
+`Sync` for shared handlers. All target-specific erased-handler aliases must go
+through that one callable adapter rather than repeating raw `+ Send` forks.
+
 Transport reader and writer execution requires `Send` on native: the
 `Transport` trait keeps its `Send + 'static` supertrait there, and the reader
 and writer tasks are ordinary `Send` futures on the multi-threaded runtime.
@@ -118,6 +127,12 @@ handler registration compiles on both targets from one source, but it is
 sealed against manual implementation and is not a user extension point. A
 type either already satisfies the target's requirement or the program does
 not compile; there is no opt-in or opt-out.
+
+A doc-hidden callable adapter permitted above may also appear in a public
+registration bound because Rust checks that bound at the call site. Its
+blanket implementations preserve the same source-level closure signature:
+native handlers satisfy `Send + Sync + 'static`, while WASM handlers satisfy
+`'static`. It does not replace `TaskSend` on futures or runtime tasks.
 
 ADR 0017's registration bounds are now target-conditional through this
 marker. On native targets they remain exactly `Send + Sync + 'static` for
