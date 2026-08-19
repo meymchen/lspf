@@ -251,6 +251,42 @@ async fn initialize_custom_request_shutdown_round_trip() {
     assert_eq!(handled, 1, "the typed handler ran exactly once");
 }
 
+// Adapted from clangd's JSON transport tests: string request ids must be
+// echoed unchanged by the response, including through typed dispatch.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn string_request_id_is_echoed_unchanged() {
+    let request_id = RequestId::String("editor-request".to_string());
+    let (outbox, handled) = drive(vec![
+        initialize_request(1),
+        RawMessage::Request {
+            id: request_id.clone(),
+            method: Cow::Borrowed(Greet::METHOD),
+            params: Bytes::from_static(br#"{"name":"Ada"}"#),
+        },
+        notification("exit"),
+    ])
+    .await;
+
+    let response = outbox
+        .iter()
+        .find(|message| message.id() == Some(&request_id))
+        .expect("response preserves the string request id");
+    let RawMessage::Response {
+        result: Ok(result), ..
+    } = response
+    else {
+        panic!("expected successful response, got {response:?}");
+    };
+    let greeting: GreetResult = serde_json::from_slice(result).unwrap();
+    assert_eq!(
+        greeting,
+        GreetResult {
+            greeting: "Hello, Ada!".to_string()
+        }
+    );
+    assert_eq!(handled, 1, "the typed handler ran exactly once");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn invalid_params_return_invalid_params_and_a_later_request_succeeds() {
     let (outbox, handled) = drive(vec![
