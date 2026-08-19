@@ -16,6 +16,8 @@ pub mod framing;
 mod stdio;
 #[cfg(all(feature = "tcp", not(target_arch = "wasm32")))]
 mod tcp;
+#[cfg(all(feature = "websocket", not(target_arch = "wasm32")))]
+mod websocket;
 
 use std::future::Future;
 use std::io;
@@ -30,11 +32,18 @@ use crate::raw::RawMessage;
 pub use stdio::{StdioReader, StdioTransport, StdioWriter};
 #[cfg(all(feature = "tcp", not(target_arch = "wasm32")))]
 pub use tcp::{TcpBuilder, TcpReader, TcpTransport, TcpWriter, tcp};
+#[cfg(all(feature = "websocket", not(target_arch = "wasm32")))]
+pub use websocket::{
+    WebSocketBuilder, WebSocketReader, WebSocketTransport, WebSocketWriter, websocket,
+};
 
-/// Write failures that mean the peer is gone collapse to
+/// I/O failures that mean the peer is gone collapse to
 /// [`TransportError::Closed`]; every other I/O failure keeps its source.
-#[cfg(all(any(feature = "stdio", feature = "tcp"), not(target_arch = "wasm32")))]
-pub(crate) fn classify_write_error(error: io::Error) -> TransportError {
+#[cfg(all(
+    any(feature = "stdio", feature = "tcp", feature = "websocket"),
+    not(target_arch = "wasm32")
+))]
+pub(crate) fn classify_io_error(error: io::Error) -> TransportError {
     match error.kind() {
         io::ErrorKind::BrokenPipe
         | io::ErrorKind::ConnectionAborted
