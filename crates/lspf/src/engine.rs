@@ -8,8 +8,9 @@
 //! `on_initialize` lifecycle hook — all without exposing partial state
 //! (ADR 0017, ADR 0018). The later lifecycle notifications carry the remaining
 //! hooks: the client's `initialized` runs `on_initialized` once, in the
-//! running state only, and the peer's `exit` runs `on_exit` before the engine
-//! computes the exit outcome (ADR 0024) — the hook resolves to `()`, so it
+//! running state only, a successful `on_shutdown` gates the transition into
+//! shutting down, and the peer's `exit` runs `on_exit` before the engine
+//! computes the exit outcome (ADR 0024) — the exit hook resolves to `()`, so it
 //! cannot change the exit code the lifecycle implies. Inbound
 //! requests reserve their IDs before user work is spawned; the engine's atomic
 //! completion gate then arbitrates success, errors, and cancellation.
@@ -29,6 +30,7 @@ use std::sync::{Arc, Mutex};
 use bytes::Bytes;
 use futures_channel::mpsc::UnboundedReceiver;
 use futures_util::FutureExt;
+use futures_util::future::{Either, select};
 use futures_util::select_biased;
 use lsp_types::{
     DidChangeConfigurationParams, DidChangeTextDocumentParams, DidChangeWorkspaceFoldersParams,
@@ -42,7 +44,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Span, debug, info_span, warn};
 
 use crate::builder::{
-    ConfigureInitialize, InitializeRegistrar, OnExit, OnInitialize, OnInitialized,
+    ConfigureInitialize, InitializeRegistrar, OnExit, OnInitialize, OnInitialized, OnShutdown,
     ProtocolNotification, Registrations, Server,
 };
 use crate::capability::GeneratedCapabilities;
@@ -249,7 +251,7 @@ where
 
 struct TaskGroup<R> {
     runtime: R,
-    handles: Vec<TrackedTask>,
+    handles: Vec<TaskHandle>,
 }
 
 #[derive(Clone, Copy, Default, Eq, PartialEq)]
@@ -263,11 +265,6 @@ impl RequestGeneration {
     }
 }
 
-struct TrackedTask {
-    request_generation: RequestGeneration,
-    handle: TaskHandle,
-}
-
 impl<R: Runtime> TaskGroup<R> {
     fn new(runtime: R) -> Self {
         Self {
@@ -276,55 +273,35 @@ impl<R: Runtime> TaskGroup<R> {
         }
     }
 
-    fn spawn_request<F>(&mut self, generation: RequestGeneration, future: F)
+    fn spawn<F>(&mut self, future: F)
     where
         F: Future<Output = ()> + TaskSend + 'static,
     {
-        self.handles.push(TrackedTask {
-            request_generation: generation,
-            handle: self.runtime.spawn(future),
-        });
+        self.handles.push(self.runtime.spawn(future));
     }
 
     async fn reap_finished(&mut self) {
         let mut running = Vec::with_capacity(self.handles.len());
-        for task in std::mem::take(&mut self.handles) {
-            if task.handle.is_finished() {
-                task.handle.join().await;
+        for handle in std::mem::take(&mut self.handles) {
+            if handle.is_finished() {
+                handle.join().await;
             } else {
-                running.push(task);
+                running.push(handle);
             }
         }
         self.handles = running;
     }
 
     async fn abort_and_join(&mut self) {
-        for task in &self.handles {
-            task.handle.abort();
+        for handle in &self.handles {
+            handle.abort();
         }
         self.join_all().await;
     }
 
-    async fn abort_and_join_request(&mut self, generation: RequestGeneration) {
-        let Some(index) = self
-            .handles
-            .iter()
-            .position(|task| task.request_generation == generation)
-        else {
-            return;
-        };
-        let task = self.handles.swap_remove(index);
-        // Let cooperative handlers observe their CancellationToken before the
-        // runtime abort drops the future. This preserves the explicit-token
-        // contract while still making abort-then-join the terminal guarantee.
-        self.runtime.yield_now().await;
-        task.handle.abort();
-        task.handle.join().await;
-    }
-
     async fn join_all(&mut self) {
-        for task in std::mem::take(&mut self.handles) {
-            task.handle.join().await;
+        for handle in std::mem::take(&mut self.handles) {
+            handle.join().await;
         }
     }
 }
@@ -565,6 +542,7 @@ struct Pending<S> {
     configure_initialize: Option<ConfigureInitialize<S>>,
     on_initialize: Option<OnInitialize<S>>,
     on_initialized: Option<OnInitialized<S>>,
+    on_shutdown: Option<OnShutdown<S>>,
     on_exit: Option<OnExit<S>>,
     layers: Vec<UserLayer<S>>,
     concurrency_limit: usize,
@@ -596,6 +574,10 @@ struct ProtocolEngine<S, R> {
     /// notification. Lifted out of [`Pending`] when the initialize transaction
     /// succeeds, and taken by the first running-state `initialized` message.
     on_initialized: Option<OnInitialized<S>>,
+    /// The `on_shutdown` hook for the running state. Unlike notification hooks,
+    /// it is reusable after an error because a failed attempt leaves the
+    /// connection running and the client may send shutdown again.
+    on_shutdown: Option<OnShutdown<S>>,
     /// The `on_exit` hook awaiting the peer's `exit` notification. Lifted out
     /// of [`Pending`] when the initialize transaction succeeds; an `exit`
     /// received earlier closes without a Workspace to hand it.
@@ -640,11 +622,13 @@ where
                 configure_initialize: server.configure_initialize,
                 on_initialize: server.on_initialize,
                 on_initialized: server.on_initialized,
+                on_shutdown: server.on_shutdown,
                 on_exit: server.on_exit,
                 layers: server.layers,
                 concurrency_limit: server.concurrency_limit,
             })),
             on_initialized: None,
+            on_shutdown: None,
             on_exit: None,
             inbound: InboundRegistry::default(),
             tasks: TaskGroup::new(runtime),
@@ -749,10 +733,38 @@ where
                 match method.as_ref() {
                     "initialize" => return self.initialize(&span, reservation, params).await,
                     "shutdown" => {
-                        // The shutdown request answers itself first, so its own
-                        // entry is gone before the sweep below; only then does a
-                        // successful shutdown cancel the rest of the in-flight
-                        // work and enter `ShuttingDown`.
+                        let params_result = if params.is_empty() {
+                            Ok(())
+                        } else {
+                            decode_params::<()>(&params)
+                        };
+                        if let Err(err) = params_result {
+                            self.inbound.complete(&self.out_tx, reservation, Err(err));
+                            return Flow::Continue;
+                        }
+                        if let Some(hook) = &self.on_shutdown {
+                            let cancellation = cancellation
+                                .expect("shutdown is a cancellable non-initialize request");
+                            let ctx = Context::for_request(
+                                reservation.id.clone(),
+                                span.clone(),
+                                self.client.clone(),
+                                self.established_workspace(),
+                            )
+                            .with_cancellation(cancellation.clone());
+                            if let Err(err) = hook
+                                .invoke((Arc::clone(&self.state), ctx, (), cancellation))
+                                .instrument(span.clone())
+                                .await
+                            {
+                                self.inbound.complete(&self.out_tx, reservation, Err(err));
+                                return Flow::Continue;
+                            }
+                        }
+                        // The successful shutdown request answers itself first,
+                        // so its own entry is gone before the sweep below; only
+                        // then cancel the rest of the in-flight work and enter
+                        // `ShuttingDown`.
                         self.inbound.complete(
                             &self.out_tx,
                             reservation,
@@ -827,9 +839,6 @@ where
                     match serde_json::from_slice::<CancelParams>(bytes) {
                         Ok(cancel) => {
                             if let Some(reservation) = self.inbound.claim_cancellation(&cancel.id) {
-                                self.tasks
-                                    .abort_and_join_request(reservation.generation)
-                                    .await;
                                 enqueue_encoded(
                                     &self.out_tx,
                                     reservation.id,
@@ -1088,7 +1097,7 @@ where
     /// `configure_initialize` against a transactional registrar; on success
     /// commit and permanently freeze the Router; establish the `Workspace`,
     /// `Documents` encoding, and generated capabilities; park the
-    /// `on_initialized` and `on_exit` hooks for the running state; run
+    /// `on_initialized`, `on_shutdown`, and `on_exit` hooks for the running state; run
     /// `on_initialize` for optional `ServerInfo`; then enter the running state
     /// and reply. Any configuration, validation, or `on_initialize` failure
     /// enqueues the fixed error and requests the terminal close rather than
@@ -1131,6 +1140,7 @@ where
             configure_initialize,
             on_initialize,
             on_initialized,
+            on_shutdown,
             on_exit,
             layers,
             concurrency_limit,
@@ -1170,6 +1180,7 @@ where
         // dispatch in the running state, which the transaction enters at its
         // end; they stay parked here until then.
         self.on_initialized = on_initialized;
+        self.on_shutdown = on_shutdown;
         self.on_exit = on_exit;
 
         // Establish Workspace, Documents encoding, and generated capabilities
@@ -1274,10 +1285,11 @@ where
         )
     }
 
-    /// Spawn one user request into the engine's task group. Cancellation first
-    /// fires the explicit token, then aborts and joins this tracked task; the
-    /// completion gate rejects any result produced after another path claimed
-    /// the reservation.
+    /// Spawn one user request into the engine's task group. The task races user
+    /// dispatch against its explicit cancellation token. When cancellation
+    /// wins, one final poll lets cooperative handler code observe the token
+    /// before the future is dropped; the completion gate rejects any result
+    /// produced after another path claimed the reservation.
     fn spawn_service_request(
         &mut self,
         service: UserService<S>,
@@ -1292,13 +1304,28 @@ where
         let out_tx = self.out_tx.clone();
         let client = self.client.clone();
         let inbound = self.inbound.clone();
-        let generation = reservation.generation;
-        self.tasks.spawn_request(generation, async move {
+        self.tasks.spawn(async move {
             let id = reservation.id.clone();
+            let cancellation_for_handler = cancellation.clone();
             let ctx = Context::for_request(id.clone(), span, client, workspace)
-                .with_cancellation(cancellation);
+                .with_cancellation(cancellation_for_handler);
             let call = IncomingCall::request(method, id, params, ctx, state);
-            let result = service.call(call).await;
+            let result = match select(
+                Box::pin(service.call(call)),
+                Box::pin(cancellation.cancelled()),
+            )
+            .await
+            {
+                Either::Left((result, _)) => result,
+                Either::Right(((), handler)) => {
+                    // CancellationToken wakes every waiter, but an executor
+                    // yield does not guarantee this handler is polled before a
+                    // separate abort. Poll it here, in its own task, then end
+                    // the task without relying on scheduler fairness.
+                    let _ = handler.now_or_never();
+                    ServiceResult::Error(LspError::RequestCancelled)
+                }
+            };
             let result = match result {
                 ServiceResult::Response(value) => encode_body(&value),
                 ServiceResult::Error(error) => Err(error),
@@ -1356,13 +1383,7 @@ where
 /// against a connection nobody owns.
 impl<S, R> Drop for ProtocolEngine<S, R> {
     fn drop(&mut self) {
-        for handle in self
-            .tasks
-            .handles
-            .iter()
-            .map(|task| &task.handle)
-            .chain(self.send_task.iter())
-        {
+        for handle in self.tasks.handles.iter().chain(self.send_task.iter()) {
             handle.abort();
         }
     }
