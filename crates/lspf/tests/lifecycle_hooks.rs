@@ -1,11 +1,12 @@
 //! Lifecycle-hook coverage for the stable catalog boundary (issue #81).
 //!
-//! `on_initialized` runs at most once, only after a successful initialize
-//! transaction; `on_exit` runs before the protocol engine records the close
-//! cause that becomes the session `Outcome` and cannot change the LSP exit
-//! code that Outcome carries. Every test drives the public `Server::serve`
-//! transport seam and asserts on the returned `Outcome` plus what each hook
-//! observed, so no assertion depends on a scheduler delay.
+//! `on_initialized` runs at most once after initialization; `on_shutdown`
+//! gates the transition into shutting down and leaves the connection running
+//! on error; `on_exit` runs before the protocol engine records the close cause
+//! that becomes the session `Outcome` and cannot change its LSP exit code.
+//! Every test drives the public `Server::serve` transport seam and asserts on
+//! the returned `Outcome` plus what each hook observed, so no assertion depends
+//! on a scheduler delay.
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -18,8 +19,8 @@ use tokio::sync::mpsc;
 
 use lspf::types::notification::Notification;
 use lspf::{
-    Outcome, RawMessage, RequestId, Server, Transport, TransportError, TransportReader,
-    TransportWriter,
+    CancellationToken, LspError, Outcome, RawMessage, RequestId, Server, Transport, TransportError,
+    TransportReader, TransportWriter,
 };
 
 /// A client-bound notification a hook can emit, proving its `Context` client
@@ -34,6 +35,7 @@ impl Notification for HookNotice {
 #[derive(Default)]
 struct AppState {
     initialized_runs: AtomicUsize,
+    shutdown_runs: AtomicUsize,
     exit_runs: AtomicUsize,
 }
 
@@ -147,26 +149,31 @@ async fn drive<S: Send + Sync + 'static>(
             break;
         }
         if let Some(response_id) = response_id {
-            tokio::select! {
-                response = out_rx.recv() => {
-                    if let Some(response) = response {
-                        assert_eq!(response.id(), Some(&response_id));
-                        outbox.push(response);
-                    } else {
-                        (&mut handle)
-                            .await
+            loop {
+                tokio::select! {
+                    response = out_rx.recv() => {
+                        if let Some(response) = response {
+                            let is_response = response.id() == Some(&response_id);
+                            outbox.push(response);
+                            if is_response {
+                                break;
+                            }
+                        } else {
+                            (&mut handle)
+                                .await
+                                .expect("server task did not panic")
+                                .expect("serve ended cleanly");
+                            server_done = true;
+                            break 'messages;
+                        }
+                    }
+                    result = &mut handle => {
+                        result
                             .expect("server task did not panic")
                             .expect("serve ended cleanly");
                         server_done = true;
                         break 'messages;
                     }
-                }
-                result = &mut handle => {
-                    result
-                        .expect("server task did not panic")
-                        .expect("serve ended cleanly");
-                    server_done = true;
-                    break 'messages;
                 }
             }
         }
@@ -198,6 +205,132 @@ fn hook_notices(outbox: &[RawMessage]) -> usize {
 }
 
 // --- Tests -------------------------------------------------------------------
+
+/// A successful shutdown hook runs before the built-in transition, receives
+/// the request-handler arguments, and can use its live `Context` before the
+/// shutdown response is sent.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutdown_hook_runs_before_a_successful_transition() {
+    let state = Arc::new(AppState::default());
+    let server = Server::builder(Arc::clone(&state))
+        .on_shutdown(
+            |state, ctx, _params: (), cancellation: CancellationToken| async move {
+                assert!(!cancellation.is_cancelled());
+                state.shutdown_runs.fetch_add(1, Ordering::SeqCst);
+                ctx.client()
+                    .notify::<HookNotice>(json!({ "from": "shutdown" }))
+                    .expect("the shutdown hook has a live client");
+                Ok::<(), LspError>(())
+            },
+        )
+        .build()
+        .expect("server builds");
+
+    let (outbox, outcome) = drive(
+        server,
+        vec![initialize_request(1), shutdown_request(2), exit()],
+    )
+    .await;
+
+    assert_eq!(outcome, Outcome::Exit { code: 0 });
+    assert_eq!(state.shutdown_runs.load(Ordering::SeqCst), 1);
+    assert_eq!(hook_notices(&outbox), 1);
+    let notice_index = outbox
+        .iter()
+        .position(|message| message.method() == Some("test/hook-notice"))
+        .expect("the hook notice reached the wire");
+    let response_index = outbox
+        .iter()
+        .position(|message| message.id() == Some(&RequestId::Number(2)))
+        .expect("the shutdown response reached the wire");
+    assert!(
+        notice_index < response_index,
+        "the hook completes before the successful shutdown response"
+    );
+}
+
+/// A rejected shutdown returns the hook's error without changing lifecycle
+/// state or consuming the hook, so a later shutdown request can retry it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_shutdown_hook_leaves_the_connection_running_for_retry() {
+    let state = Arc::new(AppState::default());
+    let server = Server::builder(Arc::clone(&state))
+        .on_shutdown(|state, _ctx, (), _cancellation| async move {
+            let attempt = state.shutdown_runs.fetch_add(1, Ordering::SeqCst);
+            if attempt == 0 {
+                Err(LspError::invalid_request("shutdown postponed"))
+            } else {
+                Ok(())
+            }
+        })
+        .build()
+        .expect("server builds");
+
+    let (outbox, outcome) = drive(
+        server,
+        vec![
+            initialize_request(1),
+            shutdown_request(2),
+            shutdown_request(3),
+            exit(),
+        ],
+    )
+    .await;
+
+    let failed = outbox
+        .iter()
+        .find(|message| message.id() == Some(&RequestId::Number(2)))
+        .expect("the first shutdown has a response");
+    assert!(
+        matches!(failed, RawMessage::Response { result: Err(error), .. } if error.code == -32600),
+        "the hook's LSP error is returned to the client"
+    );
+    assert_eq!(state.shutdown_runs.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        outcome,
+        Outcome::Exit { code: 0 },
+        "the second attempt succeeds because the first left the connection running"
+    );
+}
+
+/// Malformed shutdown params are rejected before the typed hook; like a hook
+/// error, validation failure leaves the connection running for a valid retry.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn malformed_shutdown_params_skip_the_hook_and_leave_the_connection_running() {
+    let state = Arc::new(AppState::default());
+    let server = Server::builder(Arc::clone(&state))
+        .on_shutdown(|state, _ctx, (), _cancellation| async move {
+            state.shutdown_runs.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+        .build()
+        .expect("server builds");
+
+    let (outbox, outcome) = drive(
+        server,
+        vec![
+            initialize_request(1),
+            request(2, "shutdown", json!({ "unexpected": true })),
+            shutdown_request(3),
+            exit(),
+        ],
+    )
+    .await;
+
+    let errors = outbox
+        .iter()
+        .filter(|message| {
+            matches!(message, RawMessage::Response { result: Err(error), .. } if error.code == -32602)
+        })
+        .count();
+    assert_eq!(errors, 1, "running-state malformed params are invalid");
+    assert_eq!(
+        state.shutdown_runs.load(Ordering::SeqCst),
+        1,
+        "only the valid retry reaches the typed hook"
+    );
+    assert_eq!(outcome, Outcome::Exit { code: 0 });
+}
 
 /// The initialized hook runs exactly once, and only for the first
 /// running-state `initialized` notification: a repeat is a no-op.
