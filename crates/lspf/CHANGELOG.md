@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1](https://github.com/meymchen/lspf/compare/v0.5.0...v0.5.1) - 2026-08-20
+
+### Other
+
+- Add on_shutdown lifecycle hook ([#149](https://github.com/meymchen/lspf/pull/149))
+- add regressions from mature LSP implementations ([#147](https://github.com/meymchen/lspf/pull/147))
+
 ### Added
 
 - Add `ServerBuilder::on_shutdown`, an async lifecycle hook that gates the
