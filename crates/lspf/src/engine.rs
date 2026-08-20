@@ -8,8 +8,9 @@
 //! `on_initialize` lifecycle hook — all without exposing partial state
 //! (ADR 0017, ADR 0018). The later lifecycle notifications carry the remaining
 //! hooks: the client's `initialized` runs `on_initialized` once, in the
-//! running state only, and the peer's `exit` runs `on_exit` before the engine
-//! computes the exit outcome (ADR 0024) — the hook resolves to `()`, so it
+//! running state only, a successful `on_shutdown` gates the transition into
+//! shutting down, and the peer's `exit` runs `on_exit` before the engine
+//! computes the exit outcome (ADR 0024) — the exit hook resolves to `()`, so it
 //! cannot change the exit code the lifecycle implies. Inbound
 //! requests reserve their IDs before user work is spawned; the engine's atomic
 //! completion gate then arbitrates success, errors, and cancellation.
@@ -42,7 +43,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Span, debug, info_span, warn};
 
 use crate::builder::{
-    ConfigureInitialize, InitializeRegistrar, OnExit, OnInitialize, OnInitialized,
+    ConfigureInitialize, InitializeRegistrar, OnExit, OnInitialize, OnInitialized, OnShutdown,
     ProtocolNotification, Registrations, Server,
 };
 use crate::capability::GeneratedCapabilities;
@@ -565,6 +566,7 @@ struct Pending<S> {
     configure_initialize: Option<ConfigureInitialize<S>>,
     on_initialize: Option<OnInitialize<S>>,
     on_initialized: Option<OnInitialized<S>>,
+    on_shutdown: Option<OnShutdown<S>>,
     on_exit: Option<OnExit<S>>,
     layers: Vec<UserLayer<S>>,
     concurrency_limit: usize,
@@ -596,6 +598,10 @@ struct ProtocolEngine<S, R> {
     /// notification. Lifted out of [`Pending`] when the initialize transaction
     /// succeeds, and taken by the first running-state `initialized` message.
     on_initialized: Option<OnInitialized<S>>,
+    /// The `on_shutdown` hook for the running state. Unlike notification hooks,
+    /// it is reusable after an error because a failed attempt leaves the
+    /// connection running and the client may send shutdown again.
+    on_shutdown: Option<OnShutdown<S>>,
     /// The `on_exit` hook awaiting the peer's `exit` notification. Lifted out
     /// of [`Pending`] when the initialize transaction succeeds; an `exit`
     /// received earlier closes without a Workspace to hand it.
@@ -640,11 +646,13 @@ where
                 configure_initialize: server.configure_initialize,
                 on_initialize: server.on_initialize,
                 on_initialized: server.on_initialized,
+                on_shutdown: server.on_shutdown,
                 on_exit: server.on_exit,
                 layers: server.layers,
                 concurrency_limit: server.concurrency_limit,
             })),
             on_initialized: None,
+            on_shutdown: None,
             on_exit: None,
             inbound: InboundRegistry::default(),
             tasks: TaskGroup::new(runtime),
@@ -749,10 +757,38 @@ where
                 match method.as_ref() {
                     "initialize" => return self.initialize(&span, reservation, params).await,
                     "shutdown" => {
-                        // The shutdown request answers itself first, so its own
-                        // entry is gone before the sweep below; only then does a
-                        // successful shutdown cancel the rest of the in-flight
-                        // work and enter `ShuttingDown`.
+                        let params_result = if params.is_empty() {
+                            Ok(())
+                        } else {
+                            decode_params::<()>(&params)
+                        };
+                        if let Err(err) = params_result {
+                            self.inbound.complete(&self.out_tx, reservation, Err(err));
+                            return Flow::Continue;
+                        }
+                        if let Some(hook) = &self.on_shutdown {
+                            let cancellation = cancellation
+                                .expect("shutdown is a cancellable non-initialize request");
+                            let ctx = Context::for_request(
+                                reservation.id.clone(),
+                                span.clone(),
+                                self.client.clone(),
+                                self.established_workspace(),
+                            )
+                            .with_cancellation(cancellation.clone());
+                            if let Err(err) = hook
+                                .invoke((Arc::clone(&self.state), ctx, (), cancellation))
+                                .instrument(span.clone())
+                                .await
+                            {
+                                self.inbound.complete(&self.out_tx, reservation, Err(err));
+                                return Flow::Continue;
+                            }
+                        }
+                        // The successful shutdown request answers itself first,
+                        // so its own entry is gone before the sweep below; only
+                        // then cancel the rest of the in-flight work and enter
+                        // `ShuttingDown`.
                         self.inbound.complete(
                             &self.out_tx,
                             reservation,
@@ -1088,7 +1124,7 @@ where
     /// `configure_initialize` against a transactional registrar; on success
     /// commit and permanently freeze the Router; establish the `Workspace`,
     /// `Documents` encoding, and generated capabilities; park the
-    /// `on_initialized` and `on_exit` hooks for the running state; run
+    /// `on_initialized`, `on_shutdown`, and `on_exit` hooks for the running state; run
     /// `on_initialize` for optional `ServerInfo`; then enter the running state
     /// and reply. Any configuration, validation, or `on_initialize` failure
     /// enqueues the fixed error and requests the terminal close rather than
@@ -1131,6 +1167,7 @@ where
             configure_initialize,
             on_initialize,
             on_initialized,
+            on_shutdown,
             on_exit,
             layers,
             concurrency_limit,
@@ -1170,6 +1207,7 @@ where
         // dispatch in the running state, which the transaction enters at its
         // end; they stay parked here until then.
         self.on_initialized = on_initialized;
+        self.on_shutdown = on_shutdown;
         self.on_exit = on_exit;
 
         // Establish Workspace, Documents encoding, and generated capabilities

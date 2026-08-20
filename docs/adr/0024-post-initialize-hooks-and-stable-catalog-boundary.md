@@ -29,8 +29,16 @@ cannot choose or replace it. An `exit` received before `initialize` has no
 established `Workspace` to hand the hook, so it is skipped and the connection
 closes with code 1.
 
-`on_shutdown`, specified by ADR 0018, remains unimplemented and out of scope
-for this catalog work.
+## `on_shutdown` completion
+
+`on_shutdown`, specified by ADR 0018 and implemented after the original catalog
+work, has the request-handler shape: shared state, `Context`, unit params, and a
+`CancellationToken`. The engine validates shutdown params and awaits the hook
+before replying or changing lifecycle state. `Ok(())` permits the successful
+response and transition to shutting down; `LspError` is returned to the client,
+leaves the connection running, and does not consume the hook, so a later
+shutdown request may retry it. Duplicate registration is a build error, and the
+hook contributes no capability.
 
 ## Stable catalog boundary
 

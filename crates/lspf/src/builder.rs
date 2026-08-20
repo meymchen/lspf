@@ -10,12 +10,14 @@
 //! typed commands beneath `workspace/executeCommand`, the standard features
 //! with sealed descriptors in [`lspf::features`](crate::features), and the
 //! lifecycle hooks: [`on_initialize`], [`on_initialized`] (which runs once the
-//! client acknowledges initialization), and [`on_exit`] (which observes the
+//! client acknowledges initialization), [`on_shutdown`] (which gates the
+//! transition into shutting down), and [`on_exit`] (which observes the
 //! connection's ending without being able to change its [`Outcome`]).
 //!
 //! [`configure_initialize`]: ServerBuilder::configure_initialize
 //! [`on_initialize`]: ServerBuilder::on_initialize
 //! [`on_initialized`]: ServerBuilder::on_initialized
+//! [`on_shutdown`]: ServerBuilder::on_shutdown
 //! [`on_exit`]: ServerBuilder::on_exit
 
 use std::collections::HashMap;
@@ -245,6 +247,16 @@ pub(crate) type OnInitialize<S> = Box<
 /// initialize transaction succeeded.
 pub(crate) type OnInitialized<S> =
     Box<dyn SharedHandler<(Arc<S>, Context, InitializedParams), NotificationFuture>>;
+
+/// The future produced by the erased `on_shutdown` hook. Success permits the
+/// protocol-owned transition into shutting down; an error is returned to the
+/// client and leaves the connection running.
+type OnShutdownFuture = Pin<Box<dyn TaskFuture<Result<(), LspError>>>>;
+
+/// The erased `on_shutdown` lifecycle hook (ADR 0018). The LSP request carries
+/// unit parameters, and otherwise has the standard request-handler shape.
+pub(crate) type OnShutdown<S> =
+    Box<dyn SharedHandler<(Arc<S>, Context, (), CancellationToken), OnShutdownFuture>>;
 
 /// The erased `on_exit` lifecycle hook. `exit` carries no parameters, so the
 /// typed hook receives only the shared state and a [`Context`]; it resolves to
@@ -676,6 +688,7 @@ pub struct ServerBuilder<S> {
     configure_initialize: Option<ConfigureInitialize<S>>,
     on_initialize: Option<OnInitialize<S>>,
     on_initialized: Option<OnInitialized<S>>,
+    on_shutdown: Option<OnShutdown<S>>,
     on_exit: Option<OnExit<S>>,
     layers: Vec<UserLayer<S>>,
     concurrency_limit: usize,
@@ -693,6 +706,7 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
             configure_initialize: None,
             on_initialize: None,
             on_initialized: None,
+            on_shutdown: None,
             on_exit: None,
             layers: Vec::new(),
             concurrency_limit: crate::DEFAULT_CONCURRENCY_LIMIT,
@@ -951,6 +965,36 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
         self
     }
 
+    /// Register the `on_shutdown` lifecycle hook (ADR 0018).
+    ///
+    /// The hook runs after a successful initialize transaction and before the
+    /// protocol engine enters its shutting-down state. It receives the shared
+    /// application state, a live [`Context`], the shutdown request's unit
+    /// parameters, and its [`CancellationToken`]. Returning `Ok(())` permits
+    /// shutdown; returning [`LspError`] sends that error response and leaves
+    /// the connection running so the client may retry or continue using it.
+    ///
+    /// Supplying `on_shutdown` more than once is a
+    /// [`BuildError::DuplicateLifecycleHook`] reported by [`build`](Self::build).
+    pub fn on_shutdown<H, Fut>(mut self, hook: H) -> Self
+    where
+        H: Fn(Arc<S>, Context, (), CancellationToken) -> Fut
+            + SharedHandler<(Arc<S>, Context, (), CancellationToken), Fut>
+            + 'static,
+        Fut: Future<Output = Result<(), LspError>> + TaskSend + 'static,
+    {
+        if self.on_shutdown.is_some() {
+            self.record(BuildError::DuplicateLifecycleHook("on_shutdown"));
+        } else {
+            self.on_shutdown = Some(Box::new(
+                move |state, ctx, params, ct| -> OnShutdownFuture {
+                    Box::pin(hook.invoke((state, ctx, params, ct)))
+                },
+            ));
+        }
+        self
+    }
+
     /// Register the `on_exit` lifecycle hook (ADR 0018, ADR 0024).
     ///
     /// The hook runs when the peer's `exit` notification arrives after a
@@ -1035,6 +1079,7 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
             configure_initialize: self.configure_initialize,
             on_initialize: self.on_initialize,
             on_initialized: self.on_initialized,
+            on_shutdown: self.on_shutdown,
             on_exit: self.on_exit,
             layers: self.layers,
             concurrency_limit: self.concurrency_limit,
@@ -1179,7 +1224,7 @@ impl<S: Send + Sync + 'static> InitializeRegistrar<S> {
 /// Owns exactly one LSP connection: its application state, the static
 /// registrations awaiting the initialize transaction, the optional
 /// initialization-dependent callback, and the lifecycle hooks (`on_initialize`,
-/// `on_initialized`, `on_exit`) (ADR 0017, ADR 0018). A second connection
+/// `on_initialized`, `on_shutdown`, `on_exit`) (ADR 0017, ADR 0018). A second connection
 /// requires a second `Server`; connection state is never shared between
 /// servers.
 pub struct Server<S> {
@@ -1189,6 +1234,7 @@ pub struct Server<S> {
     pub(crate) configure_initialize: Option<ConfigureInitialize<S>>,
     pub(crate) on_initialize: Option<OnInitialize<S>>,
     pub(crate) on_initialized: Option<OnInitialized<S>>,
+    pub(crate) on_shutdown: Option<OnShutdown<S>>,
     pub(crate) on_exit: Option<OnExit<S>>,
     pub(crate) layers: Vec<UserLayer<S>>,
     pub(crate) concurrency_limit: usize,
@@ -1705,6 +1751,15 @@ mod tests {
     ) {
     }
 
+    async fn noop_on_shutdown(
+        _state: Arc<DummyState>,
+        _ctx: Context,
+        _params: (),
+        _ct: CancellationToken,
+    ) -> Result<(), LspError> {
+        Ok(())
+    }
+
     async fn noop_on_exit(_state: Arc<DummyState>, _ctx: Context) {}
 
     #[test]
@@ -1716,6 +1771,17 @@ mod tests {
             .err()
             .expect("supplying on_initialized twice must fail");
         assert_eq!(err, BuildError::DuplicateLifecycleHook("on_initialized"));
+    }
+
+    #[test]
+    fn duplicate_on_shutdown_is_a_build_error() {
+        let err = Server::builder(DummyState)
+            .on_shutdown(noop_on_shutdown)
+            .on_shutdown(noop_on_shutdown)
+            .build()
+            .err()
+            .expect("supplying on_shutdown twice must fail");
+        assert_eq!(err, BuildError::DuplicateLifecycleHook("on_shutdown"));
     }
 
     #[test]
@@ -1733,6 +1799,7 @@ mod tests {
     fn lifecycle_hooks_contribute_no_catalog_capabilities() {
         let server = Server::builder(DummyState)
             .on_initialized(noop_on_initialized)
+            .on_shutdown(noop_on_shutdown)
             .on_exit(noop_on_exit)
             .build()
             .expect("a server with only lifecycle hooks builds");
