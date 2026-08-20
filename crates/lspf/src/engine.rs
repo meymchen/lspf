@@ -30,6 +30,7 @@ use std::sync::{Arc, Mutex};
 use bytes::Bytes;
 use futures_channel::mpsc::UnboundedReceiver;
 use futures_util::FutureExt;
+use futures_util::future::{Either, select};
 use futures_util::select_biased;
 use lsp_types::{
     DidChangeConfigurationParams, DidChangeTextDocumentParams, DidChangeWorkspaceFoldersParams,
@@ -250,7 +251,7 @@ where
 
 struct TaskGroup<R> {
     runtime: R,
-    handles: Vec<TrackedTask>,
+    handles: Vec<TaskHandle>,
 }
 
 #[derive(Clone, Copy, Default, Eq, PartialEq)]
@@ -264,11 +265,6 @@ impl RequestGeneration {
     }
 }
 
-struct TrackedTask {
-    request_generation: RequestGeneration,
-    handle: TaskHandle,
-}
-
 impl<R: Runtime> TaskGroup<R> {
     fn new(runtime: R) -> Self {
         Self {
@@ -277,55 +273,35 @@ impl<R: Runtime> TaskGroup<R> {
         }
     }
 
-    fn spawn_request<F>(&mut self, generation: RequestGeneration, future: F)
+    fn spawn<F>(&mut self, future: F)
     where
         F: Future<Output = ()> + TaskSend + 'static,
     {
-        self.handles.push(TrackedTask {
-            request_generation: generation,
-            handle: self.runtime.spawn(future),
-        });
+        self.handles.push(self.runtime.spawn(future));
     }
 
     async fn reap_finished(&mut self) {
         let mut running = Vec::with_capacity(self.handles.len());
-        for task in std::mem::take(&mut self.handles) {
-            if task.handle.is_finished() {
-                task.handle.join().await;
+        for handle in std::mem::take(&mut self.handles) {
+            if handle.is_finished() {
+                handle.join().await;
             } else {
-                running.push(task);
+                running.push(handle);
             }
         }
         self.handles = running;
     }
 
     async fn abort_and_join(&mut self) {
-        for task in &self.handles {
-            task.handle.abort();
+        for handle in &self.handles {
+            handle.abort();
         }
         self.join_all().await;
     }
 
-    async fn abort_and_join_request(&mut self, generation: RequestGeneration) {
-        let Some(index) = self
-            .handles
-            .iter()
-            .position(|task| task.request_generation == generation)
-        else {
-            return;
-        };
-        let task = self.handles.swap_remove(index);
-        // Let cooperative handlers observe their CancellationToken before the
-        // runtime abort drops the future. This preserves the explicit-token
-        // contract while still making abort-then-join the terminal guarantee.
-        self.runtime.yield_now().await;
-        task.handle.abort();
-        task.handle.join().await;
-    }
-
     async fn join_all(&mut self) {
-        for task in std::mem::take(&mut self.handles) {
-            task.handle.join().await;
+        for handle in std::mem::take(&mut self.handles) {
+            handle.join().await;
         }
     }
 }
@@ -863,9 +839,6 @@ where
                     match serde_json::from_slice::<CancelParams>(bytes) {
                         Ok(cancel) => {
                             if let Some(reservation) = self.inbound.claim_cancellation(&cancel.id) {
-                                self.tasks
-                                    .abort_and_join_request(reservation.generation)
-                                    .await;
                                 enqueue_encoded(
                                     &self.out_tx,
                                     reservation.id,
@@ -1312,10 +1285,11 @@ where
         )
     }
 
-    /// Spawn one user request into the engine's task group. Cancellation first
-    /// fires the explicit token, then aborts and joins this tracked task; the
-    /// completion gate rejects any result produced after another path claimed
-    /// the reservation.
+    /// Spawn one user request into the engine's task group. The task races user
+    /// dispatch against its explicit cancellation token. When cancellation
+    /// wins, one final poll lets cooperative handler code observe the token
+    /// before the future is dropped; the completion gate rejects any result
+    /// produced after another path claimed the reservation.
     fn spawn_service_request(
         &mut self,
         service: UserService<S>,
@@ -1330,13 +1304,28 @@ where
         let out_tx = self.out_tx.clone();
         let client = self.client.clone();
         let inbound = self.inbound.clone();
-        let generation = reservation.generation;
-        self.tasks.spawn_request(generation, async move {
+        self.tasks.spawn(async move {
             let id = reservation.id.clone();
+            let cancellation_for_handler = cancellation.clone();
             let ctx = Context::for_request(id.clone(), span, client, workspace)
-                .with_cancellation(cancellation);
+                .with_cancellation(cancellation_for_handler);
             let call = IncomingCall::request(method, id, params, ctx, state);
-            let result = service.call(call).await;
+            let result = match select(
+                Box::pin(service.call(call)),
+                Box::pin(cancellation.cancelled()),
+            )
+            .await
+            {
+                Either::Left((result, _)) => result,
+                Either::Right(((), handler)) => {
+                    // CancellationToken wakes every waiter, but an executor
+                    // yield does not guarantee this handler is polled before a
+                    // separate abort. Poll it here, in its own task, then end
+                    // the task without relying on scheduler fairness.
+                    let _ = handler.now_or_never();
+                    ServiceResult::Error(LspError::RequestCancelled)
+                }
+            };
             let result = match result {
                 ServiceResult::Response(value) => encode_body(&value),
                 ServiceResult::Error(error) => Err(error),
@@ -1394,13 +1383,7 @@ where
 /// against a connection nobody owns.
 impl<S, R> Drop for ProtocolEngine<S, R> {
     fn drop(&mut self) {
-        for handle in self
-            .tasks
-            .handles
-            .iter()
-            .map(|task| &task.handle)
-            .chain(self.send_task.iter())
-        {
+        for handle in self.tasks.handles.iter().chain(self.send_task.iter()) {
             handle.abort();
         }
     }
