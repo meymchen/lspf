@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add `ServerBuilder::on_shutdown`, an async lifecycle hook that gates the
+  protocol-owned shutdown transition and leaves the connection running when it
+  returns `LspError`.
+
 ## [0.5.0](https://github.com/meymchen/lspf/compare/v0.4.0...v0.5.0) - 2026-08-19
 
 ### Other
