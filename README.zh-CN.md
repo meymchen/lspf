@@ -121,6 +121,8 @@ async fn main() -> lspf::Result<()> {
 [编辑器配置](#编辑器配置)中使用的模板服务器，旁边还有端到端 stdio 测试。
 [功能、capability 与 workspace](./docs/guides/features-and-workspace.md)
 指南逐项讲解各个部分。
+各项 LSP 功能的可运行示例服务见
+[`crates/lspf/examples/README.md`](./crates/lspf/examples/README.md)。
 
 ## 安装依赖
 
