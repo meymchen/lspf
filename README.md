@@ -133,6 +133,8 @@ with an end-to-end stdio test beside it. The
 guide walks through each piece. To choose a Transport adapter, enable only
 its Cargo dependencies, or implement another message-framed channel, see
 [Choosing and implementing a Transport](./docs/guides/transports.md).
+Runnable servers for individual LSP features are indexed in
+[`crates/lspf/examples/README.md`](./crates/lspf/examples/README.md).
 
 ## Install
 
