@@ -81,6 +81,70 @@ required-features = ["websocket"]
 name = "worker_channel"
 required-features = ["worker-channel"]
 
+# The feature examples are directly runnable stdio servers.
+# Listing them here keeps transport-only and WASM feature rows from trying to
+# compile a host entry point they deliberately do not provide.
+
+[[example]]
+name = "code_actions"
+required-features = ["stdio"]
+
+[[example]]
+name = "code_lens"
+required-features = ["stdio"]
+
+[[example]]
+name = "colors"
+required-features = ["stdio"]
+
+[[example]]
+name = "formatting"
+required-features = ["stdio"]
+
+[[example]]
+name = "goto"
+required-features = ["stdio"]
+
+[[example]]
+name = "hover"
+required-features = ["stdio"]
+
+[[example]]
+name = "inlay_hints"
+required-features = ["stdio"]
+
+[[example]]
+name = "server_features"
+required-features = ["stdio"]
+
+[[example]]
+name = "links"
+required-features = ["stdio"]
+
+[[example]]
+name = "publish_diagnostics"
+required-features = ["stdio"]
+
+[[example]]
+name = "pull_diagnostics"
+required-features = ["stdio"]
+
+[[example]]
+name = "rename"
+required-features = ["stdio"]
+
+[[example]]
+name = "semantic_tokens"
+required-features = ["stdio"]
+
+[[example]]
+name = "symbols"
+required-features = ["stdio"]
+
+[[example]]
+name = "blocking_work"
+required-features = ["stdio"]
+
 # Native integration journeys exercise the Tokio-backed server. Keeping their
 # runtime requirement in the manifest gives Cargo one authoritative gate.
 
