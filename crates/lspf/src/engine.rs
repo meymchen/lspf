@@ -1,4 +1,4 @@
-//! Connection-owned protocol engine for the 0.2 `Server<S>`.
+//! Connection-owned protocol engine for `Server<S>`.
 //!
 //! This slice serves a connection end to end for the lifecycle plus typed
 //! custom requests, notifications, and commands. `initialize` is the one

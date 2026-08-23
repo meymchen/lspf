@@ -1,5 +1,7 @@
 # Features, capabilities, and the workspace
 
+[English](./features-and-workspace.md) | [简体中文](./features-and-workspace.zh-CN.md)
+
 This guide covers how a lspf server gains standard LSP 3.17 features, where
 its `ServerCapabilities` come from, who owns the workspace and the documents,
 how Commands dispatch, and how unopened files resolve through a
