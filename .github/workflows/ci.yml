@@ -63,9 +63,11 @@ jobs:
   feature-contract:
     name: feature contract
     runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: "1.96.0"
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.96.0
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2

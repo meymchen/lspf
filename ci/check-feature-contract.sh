@@ -172,9 +172,44 @@ do
         "Transport feature '$feature' must remain independent of proposed"
 done
 
+# Compile every supported selection here, including `proposed` as an
+# orthogonal addition. This is deliberately more exhaustive than the test
+# matrix: this gate owns the public target/feature contract.
+for features in \
+    none \
+    runtime-tokio \
+    stdio \
+    tcp \
+    websocket \
+    stdio,tcp \
+    stdio,websocket \
+    tcp,websocket \
+    stdio,tcp,websocket
+do
+    if [[ $features == none ]]; then
+        cargo check -p lspf --locked --no-default-features
+        cargo check -p lspf --locked --no-default-features --features proposed
+    else
+        cargo check -p lspf --locked --no-default-features --features "$features"
+        cargo check -p lspf --locked --no-default-features \
+            --features "$features,proposed"
+    fi
+done
+for features in wasm worker-channel
+do
+    cargo check -p lspf --locked --target wasm32-unknown-unknown \
+        --no-default-features --features "$features"
+    cargo check -p lspf --locked --target wasm32-unknown-unknown \
+        --no-default-features --features "$features,proposed"
+done
+
 expect_compile_error \
     'the `worker-channel` feature requires the wasm32 target' \
     cargo check -p lspf --locked --no-default-features --features worker-channel
+expect_compile_error \
+    'the wasm32 target requires the `wasm` feature' \
+    cargo check -p lspf --locked --target wasm32-unknown-unknown \
+    --no-default-features
 expect_compile_error \
     'the `tcp` feature is not supported on the wasm32 target' \
     cargo check -p lspf --locked --target wasm32-unknown-unknown \

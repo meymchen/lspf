@@ -201,6 +201,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
   doctest 编译。
 - [`docs/guides/transports.zh-CN.md`](./docs/guides/transports.zh-CN.md)：传输选择、target/feature
   兼容矩阵、原生与 WASM 示例，以及自定义 `Transport` 契约。
+- [`SECURITY.zh-CN.md`](./SECURITY.zh-CN.md)：受支持的 Rust 版本、host、target、
+  Cargo feature 组合、版本兼容性、弃用规则和私密漏洞报告方式。
 
 ## 当前范围
 

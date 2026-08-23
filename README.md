@@ -226,6 +226,9 @@ The full design lives next to the code:
 - [`docs/guides/transports.md`](./docs/guides/transports.md) — Transport
   selection and target/feature matrices, buildable native and WASM examples,
   and the custom Transport contract.
+- [`SECURITY.md`](./SECURITY.md) — supported Rust versions, hosts, targets,
+  Cargo feature combinations, release compatibility, deprecation, and private
+  vulnerability reporting.
 
 ## Current scope
 
