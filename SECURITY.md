@@ -43,17 +43,17 @@ reports and intend to fix regressions on the maintained release line.
 
 | Host | Rust target | Status | Enforcement gate |
 | --- | --- | --- | --- |
-| Linux | `x86_64-unknown-linux-gnu` | Supported | CI `native-matrix` and `test`; the cross-OS lifecycle gate is tracked by #155 |
-| Windows | `x86_64-pc-windows-msvc` | Supported | Cross-OS lifecycle gate tracked by #155 |
-| macOS | `x86_64-apple-darwin` | Supported | Cross-OS lifecycle gate tracked by #155 |
-| macOS | `aarch64-apple-darwin` | Supported | Cross-OS lifecycle gate tracked by #155 |
+| Linux | `x86_64-unknown-linux-gnu` | Supported | CI `native-matrix`, `test`, and `native-lifecycle` |
+| Windows | `x86_64-pc-windows-msvc` | Supported | CI `native-lifecycle` |
+| macOS | `x86_64-apple-darwin` | Supported | CI `native-lifecycle` |
+| macOS | `aarch64-apple-darwin` | Supported | CI `native-lifecycle` |
 | Browser or Node Worker | `wasm32-unknown-unknown` | Supported | CI `wasm` and `feature-contract` |
 
-Until #155 closes, Windows and macOS support is a maintainer commitment rather
-than a continuously tested claim. Other operating systems, architectures,
-WASI targets, and embedded or `no_std` environments are unsupported. Reports
-with a small, portable fix are welcome, but accepting such a fix does not add
-the host or target to this matrix.
+CI `native-lifecycle` runs the same default-feature stdio journey on Linux,
+Windows, and macOS. Other operating systems, architectures, WASI targets, and
+embedded or `no_std` environments are unsupported. Reports with a small,
+portable fix are welcome, but accepting such a fix does not add the host or
+target to this matrix.
 
 ## Cargo feature contract
 
