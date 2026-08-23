@@ -184,6 +184,9 @@ async fn stdout_carries_only_lsp_frames() {
         // Turn on the server's own logging, so a log line written to the wrong
         // stream would show up in this test rather than staying silent.
         .env("RUST_LOG", "lspf=trace,lspf_hello=trace")
+        // Editor extension hosts do not normally set NO_COLOR. The agent test
+        // environment does, so remove it to reproduce the editor's stderr.
+        .env_remove("NO_COLOR")
         .spawn()
         .expect("spawn hello");
 
@@ -247,12 +250,110 @@ async fn stdout_carries_only_lsp_frames() {
         "the run produced no log output on stderr, so a clean stdout proves \
          nothing; got {logs:?}"
     );
+    assert!(
+        !logs.contains('\u{1b}'),
+        "stderr logs are shown in editor output channels and must not contain \
+         ANSI escape sequences; got {logs:?}"
+    );
 
     let exit_status = tokio::time::timeout(Duration::from_secs(5), child.wait())
         .await
         .expect("server exited within 5s")
         .expect("wait succeeds");
     assert_eq!(exit_status.code(), Some(0));
+}
+
+#[tokio::test]
+async fn json_log_format_emits_parseable_events_with_context() {
+    let mut child = hello_command()
+        .env("RUST_LOG", "lspf=trace,lspf_hello=trace")
+        .env("LSPF_LOG_FORMAT", "json")
+        .spawn()
+        .expect("spawn hello");
+
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut stderr = child.stderr.take().unwrap();
+    let logs = tokio::spawn(async move {
+        let mut logs = String::new();
+        stderr.read_to_string(&mut logs).await.expect("read stderr");
+        logs
+    });
+
+    write_framed(&mut stdin, initialize_request(1).to_string().as_bytes()).await;
+    let _ = read_framed(&mut stdout).await;
+    write_framed(
+        &mut stdin,
+        json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} })
+            .to_string()
+            .as_bytes(),
+    )
+    .await;
+    write_framed(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didOpen",
+            "params": {
+                "textDocument": {
+                    "uri": "file:///tmp/structured.txt",
+                    "languageId": "plaintext",
+                    "version": 1,
+                    "text": "hello world\n",
+                }
+            },
+        })
+        .to_string()
+        .as_bytes(),
+    )
+    .await;
+    let _ = read_framed(&mut stdout).await;
+    write_framed(
+        &mut stdin,
+        json!({ "jsonrpc": "2.0", "id": 2, "method": "shutdown" })
+            .to_string()
+            .as_bytes(),
+    )
+    .await;
+    let _ = read_framed(&mut stdout).await;
+    write_framed(
+        &mut stdin,
+        json!({ "jsonrpc": "2.0", "method": "exit" })
+            .to_string()
+            .as_bytes(),
+    )
+    .await;
+    drop(stdin);
+
+    let exit_status = tokio::time::timeout(Duration::from_secs(5), child.wait())
+        .await
+        .expect("server exited within 5s")
+        .expect("wait succeeds");
+    assert_eq!(exit_status.code(), Some(0));
+
+    let logs = logs.await.expect("the stderr reader finished");
+    let events: Vec<Value> = logs
+        .lines()
+        .map(|line| {
+            serde_json::from_str(line)
+                .unwrap_or_else(|error| panic!("log line is not JSON: {error}; line={line:?}"))
+        })
+        .collect();
+    let event = events
+        .iter()
+        .find(|event| event["message"] == "publishing the open diagnostic")
+        .expect("didOpen diagnostic event is present");
+    assert!(
+        event["timestamp"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty()),
+        "event has a timestamp: {event}"
+    );
+    assert_eq!(event["level"], "DEBUG");
+    assert_eq!(event["target"], "lspf_hello");
+    assert_eq!(event["uri"], "file:///tmp/structured.txt");
+    assert_eq!(event["span"]["name"], "notification");
+    assert_eq!(event["span"]["method"], "textDocument/didOpen");
 }
 
 #[tokio::test]

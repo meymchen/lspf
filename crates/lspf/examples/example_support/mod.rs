@@ -8,6 +8,9 @@ use lspf::{Context, LspError, Server};
 pub(crate) async fn serve<S: Send + Sync + 'static>(server: Server<S>) -> lspf::Result<()> {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
+        // These stdio servers are normally launched by an editor, whose output
+        // channel does not interpret terminal formatting.
+        .with_ansi(false)
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
     let outcome = lspf::stdio(server).serve().await?;

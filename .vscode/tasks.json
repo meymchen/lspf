@@ -1,0 +1,107 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build lspf-hello",
+      "type": "process",
+      "command": "cargo",
+      "args": ["build", "-p", "lspf-hello"],
+      "problemMatcher": "$rustc",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "build LSP examples",
+      "type": "process",
+      "command": "cargo",
+      "args": ["build", "-p", "lspf", "--examples"],
+      "problemMatcher": "$rustc"
+    },
+    {
+      "label": "test lspf-hello (quick)",
+      "type": "process",
+      "command": "cargo",
+      "args": ["test", "-p", "lspf-hello"],
+      "problemMatcher": "$rustc",
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "test workspace (full)",
+      "type": "process",
+      "command": "cargo",
+      "args": [
+        "test",
+        "--workspace",
+        "--features",
+        "stdio,tcp,websocket,proposed",
+        "--all-targets"
+      ],
+      "problemMatcher": "$rustc",
+      "group": "test"
+    },
+    {
+      "label": "run LSP example",
+      "type": "process",
+      "command": "cargo",
+      "args": [
+        "run",
+        "-p",
+        "lspf",
+        "--example",
+        "${input:exampleName}"
+      ],
+      "problemMatcher": "$rustc"
+    },
+    {
+      "label": "ensure VS Code test client dependencies",
+      "type": "npm",
+      "script": "prepare:debug",
+      "path": "tools/vscode-test-client",
+      "problemMatcher": []
+    },
+    {
+      "label": "watch VS Code test client",
+      "type": "npm",
+      "script": "watch",
+      "path": "tools/vscode-test-client",
+      "problemMatcher": "$tsc-watch",
+      "isBackground": true,
+      "presentation": {
+        "reveal": "never"
+      }
+    },
+    {
+      "label": "prepare VS Code LSP smoke",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "ensure VS Code test client dependencies",
+        "build lspf-hello",
+        "watch VS Code test client"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "prepare VS Code LSP example",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "ensure VS Code test client dependencies",
+        "build LSP examples",
+        "watch VS Code test client"
+      ],
+      "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "exampleName",
+      "type": "promptString",
+      "description": "Cargo example to run (waits for an LSP client on stdio)",
+      "default": "hover"
+    }
+  ]
+}

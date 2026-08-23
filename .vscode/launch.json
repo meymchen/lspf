@@ -7,9 +7,11 @@
       "request": "launch",
       "args": [
         "--disable-extensions",
-        "--extensionDevelopmentPath=${workspaceFolder}"
+        "--extensionDevelopmentPath=${workspaceFolder}/tools/vscode-test-client"
       ],
-      "outFiles": ["${workspaceFolder}/out/**/*.js"],
+      "outFiles": [
+        "${workspaceFolder}/tools/vscode-test-client/out/**/*.js"
+      ],
       "preLaunchTask": "prepare VS Code LSP smoke"
     },
     {
@@ -18,13 +20,21 @@
       "request": "launch",
       "args": [
         "--disable-extensions",
-        "--extensionDevelopmentPath=${workspaceFolder}"
+        "--extensionDevelopmentPath=${workspaceFolder}/tools/vscode-test-client"
       ],
       "env": {
         "LSPF_TEST_EXAMPLE": "${input:exampleName}"
       },
-      "outFiles": ["${workspaceFolder}/out/**/*.js"],
+      "outFiles": [
+        "${workspaceFolder}/tools/vscode-test-client/out/**/*.js"
+      ],
       "preLaunchTask": "prepare VS Code LSP example"
+    },
+    {
+      "name": "Attach to running LSP server/example",
+      "type": "lldb",
+      "request": "attach",
+      "pid": "${command:pickMyProcess}"
     }
   ],
   "inputs": [

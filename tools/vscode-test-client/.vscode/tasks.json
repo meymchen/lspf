@@ -2,12 +2,59 @@
   "version": "2.0.0",
   "tasks": [
     {
+      "label": "build lspf-hello",
+      "type": "process",
+      "command": "cargo",
+      "args": ["build", "-p", "lspf-hello"],
+      "options": {
+        "cwd": "${workspaceFolder}/../.."
+      },
+      "problemMatcher": "$rustc"
+    },
+    {
+      "label": "build LSP examples",
+      "type": "process",
+      "command": "cargo",
+      "args": ["build", "-p", "lspf", "--examples"],
+      "options": {
+        "cwd": "${workspaceFolder}/../.."
+      },
+      "problemMatcher": "$rustc"
+    },
+    {
+      "label": "ensure VS Code test client dependencies",
+      "type": "npm",
+      "script": "prepare:debug",
+      "problemMatcher": []
+    },
+    {
+      "label": "watch VS Code test client",
       "type": "npm",
       "script": "watch",
       "problemMatcher": "$tsc-watch",
       "isBackground": true,
       "presentation": { "reveal": "never" },
       "group": { "kind": "build", "isDefault": true }
+    },
+    {
+      "label": "prepare VS Code LSP smoke",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "ensure VS Code test client dependencies",
+        "build lspf-hello",
+        "watch VS Code test client"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "prepare VS Code LSP example",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "ensure VS Code test client dependencies",
+        "build LSP examples",
+        "watch VS Code test client"
+      ],
+      "problemMatcher": []
     }
   ]
 }

@@ -98,6 +98,7 @@ async fn main() -> lspf::Result<()> {
     // Logs go to stderr: stdout carries the LSP wire protocol and nothing else.
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
+        .with_ansi(false)
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
@@ -318,6 +319,44 @@ Open any plain-text (`.txt`) file and you should see the
 > [`tools/vscode-test-client`](./tools/vscode-test-client) instead, which
 > launches the freshly built binary from `target/`.
 
+#### Repository development
+
+Open the repository root in VS Code and install the recommended rust-analyzer
+and CodeLLDB extensions. The checked-in `.vscode` configuration provides:
+
+- `Debug LSP client (Extension Host)`, the default end-to-end path. It builds
+  `lspf-hello`, installs missing test-client dependencies from the lock file,
+  compiles the client, and opens an Extension Development Host. Open a `.txt`
+  file there to exercise the server.
+- `Run LSP example client (select example)`, which builds the stdio examples,
+  asks which one to run, and opens an Extension Development Host backed by that
+  example's real process.
+- `Attach to running LSP server/example`, which attaches CodeLLDB to the
+  process started by either client configuration.
+- build, quick-test, full workspace test, and example run tasks. The quick test
+  is `cargo test -p lspf-hello`; the full task matches the main CI test command.
+
+To debug an example, first run `Run LSP example client (select example)` and
+choose an example such as `hover`. Open a `.txt` file in the new Extension
+Development Host. Back in the repository window, run
+`Attach to running LSP server/example`, select the process named after the
+example, and set breakpoints in `crates/lspf/examples/<name>.rs`. Editor actions
+now travel through the real stdio connection and stop in the Rust handler.
+
+The Extension Host debug configuration defaults to `RUST_LOG=lspf=trace` and
+`LSPF_LOG_FORMAT=json` unless the environment already has a value. Each stderr
+line is one JSON event with its event fields and current span. Set
+`LSPF_LOG_FORMAT=text` before launching VS Code to use compact plain text.
+Run and test tasks leave both variables unchanged.
+
+After the server initializes, `vscode-languageclient` automatically registers
+the four Commands advertised through `executeCommandProvider`. The extension
+manifest supplies their titles under the `lspf hello` category in the Command
+Palette. Middleware adds the active editor's URI for `Read Active File` and
+`Run Outgoing Helper Journey`, then writes results to the `lspf-hello commands`
+output channel. The outgoing journey exercises `workspace/applyEdit`, so it
+inserts a comment at the start of the active document.
+
 ### Zed
 
 Zed currently requires a language extension to register each language-server
@@ -331,6 +370,14 @@ to create a development extension that registers `lspf-hello`, or use the
 VS Code test client above for the repository's supported editor smoke-test
 path.
 
+For repository development, the checked-in `.zed/tasks.json` has build, quick
+test, full workspace test, and `hover` example tasks. The
+`Attach to running LSP server/example` entry in `.zed/debug.json` opens Zed's
+process picker and attaches CodeLLDB to a live server. Start that process from
+the VS Code test client above, another LSP client, or a local Zed language
+extension before attaching. These Zed files support Rust debugging; they do
+not register `lspf-hello` as a Zed language server.
+
 ### Troubleshooting
 
 - **`lspf-hello` not found / "command not found".** The binary isn't on your
@@ -341,10 +388,15 @@ path.
   and that your editor client routes the opened file to this server. The
   example editor setup targets plain-text files; the server itself does not
   filter `didOpen` by language id. Run `lspf-hello` in a terminal with
-  `RUST_LOG=lspf=trace` to confirm it starts and to see LSP traffic on stderr.
+  `RUST_LOG=lspf=trace LSPF_LOG_FORMAT=json lspf-hello` to confirm it starts
+  and to emit newline-delimited JSON on stderr.
 - **Edited the config but nothing changed.** Editors read LSP settings at
   startup — reload the window after editing `settings.json` (VS Code:
   *Developer: Reload Window*; Zed: reopen the workspace).
+- **A direct run appears stuck.** `lspf-hello` and the framework examples speak
+  LSP over stdio. Use one of the VS Code client configurations to start the
+  process, then attach CodeLLDB from VS Code or Zed. Use the quick test task for
+  an automated check.
 
 ## Contributing
 

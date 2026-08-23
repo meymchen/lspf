@@ -63,7 +63,7 @@ async fn on_did_open(_state: Arc<State>, ctx: Context, params: DidOpenTextDocume
         warn!(?uri, "didOpen hook found no open document");
         return;
     };
-    debug!(?uri, "publishing the open diagnostic");
+    debug!(uri = %uri.as_str(), "publishing the open diagnostic");
 
     let diagnostics = PublishDiagnosticsParams {
         uri,
@@ -113,11 +113,13 @@ async fn hover(
         return Ok(None);
     };
     let words = document.text().split_whitespace().count();
+    let version = document
+        .version()
+        .map_or_else(|| "unknown".to_owned(), |version| version.to_string());
     Ok(Some(Hover {
         contents: HoverContents::Scalar(MarkedString::String(format!(
-            "`{}` · {words} words · version {:?}",
+            "`{}` · {words} words · version {version}",
             document.language_id(),
-            document.version(),
         ))),
         range: None,
     }))
@@ -417,13 +419,31 @@ fn completion_options() -> CompletionOptions {
     }
 }
 
+fn init_tracing() {
+    let filter = tracing_subscriber::EnvFilter::from_default_env();
+    if std::env::var("LSPF_LOG_FORMAT").as_deref() == Ok("json") {
+        tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
+            .with_env_filter(filter)
+            .json()
+            .flatten_event(true)
+            .with_current_span(true)
+            .with_span_list(false)
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
+            // Editor output channels display ANSI bytes as visible symbols.
+            .with_ansi(false)
+            .with_env_filter(filter)
+            .init();
+    }
+}
+
 #[tokio::main]
 async fn main() -> lspf::Result<()> {
     // Logs go to stderr: stdout carries the LSP wire protocol and nothing else.
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
+    init_tracing();
 
     let server = Server::builder(State::new())
         // Unopened `file:` URIs resolve from the local filesystem.
