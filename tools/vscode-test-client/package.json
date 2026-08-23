@@ -3,6 +3,7 @@
   "displayName": "lspf test client",
   "description": "Spawns the lspf-hello binary as a language server for manual smoke testing.",
   "version": "0.1.0",
+  "publisher": "lspf",
   "private": true,
   "engines": {
     "node": "24.x",
@@ -12,8 +13,32 @@
   "activationEvents": [
     "onLanguage:plaintext"
   ],
-  "contributes": {},
+  "contributes": {
+    "commands": [
+      {
+        "command": "lspf-hello.workspaceRoots",
+        "title": "Show Workspace Roots",
+        "category": "lspf hello"
+      },
+      {
+        "command": "lspf-hello.readFile",
+        "title": "Read Active File",
+        "category": "lspf hello"
+      },
+      {
+        "command": "lspf-hello.outgoingJourney",
+        "title": "Run Outgoing Helper Journey",
+        "category": "lspf hello"
+      },
+      {
+        "command": "lspf-hello.cancellableProgress",
+        "title": "Run Cancellable Progress",
+        "category": "lspf hello"
+      }
+    ]
+  },
   "scripts": {
+    "prepare:debug": "node scripts/ensureDependencies.mts",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "typecheck:test": "tsc -p test",

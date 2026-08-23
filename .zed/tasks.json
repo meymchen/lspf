@@ -1,0 +1,32 @@
+[
+  {
+    "label": "build lspf-hello",
+    "command": "cargo",
+    "args": ["build", "-p", "lspf-hello"],
+    "cwd": "$ZED_WORKTREE_ROOT"
+  },
+  {
+    "label": "test lspf-hello (quick)",
+    "command": "cargo",
+    "args": ["test", "-p", "lspf-hello"],
+    "cwd": "$ZED_WORKTREE_ROOT"
+  },
+  {
+    "label": "test workspace (full)",
+    "command": "cargo",
+    "args": [
+      "test",
+      "--workspace",
+      "--features",
+      "stdio,tcp,websocket,proposed",
+      "--all-targets"
+    ],
+    "cwd": "$ZED_WORKTREE_ROOT"
+  },
+  {
+    "label": "run hover example (waits for stdio client)",
+    "command": "cargo",
+    "args": ["run", "-p", "lspf", "--example", "hover"],
+    "cwd": "$ZED_WORKTREE_ROOT"
+  }
+]

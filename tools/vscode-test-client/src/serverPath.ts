@@ -1,14 +1,34 @@
 import * as path from 'node:path';
 
 /**
- * Resolve the `lspf-hello` language server binary inside the lspf repository.
+ * Resolve the language server binary selected for this debug session.
  *
- * The binary is produced by `cargo build -p lspf-hello` and lands at
- * `target/debug/lspf-hello` — the workspace member, not the old
- * `target/debug/examples/hello` example path.
+ * The binary is produced by `cargo build -p lspf-hello` and lands under
+ * `target/debug/` as `lspf-hello` (`lspf-hello.exe` on Windows) — the workspace
+ * member, not the old `target/debug/examples/hello` example path.
  *
  * @param repoRoot Absolute path to the lspf repository root.
+ * @param platform Platform used to select the executable suffix.
+ * @param exampleName Optional Cargo example selected through `LSPF_TEST_EXAMPLE`.
  */
-export function resolveServerBinary(repoRoot: string): string {
-    return path.join(repoRoot, 'target', 'debug', 'lspf-hello');
+export function resolveServerBinary(
+    repoRoot: string,
+    platform: NodeJS.Platform = process.platform,
+    exampleName: string | undefined = process.env.LSPF_TEST_EXAMPLE,
+): string {
+    const suffix = platform === 'win32' ? '.exe' : '';
+    if (exampleName) {
+        if (!/^[a-z0-9][a-z0-9_-]*$/.test(exampleName)) {
+            throw new Error(`invalid LSPF_TEST_EXAMPLE: ${exampleName}`);
+        }
+        return path.join(
+            repoRoot,
+            'target',
+            'debug',
+            'examples',
+            `${exampleName}${suffix}`,
+        );
+    }
+
+    return path.join(repoRoot, 'target', 'debug', `lspf-hello${suffix}`);
 }
