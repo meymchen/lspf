@@ -45,6 +45,12 @@ jobs:
     permissions:
       contents: read
 
+  packaged-crate:
+    name: packaged crate
+    uses: ./.github/workflows/packaged-crate.yml
+    permissions:
+      contents: read
+
   public-api:
     name: public API compatibility
     runs-on: ubuntu-latest
