@@ -15,7 +15,6 @@ tarpaulin-report.html
 
 # Editor and IDE files
 /.idea/
-/.vscode/
 *.code-workspace
 *.swp
 *.swo
