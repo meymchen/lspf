@@ -45,6 +45,29 @@ jobs:
     permissions:
       contents: read
 
+  public-api:
+    name: public API compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-semver-checks --version 0.50.0 --locked
+      - name: Test compatibility gate behavior
+        run: bash ci/test-check-public-api.sh
+      - name: Compare supported public API surfaces
+        run: bash ci/check-public-api.sh
+      - name: Upload machine-readable compatibility report
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: public-api-compatibility-report
+          path: target/public-api-compatibility/report.json
+          if-no-files-found: error
+          retention-days: 14
+
   msrv:
     name: msrv
     runs-on: ubuntu-latest

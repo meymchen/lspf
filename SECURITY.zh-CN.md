@@ -90,10 +90,33 @@ crate 仍低于 1.0 时：
 `proposed` 后的 API 跟随 LSP specification 草案。patch 版本不会故意破坏这些 API，
 但 minor 版本可以修改或删除它们，无须经过弃用周期。此类变更仍须写入 changelog。
 
-当前自动发布 job 是 Release-plz workflow 的 `release-plz-pr` 与
-`release-plz-release`；它们准备发布元数据并发布版本，但不证明 API 兼容性。机器可读的
-兼容性 gate 由 #157 跟踪。在该 gate 落地前，reviewer 根据公开 diff 与 changelog
-执行本节规则。
+CI `public API compatibility` 将 crate 与 crates.io 上的最新版本进行比较；该版本是当前
+维护的 baseline。它会对表中每个 native feature selection、两个受支持的 WASM
+selection，以及各 selection 加上 `proposed` 后的组合运行 `cargo-semver-checks`。默认
+surface 与显式 `stdio` surface 相同，因此由该 row 覆盖。job 会上传 JSON artifact
+`public-api-compatibility-report`，其中记录每个 surface 的 baseline、当前版本、命令输出、
+结果与 exit code。
+
+对于 WASM row，rustdoc 在 CI host 上运行，但会选择 crate 中
+`target_arch = "wasm32"` 的代码分支。这规避了 `cargo-semver-checks` 的 target metadata
+限制，同时仍会比较 WASM 专有 Rust interface。独立的 CI `wasm` 与 `feature-contract`
+job 会为真实的 `wasm32-unknown-unknown` target 编译这些 selection。
+
+gate 始终要求 `cargo-semver-checks` 按 patch 级兼容性执行检查。Exit code 100 表示工具
+发现破坏性变更。报告中每个失败 row 都包含完整规范化 findings 的 hash。有意变更可在
+`ci/public-api-breaking-approvals.json` 中按 baseline、当前版本、target 与 feature
+selection 单独批准。出现不同或额外 finding 时，hash 会改变，gate 仍会失败。
+
+若要批准已 review 的破坏性变更，请将失败 row 的 `baselineVersion`、
+`currentVersion`、`target`、`features` 与 `findingsSha256` 值复制到 `approvals`
+array 的新 entry 中。重新运行 gate，并将批准记录与破坏性变更一同 commit。对应的
+`currentVersion` 发布后，应删除该批准记录；后续 baseline 或版本不能复用它。
+
+批准记录仅适用于 1.0 前的 minor 版本增加或 1.0 后的 major 版本增加。Changelog 与
+release notes 必须说明每个已批准变更。版本未变、patch 版本或 1.0 后的 minor 版本都不
+接受批准记录。其他非零 tool exit 表示某个 surface 无法完成检查。Tool error 与未经
+批准的 finding 都会在报告写入后使 CI job 失败。Setup failure 也会在退出前写入 JSON
+error report。
 
 ## 弃用
 
@@ -104,9 +127,9 @@ changelog 必须写明替代项，或者解释为何没有替代项。
 如果 API 不健全、会导致漏洞或无法按文档工作，维护者可以跳过正常弃用窗口。release
 notes 必须解释例外原因；存在安全替代方案时，还必须提供迁移说明。
 
-GitHub issue #157 中计划的公开 API 兼容性 gate 会检测已弃用与未弃用 API 的删除。CI
-`markdownlint` 目前检查本策略和其他 Markdown；无 warning 的公开文档 gate 由 #156
-跟踪。
+公开 API 兼容性 gate 会检测已弃用与未弃用 API 的删除。CI `markdownlint` 检查本策略
+和其他 Markdown 文件。CI `public docs` 对相同 target 与 feature surface 检查无
+warning 的文档。
 
 ## 报告漏洞
 
