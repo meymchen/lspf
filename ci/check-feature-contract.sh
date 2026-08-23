@@ -4,6 +4,8 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
+source ci/supported-feature-matrix.sh
+
 fail() {
     echo "feature-contract error: $*" >&2
     exit 1
@@ -175,16 +177,7 @@ done
 # Compile every supported selection here, including `proposed` as an
 # orthogonal addition. This is deliberately more exhaustive than the test
 # matrix: this gate owns the public target/feature contract.
-for features in \
-    none \
-    runtime-tokio \
-    stdio \
-    tcp \
-    websocket \
-    stdio,tcp \
-    stdio,websocket \
-    tcp,websocket \
-    stdio,tcp,websocket
+for features in "${NATIVE_FEATURE_SELECTIONS[@]}"
 do
     if [[ $features == none ]]; then
         cargo check -p lspf --locked --no-default-features
@@ -195,7 +188,7 @@ do
             --features "$features,proposed"
     fi
 done
-for features in wasm worker-channel
+for features in "${WASM_FEATURE_SELECTIONS[@]}"
 do
     cargo check -p lspf --locked --target wasm32-unknown-unknown \
         --no-default-features --features "$features"

@@ -119,7 +119,10 @@ fn decode_initialized_params(raw: &Bytes) -> std::result::Result<InitializedPara
 pub enum Outcome {
     /// The peer sent `exit`. `code` is the LSP exit code: 0 when `shutdown`
     /// completed first, 1 otherwise.
-    Exit { code: i32 },
+    Exit {
+        /// The process exit code prescribed by the LSP lifecycle.
+        code: i32,
+    },
     /// The peer closed the transport before sending `exit`.
     TransportClosed,
     /// The writer half failed terminally, so no further response could reach
