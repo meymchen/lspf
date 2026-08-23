@@ -61,10 +61,12 @@ impl Context {
         self.cancellation.as_ref()
     }
 
+    /// The JSON-RPC request ID, or `None` while handling a notification.
     pub fn request_id(&self) -> Option<&RequestId> {
         self.request_id.as_ref()
     }
 
+    /// The tracing span associated with the incoming call.
     pub fn span(&self) -> &Span {
         &self.span
     }

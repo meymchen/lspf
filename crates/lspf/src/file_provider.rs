@@ -25,6 +25,8 @@ use crate::workspace::WorkspaceError;
 ///
 /// [`Document`]: crate::Document
 pub trait FileProvider: Send + Sync + 'static {
+    /// Read UTF-8 text for `uri`, returning `None` when the resource does not
+    /// exist and [`WorkspaceError`] for other failures.
     fn read_text(
         &self,
         uri: &Uri,
@@ -67,6 +69,7 @@ pub struct MemoryFileProvider {
 }
 
 impl MemoryFileProvider {
+    /// Create an empty in-memory provider.
     pub fn new() -> Self {
         Self::default()
     }

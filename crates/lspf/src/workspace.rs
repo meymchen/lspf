@@ -83,7 +83,10 @@ pub enum WorkspaceError {
 
     /// The resource is larger than the provider's configured byte limit.
     #[error("the resource exceeds the maximum read size of {limit} bytes")]
-    TooLarge { limit: u64 },
+    TooLarge {
+        /// Configured maximum number of bytes.
+        limit: u64,
+    },
 
     /// The provider failed to read the resource.
     #[error("failed to read the resource: {0}")]

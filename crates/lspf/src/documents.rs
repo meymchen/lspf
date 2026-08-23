@@ -38,10 +38,13 @@ pub struct Document {
 }
 
 impl Document {
+    /// The document URI supplied by the client or file provider.
     pub fn uri(&self) -> &Uri {
         &self.uri
     }
 
+    /// The client-supplied language identifier, or an empty string for a
+    /// provider-loaded snapshot.
     pub fn language_id(&self) -> &str {
         &self.language_id
     }

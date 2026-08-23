@@ -4,13 +4,17 @@ use thiserror::Error;
 
 use crate::transport::TransportError;
 
+/// Result type returned by serving and Transport entry points.
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// A terminal framework or Transport failure while serving a connection.
 #[derive(Debug, Error)]
 pub enum Error {
+    /// A protocol error produced while handling an incoming call.
     #[error(transparent)]
     Lsp(#[from] LspError),
 
+    /// The underlying Transport failed.
     #[error(transparent)]
     Transport(#[from] TransportError),
 
@@ -139,7 +143,10 @@ pub enum BuildError {
     /// base its family requires (ADR 0017). Capability construction never
     /// resolves such a clash by last-write-wins; it fails the build instead.
     #[error("conflicting contributions for capability field `{field}`")]
-    ConflictingCapability { field: &'static str },
+    ConflictingCapability {
+        /// The singular `ServerCapabilities` field with conflicting inputs.
+        field: &'static str,
+    },
 
     /// `configure_initialize` was supplied more than once. There is exactly one
     /// initialization-dependent registration transaction (ADR 0017).
@@ -160,50 +167,66 @@ pub enum BuildError {
     InvalidOutboundWarningThreshold,
 }
 
+/// A JSON-RPC/LSP error suitable for returning from a handler.
 #[derive(Debug, Error)]
 pub enum LspError {
+    /// An unexpected server failure (`-32603`).
     #[error("internal error: {0}")]
     Internal(String),
 
+    /// Invalid method parameters (`-32602`).
     #[error("invalid params: {0}")]
     InvalidParams(String),
 
+    /// No handler exists for the method (`-32601`).
     #[error("method not found: {0}")]
     MethodNotFound(String),
 
+    /// The peer cancelled the request (`-32800`).
     #[error("request cancelled")]
     RequestCancelled,
 
+    /// The requested content changed before completion (`-32801`).
     #[error("content modified")]
     ContentModified,
 
+    /// A request arrived before initialization completed (`-32002`).
     #[error("server not initialized")]
     ServerNotInitialized,
 
+    /// The incoming JSON-RPC request is invalid (`-32600`).
     #[error("invalid request: {0}")]
     InvalidRequest(String),
 
+    /// An application-defined server error.
     #[error("{message}")]
     ServerError {
+        /// Application-defined JSON-RPC error code.
         code: i32,
+        /// Human-readable error message.
         message: String,
+        /// Optional structured error data.
         data: Option<serde_json::Value>,
     },
 }
 
 impl LspError {
+    /// Construct an internal-error response from a displayable value.
     pub fn internal(e: impl Display) -> Self {
         Self::Internal(e.to_string())
     }
 
+    /// Construct an invalid-params response from a displayable value.
     pub fn invalid_params(e: impl Display) -> Self {
         Self::InvalidParams(e.to_string())
     }
 
+    /// Construct an invalid-request response from a displayable value.
     pub fn invalid_request(e: impl Display) -> Self {
         Self::InvalidRequest(e.to_string())
     }
 
+    /// The JSON-RPC/LSP numeric error code.
     pub fn code(&self) -> i32 {
         match self {
             Self::Internal(_) => -32603,
@@ -217,6 +240,7 @@ impl LspError {
         }
     }
 
+    /// The human-readable error message.
     pub fn message(&self) -> String {
         match self {
             Self::Internal(m)
@@ -230,6 +254,7 @@ impl LspError {
         }
     }
 
+    /// Optional structured error data for an application-defined server error.
     pub fn data(&self) -> Option<&serde_json::Value> {
         match self {
             Self::ServerError { data, .. } => data.as_ref(),
