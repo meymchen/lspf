@@ -1,27 +1,27 @@
-# lspf VSCode test client
+# lspf VS Code test client
+
+[English](./README.md) | [简体中文](./README.zh-CN.md)
 
 Minimal VSCode extension that spawns `target/debug/lspf-hello` as a
 language server. Used for manual smoke testing during development —
 the CI side of the same path is the `lspf-hello` end-to-end suite,
 run with `cargo test -p lspf-hello` (or `cargo test --workspace`).
 
-## Setup (one-time)
+## Setup
+
+Node.js 24 is required. From the repository root, install the exact versions
+from `package-lock.json`, compile the extension, and run its unit tests:
 
 ```sh
-cd tools/vscode-test-client
-npm install
-npm run compile
-```
-
-The extension's server-path resolution has a small unit test; run it with:
-
-```sh
-npm test
+npm --prefix tools/vscode-test-client ci
+npm --prefix tools/vscode-test-client run compile
+npm --prefix tools/vscode-test-client test
 ```
 
 ## Launch
 
-Open `tools/vscode-test-client/` in VSCode and press F5. An Extension
+Open the repository root in VS Code and select
+`Debug LSP client (Extension Host)` from the Run and Debug view. An Extension
 Development Host window opens. The pre-launch task builds `lspf-hello` and
 starts the TypeScript compiler in watch mode. If test-client dependencies are
 missing, it installs the locked versions first. A separate setup or Cargo build
@@ -29,9 +29,6 @@ is not needed for F5. Create or open any `.txt` file. You
 should see the `lspf-hello` output channel come alive with LSP traffic,
 and the server's `tracing` spans on its stderr (visible in the
 Extension Host's debug console).
-
-You can also open the repository root and select
-`Debug LSP client (Extension Host)` from the Run and Debug view.
 
 To run one of the framework examples instead, select
 `Run LSP example client (select example)`. The pre-launch task builds every

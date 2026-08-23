@@ -82,14 +82,20 @@ mod markdown {
     #[doc = include_str!("../../../docs/guides/features-and-workspace.md")]
     pub struct FeaturesAndWorkspaceGuide;
 
+    #[doc = include_str!("../../../docs/guides/features-and-workspace.zh-CN.md")]
+    pub struct FeaturesAndWorkspaceGuideZhCn;
+
     #[doc = include_str!("../../../docs/guides/outgoing-client.md")]
     pub struct OutgoingClientGuide;
 
-    #[doc = include_str!("../../../docs/guides/migrating-to-0.4.md")]
-    pub struct MigratingTo04Guide;
+    #[doc = include_str!("../../../docs/guides/outgoing-client.zh-CN.md")]
+    pub struct OutgoingClientGuideZhCn;
 
     #[doc = include_str!("../../../docs/guides/transports.md")]
     pub struct TransportsGuide;
+
+    #[doc = include_str!("../../../docs/guides/transports.zh-CN.md")]
+    pub struct TransportsGuideZhCn;
 }
 
 #[doc(hidden)]

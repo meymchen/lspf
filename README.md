@@ -14,15 +14,11 @@ language server in very little code. You register typed handlers on a
 lifecycle, document synchronization, cancellation, bounded concurrency,
 `tracing` spans, and typed server-to-client traffic through `Client`.
 
-> **Status:** early-stage. **0.3** is the current surface of this repository
-> — the sealed feature catalog covering the stable LSP 3.17 features, Commands,
-> the multi-root `Workspace`, `FileProvider`-backed unopened-file lookup, and
-> configurable document synchronization — which the examples below use. It is
-> not published yet: crates.io still carries **0.2**, and the
-> [changelog](./CHANGELOG.md) records what 0.3 adds on top of it. Hover,
-> completion, and commands were the standard features implemented in 0.2; the
-> first-party TCP, WebSocket, and WASM worker-channel transports are
-> implemented.
+> **Status:** early-stage. The current published release is **0.5.2**. It
+> includes the stable LSP 3.17 feature catalog, typed Commands, the
+> multi-root `Workspace`, outgoing `Client` helpers, and stdio, TCP, WebSocket,
+> and WASM worker-channel transports. See the
+> [package changelog](./crates/lspf/CHANGELOG.md) for release history.
 
 ## Quick start
 
@@ -141,17 +137,18 @@ Runnable servers for individual LSP features are indexed in
 
 ```toml
 [dependencies]
-lspf = "0.3"
+lspf = "0.5.2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ```
 
-`0.3` is the latest published release, and the quickstart above targets it.
+The crate requires Rust 1.96 or newer. The quickstart uses the default `stdio`
+feature; select a different feature set for another Transport.
 
-`lspf`'s own `Cargo.toml` already pulls in `lsp-types`, `tokio`, `tracing`,
-`serde`, and the rest of the runtime stack, so you only need to opt in to the
-`tokio` features you actually use.
+List every crate your application names directly. In this example, `tokio`,
+`tracing`, and `tracing-subscriber` are direct dependencies even though lspf
+also uses them internally.
 
 ## Why lspf
 
@@ -211,7 +208,7 @@ the docs.
 The full design lives next to the code:
 
 - [`CONTEXT.md`](./CONTEXT.md) — domain language and shared vocabulary.
-- [`docs/adr/`](./docs/adr/) — 24 architecture decision records covering
+- [`docs/adr/`](./docs/adr/) — architecture decision records covering
   the async-only runtime, the typed Router and capability catalog, the
   protocol engine and outbound request broker, the cancellation model, the
   transport shape, the `Layer`/`Service` stack, position encoding, and more.
@@ -226,13 +223,11 @@ The full design lives next to the code:
   requests, dynamic registration, workspace refreshes, and work-done
   progress, with a full helper reference. Every example compiles as a
   doctest.
-- [`docs/guides/migrating-to-0.4.md`](./docs/guides/migrating-to-0.4.md)
-  — the 0.3 → 0.4 breaking changes and how to update.
-- [`docs/guides/transports.md`](./docs/guides/transports.md) — the 0.5
-  Transport selection and target/feature matrices, buildable native and WASM
-  examples, custom Transport contract, and explicit deployment non-goals.
+- [`docs/guides/transports.md`](./docs/guides/transports.md) — Transport
+  selection and target/feature matrices, buildable native and WASM examples,
+  and the custom Transport contract.
 
-## Roadmap
+## Current scope
 
 Available today:
 
@@ -241,8 +236,8 @@ Available today:
 - The built `Server`: typed requests, notifications, commands, the sealed
   feature catalog covering the stable LSP 3.17 features, user `Layer`s, and
   the one `configure_initialize` transaction.
-- Lifecycle, incremental or full text-document synchronization, and the
-  post-mutation document hooks.
+- Lifecycle hooks through shutdown and exit, incremental or full text-document
+  synchronization, and post-mutation document hooks.
 - The multi-root `Workspace`, latest configuration settings, and
   `FileProvider`-backed unopened-file lookup.
 - Typed server-to-client notifications and correlated requests through
@@ -277,13 +272,13 @@ To wire it into a real editor instead, see [Editor setup](#editor-setup).
 This repository is a Cargo workspace with two members:
 
 - [`crates/lspf`](./crates/lspf) — the framework library you depend on
-  (`lspf = "0.2"`).
+  (`lspf = "0.5.2"`).
 - [`crates/lspf-hello`](./crates/lspf-hello) — an installable **template
   server**. It builds a `lspf-hello` binary that speaks LSP over stdio: it
-  answers hover and completion (with resolve), dispatches the
-  `lspf-hello.workspaceRoots` and `lspf-hello.readFile` Commands, reads
-  unopened files through an `OsFileProvider`, and — on every
-  `textDocument/didOpen` — publishes an informational diagnostic
+  answers hover and completion (with resolve), dispatches four Commands for
+  workspace roots, file reads, outgoing client helpers, and cancellable
+  progress, and reads unopened files through an `OsFileProvider`. On every
+  `textDocument/didOpen`, it publishes an informational diagnostic
   ("lspf saw this document open"). Fork it as the starting point for your
   own language server.
 
@@ -400,11 +395,7 @@ not register `lspf-hello` as a Zed language server.
 
 ## Contributing
 
-Issues live on the GitHub tracker at
-[meymchen/lspf](https://github.com/meymchen/lspf/issues), managed via
-`gh`. Triage uses a fixed label set — `needs-triage`, `needs-info`,
-`ready-for-agent`, `ready-for-human`, `wontfix` — so an agent or a
-human can pick up an issue without re-classifying it.
+Issues live on the [GitHub tracker](https://github.com/meymchen/lspf/issues).
 
 Before opening a PR, please skim:
 
@@ -413,6 +404,10 @@ Before opening a PR, please skim:
 - The relevant `docs/adr/*.md` — if the change revisits a decision,
   either justify the deviation in the PR description or write a new
   ADR.
+
+Keep handwritten user-facing documentation bilingual. Pair each English
+README or guide with a `.zh-CN.md` version; generated release documents are
+excluded.
 
 Lint all Markdown with the repository's shared configuration (Node.js 24):
 

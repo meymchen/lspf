@@ -1,21 +1,18 @@
-# Features, capabilities, and the workspace
+# 功能、capability 与 workspace
 
 [English](./features-and-workspace.md) | [简体中文](./features-and-workspace.zh-CN.md)
 
-This guide covers how a lspf server gains standard LSP 3.17 features, where
-its `ServerCapabilities` come from, who owns the workspace and the documents,
-how Commands dispatch, and how unopened files resolve through a
-`FileProvider`. Every example here compiles as a doctest against the shipped
-crate, and the complete journey runs as a real server in
-[`crates/lspf-hello`](../../crates/lspf-hello/src/main.rs) with an end-to-end
-stdio test beside it.
+本指南说明 lspf 服务器如何获得标准 LSP 3.17 功能、`ServerCapabilities` 从何而来、
+workspace 与文档由谁持有、Command 如何分发，以及如何通过 `FileProvider` 读取未打开
+的文件。这里的每段示例都会基于已发布 crate 作为 doctest 编译。完整流程也可以通过
+[`crates/lspf-hello`](../../crates/lspf-hello/src/main.rs) 真实运行，并由相邻的 stdio
+端到端测试验证。
 
-## Feature registration
+## 注册功能
 
-A standard feature is registered with one builder call: a descriptor from
-[`lspf::features`] fixes the wire method, the typed parameters and result, and
-the capability the feature advertises — all at once. The handler has the same
-shape as a custom request handler.
+注册标准功能只需要一次 builder 调用。[`lspf::features`] 中的描述符会同时确定协议
+方法、带类型的参数与结果，以及该功能宣告的 capability。处理器的形式与自定义请求
+处理器相同。
 
 ```rust
 use std::sync::Arc;
@@ -54,9 +51,8 @@ fn main() {
 }
 ```
 
-Options-carrying features take their public options in the descriptor, and
-the same options are what the server advertises — there is no separate
-capability knob:
+带选项的功能把公开选项传给描述符，服务器会原样宣告这些选项，不需要另外配置
+capability：
 
 ```rust
 # use std::sync::Arc;
@@ -85,9 +81,9 @@ let server = Server::builder(State)
 # }
 ```
 
-Dependent features extend a family. [`completion_resolve()`](lspf::features::completion_resolve)
-dispatches `completionItem/resolve` and turns the advertised completion
-provider into an options object carrying `resolveProvider: true`:
+依赖功能用于扩展同一功能族。[`completion_resolve()`](lspf::features::completion_resolve)
+分发 `completionItem/resolve`，并把宣告的 completion provider 转为带有
+`resolveProvider: true` 的选项对象：
 
 ```rust
 # use std::sync::Arc;
@@ -116,29 +112,27 @@ let server = Server::builder(State)
 # }
 ```
 
-Non-standard methods use [`request`](lspf::ServerBuilder::request) and
-[`notification`](lspf::ServerBuilder::notification) with the marker types
-lspf re-exports as [`lspf::types::request`] and [`lspf::types::notification`].
-Custom methods add nothing to `ServerCapabilities` — that is the price of
-escaping the sealed catalog — so a custom method and a standard feature are
-both valid for the same server.
+非标准方法使用 [`request`](lspf::ServerBuilder::request) 和
+[`notification`](lspf::ServerBuilder::notification)，marker type 来自 lspf 重新导出的
+[`lspf::types::request`] 与 [`lspf::types::notification`]。自定义方法不会向
+`ServerCapabilities` 添加内容，这是绕过封闭功能目录的明确代价。同一个服务器可以
+同时注册自定义方法和标准功能。
 
-## Automatic capability derivation and conflicts
+## 自动派生 capability 与冲突处理
 
-`ServerCapabilities` are generated from the same registrations that dispatch:
-what the server advertises is exactly what it serves, and no builder call
-accepts a handwritten capability object. Families that share one singular
-capability field (diagnostics, semantic tokens, file operations, each
-resolve/prepare family) merge their contributions under that field.
+`ServerCapabilities` 与分发路由由同一份注册生成，因此服务器宣告的功能就是实际
+提供的功能，builder 也不接受手写的 capability 对象。共用单一 capability 字段的
+功能族会把各项贡献合并到该字段，例如 diagnostics、semantic tokens、文件操作以及
+各 resolve/prepare 功能族。
 
-Mistakes are static [`BuildError`]s from [`build()`](lspf::ServerBuilder::build),
-never a runtime surprise or a silent last-write-wins:
+注册错误会由 [`build()`](lspf::ServerBuilder::build) 返回静态 [`BuildError`]，不会
+拖到运行时，也不会静默采用最后一次写入：
 
-- two handlers for one method → `BuildError::DuplicateMethod`;
-- a method the framework owns (`initialize`, `shutdown`, `exit`,
-  `initialized`, `$/cancelRequest`) → `BuildError::ReservedMethod`;
-- two contributions that disagree on a singular field, or a dependent feature
-  without its base → `BuildError::ConflictingCapability`.
+- 同一方法注册两个处理器会返回 `BuildError::DuplicateMethod`；
+- 注册框架持有的方法（`initialize`、`shutdown`、`exit`、`initialized`、
+  `$/cancelRequest`）会返回 `BuildError::ReservedMethod`；
+- 对同一字段提供冲突内容，或缺少基础功能时注册依赖功能，会返回
+  `BuildError::ConflictingCapability`。
 
 ```rust
 # use std::sync::Arc;
@@ -164,10 +158,9 @@ assert_eq!(error, lspf::BuildError::ConflictingCapability { field: "completionPr
 # }
 ```
 
-Registrations can depend on the client's `InitializeParams` through the one
-`configure_initialize` transaction. The callback sees read-only parameters
-and a transactional [`InitializeRegistrar`], registers conditionally, and
-either commits the whole transaction or fails initialization:
+注册也可以通过唯一一次 `configure_initialize` 事务依赖客户端的 `InitializeParams`。
+回调读取只读参数，通过事务型 [`InitializeRegistrar`] 有条件地注册；事务要么全部
+提交，要么初始化失败：
 
 ```rust
 # use std::sync::Arc;
@@ -205,20 +198,16 @@ let server = Server::builder(State)
 # }
 ```
 
-## Workspace and Documents ownership
+## Workspace 与 Documents 的所有权
 
-The framework owns the connection's [`Workspace`] and [`Documents`]; user
-state never holds either. Handlers reach both through the [`Context`]
-parameter: `ctx.workspace()` and `ctx.documents()` — the read-only
-[`DocumentsView`], a view over the store only the protocol engine's built-in
-document-sync handlers ever mutate.
+连接的 [`Workspace`] 和 [`Documents`] 由框架持有，用户状态不持有其中任何一个。
+处理器通过 [`Context`] 参数访问二者：`ctx.workspace()` 与 `ctx.documents()`。后者
+返回只读 [`DocumentsView`]；只有协议引擎内置的文档同步处理器能够修改底层 store。
 
-`Workspace` carries the client's announcements verbatim — client info,
-client capabilities, initialization options, the root URI, and the workspace
-folders in announced order — and its later mutations come from the protocol:
-`workspace/didChangeWorkspaceFolders`, `workspace/didChangeConfiguration`,
-and `$/setTrace`. Clones are cheap handles onto one shared state, so any
-handler sees the current connection state:
+`Workspace` 原样保存客户端声明，包括 client info、client capabilities、
+initialization options、root URI，以及按声明顺序排列的 workspace folder。后续变更
+来自 `workspace/didChangeWorkspaceFolders`、`workspace/didChangeConfiguration` 和
+`$/setTrace`。克隆得到的句柄共享同一份状态，因此任何处理器都能看到连接的最新状态：
 
 ```rust
 # use std::sync::Arc;
@@ -247,18 +236,16 @@ async fn roots(
 # }
 ```
 
-Documents the framework tracks are synchronized before user code runs. A
-registration for a built-in document notification — `textDocument/didOpen`,
-`didChange`, `didClose`, `willSave`, `didSave` — records the connection's
-one post-validation hook: the engine decodes and mutates first, and the hook
-observes the result through `ctx.documents()`.
+框架跟踪的文档会在用户代码运行前完成同步。为内置文档通知注册处理器时，例如
+`textDocument/didOpen`、`didChange`、`didClose`、`willSave` 或 `didSave`，得到的
+是该连接唯一的验证后钩子。引擎先解码并修改状态，钩子再通过 `ctx.documents()`
+观察结果。
 
-## Commands
+## Command
 
-A Command is a typed closure dispatched by name beneath
-`workspace/executeCommand`. The engine decodes the command's `arguments`
-array into `Args` (tuples, structs, and `Vec` alike; an absent `arguments`
-decodes as an empty array) and returns `Output` as the command result:
+Command 是在 `workspace/executeCommand` 下按名称分发的带类型闭包。引擎把 command
+的 `arguments` 数组解码为 `Args`，tuple、struct 和 `Vec` 都可以；缺少
+`arguments` 时按空数组处理。返回值 `Output` 会作为 command 结果发回：
 
 ```rust
 # use std::sync::Arc;
@@ -289,20 +276,17 @@ async fn count_words(
 # }
 ```
 
-Each registered name merges into one de-duplicated `executeCommandProvider`
-whose `commands` list matches registration order exactly (ADR 0022), so the
-advertised order never depends on hashing or on a later re-sort. Command
-registration mistakes are static `BuildError`s too: an empty name
-(`EmptyCommandName`), two handlers for one name (`DuplicateCommand`), or any
-command beside an explicit `workspace/executeCommand` request handler
-(`ExecuteCommandConflict`).
+所有名称会合并到一个去重的 `executeCommandProvider`，其中的 `commands` 列表严格
+保持注册顺序（ADR 0022），不会受 hash 或后续排序影响。Command 注册错误也属于静态
+`BuildError`：空名称为 `EmptyCommandName`，重复名称为 `DuplicateCommand`，同时
+注册 Command 与显式 `workspace/executeCommand` 请求处理器则为
+`ExecuteCommandConflict`。
 
-## FileProvider configuration
+## 配置 FileProvider
 
-`ctx.workspace().text_document(uri)` resolves a document snapshot: editor-open
-text first, then the connection's configured [`FileProvider`]. The provider
-is owned by the connection's workspace, configured once on the builder, and
-never caches — every lookup asks it again. Two implementations ship:
+`ctx.workspace().text_document(uri)` 返回文档 snapshot：优先使用编辑器中已打开的
+文本，再查询连接配置的 [`FileProvider`]。provider 由连接的 workspace 持有，通过
+builder 配置一次，而且不会缓存；每次 lookup 都会重新查询。框架提供两个实现：
 
 ```rust
 # use lspf::Server;
@@ -323,9 +307,8 @@ let server = Server::builder(State)
 # }
 ```
 
-[`MemoryFileProvider`] serves virtual resources and tests; clones share one
-backing store, and lookup uses the same normalized URI identity as open
-documents:
+[`MemoryFileProvider`] 用于虚拟资源和测试。它的 clone 共享同一个 backing store，
+lookup 使用与已打开文档相同的规范化 URI identity：
 
 ```rust
 # fn main() {
@@ -337,10 +320,9 @@ provider.insert(
 # }
 ```
 
-Failures surface through [`WorkspaceError`]: `NotFound` when the provider has
-no resource, `UnsupportedScheme` for a scheme the provider does not serve,
-`InvalidEncoding` for non-UTF-8 contents, `TooLarge` past the configured
-limit, and `Io` for the underlying read error.
+失败通过 [`WorkspaceError`] 返回：provider 中没有资源时为 `NotFound`，不支持 URI
+scheme 时为 `UnsupportedScheme`，内容不是 UTF-8 时为 `InvalidEncoding`，超过大小
+限制时为 `TooLarge`，底层读取失败则为 `Io`。
 
 [`lspf::features`]: https://docs.rs/lspf/latest/lspf/features/
 [`lspf::types::request`]: https://docs.rs/lspf/latest/lspf/types/request/

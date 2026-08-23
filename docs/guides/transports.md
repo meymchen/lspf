@@ -1,5 +1,7 @@
 # Choosing and implementing a Transport
 
+[English](./transports.md) | [简体中文](./transports.zh-CN.md)
+
 A `Server` owns one LSP connection. A Transport is the message-framed channel
 that carries that connection's JSON-RPC envelopes. Choose the Transport from
 the host that owns the connection; handler registration and business logic do
@@ -26,13 +28,12 @@ different Transport should not carry the stdio dependency graph.
 
 ```toml
 [dependencies]
-lspf = { git = "https://github.com/meymchen/lspf", default-features = false, features = ["tcp"] }
+lspf = { version = "0.5.2", default-features = false, features = ["tcp"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
-This guide documents the unreleased 0.5 Transport surface, so the example
-above follows the repository until 0.5 is published. After release, replace
-the `git` key with `version = "0.5"`.
+The crate requires Rust 1.96 or newer. The example selects only the TCP
+adapter; keep the default features when using stdio.
 
 | Feature | Default | Enables | Public effect |
 | --- | --- | --- | --- |
@@ -216,9 +217,9 @@ mTLS, ALPN, and rotation belong to the application: accept and authenticate a
 TLS stream first, then implement the message-framed Transport over that
 stream. lspf does not add TLS implicitly.
 
-## Intentional non-goals for 0.5
+## Transport scope
 
-The 0.5 Transport surface does not provide TLS configuration, multi-client
+The built-in Transport surface does not provide TLS configuration, multi-client
 serving, WebSocket client mode, reconnect, CLI Transport selection,
 notebook/client frameworks, or shared-memory WASM. These are deployment or
 client-framework policies rather than behavior hidden inside one `Server`

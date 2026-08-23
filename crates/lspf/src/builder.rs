@@ -1,4 +1,4 @@
-//! The 0.2 connection-owned builder surface (ADR 0017, ADR 0018).
+//! The connection-owned builder surface (ADR 0017, ADR 0018).
 //!
 //! [`Server::builder`] collects static registrations against one application
 //! state value; [`ServerBuilder::build`] validates them and returns a [`Server`]

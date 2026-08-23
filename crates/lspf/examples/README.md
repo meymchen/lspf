@@ -1,5 +1,7 @@
 # Feature example servers
 
+[English](./README.md) | [简体中文](./README.zh-CN.md)
+
 Each file is a runnable stdio language server focused on a small set of LSP
 methods. The parsers and languages are intentionally small so that the protocol
 interaction stays visible.
@@ -41,3 +43,18 @@ route before initialization, then uses `client/registerCapability` and
 `client/unregisterCapability` to control whether the client sends requests to
 that route. Local routes cannot be added or removed after initialization because
 the server router is frozen.
+
+## Transport examples
+
+The transport examples reuse the handlers in `shared/mod.rs`. Build each native
+adapter with only its required feature:
+
+```console
+cargo check -p lspf --example native_tcp --no-default-features --features tcp
+cargo check -p lspf --example native_websocket --no-default-features --features websocket
+```
+
+`shared_server` serves the same handlers over stdio on native targets and also
+checks the runtime-only WASM path. `worker_channel` exports a server for a
+browser or Node Worker. The [Transport guide](../../../docs/guides/transports.md)
+contains the WASM build and host commands.

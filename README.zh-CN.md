@@ -12,12 +12,10 @@
 你在 `Server` 上注册带类型的处理器，再把它交给传输层，协议本身由框架负责：生命周期、
 文档同步、取消、有界并发、`tracing` span，以及通过 `Client` 发出的带类型服务端消息。
 
-> **当前状态：** 仍处于早期阶段。本仓库的当前接口为 **0.3** —— 覆盖稳定 LSP 3.17
-> 功能的封闭（sealed）功能目录、Command、多根 `Workspace`、基于 `FileProvider`
-> 的未打开文件查找，以及可配置的文档同步，下面的示例均基于该接口。0.3 尚未发布：
-> crates.io 上仍是 **0.2**，0.3 相对 0.2 的新增内容见[变更日志](./CHANGELOG.md)。
-> 0.2 中已实现的标准功能为 hover、completion 和 Command；内置 TCP、WebSocket
-> 与 WASM worker-channel 传输已经实现。
+> **当前状态：** 项目仍处于早期阶段。当前已发布版本为 **0.5.2**。该版本包含
+> 稳定 LSP 3.17 功能目录、带类型的 Command、多根 `Workspace`、出站 `Client`
+> 辅助方法，以及 stdio、TCP、WebSocket 和 WASM worker-channel 传输。版本历史见
+> [crate 变更日志](./crates/lspf/CHANGELOG.md)。
 
 ## 快速开始
 
@@ -119,25 +117,28 @@ async fn main() -> lspf::Result<()> {
 状态和未打开文件查找——的可运行版本位于
 [`crates/lspf-hello/src/main.rs`](./crates/lspf-hello/src/main.rs)，它也是
 [编辑器配置](#编辑器配置)中使用的模板服务器，旁边还有端到端 stdio 测试。
-[功能、capability 与 workspace](./docs/guides/features-and-workspace.md)
+[功能、capability 与 workspace](./docs/guides/features-and-workspace.zh-CN.md)
 指南逐项讲解各个部分。
+传输选择、Cargo feature 组合和自定义消息通道见
+[传输指南](./docs/guides/transports.zh-CN.md)。
 各项 LSP 功能的可运行示例服务见
-[`crates/lspf/examples/README.md`](./crates/lspf/examples/README.md)。
+[`crates/lspf/examples/README.zh-CN.md`](./crates/lspf/examples/README.zh-CN.md)。
 
 ## 安装依赖
 
 ```toml
 [dependencies]
-lspf = "0.3"
+lspf = "0.5.2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ```
 
-`0.3` 是最新的已发布版本，上面的快速开始针对它。
+该 crate 要求 Rust 1.96 或更高版本。快速开始使用默认启用的 `stdio` feature；
+如需其他传输，请选择对应的 feature 组合。
 
-`lspf` 的 `Cargo.toml` 已经引入 `lsp-types`、`tokio`、`tracing`、`serde`
-等运行时依赖，因此你的应用只需为直接使用的 `tokio` 功能选择相应 feature。
+应用代码直接引用的 crate 都应列为直接依赖。上例中的 `tokio`、`tracing` 和
+`tracing-subscriber` 不能因为 lspf 内部也使用它们而省略。
 
 ## 为什么选择 lspf
 
@@ -187,21 +188,21 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 完整设计文档与代码一起维护：
 
 - [`CONTEXT.md`](./CONTEXT.md)：领域语言和共享词汇。
-- [`docs/adr/`](./docs/adr/)：24 份架构决策记录，涵盖纯异步运行时、带类型的 Router
+- [`docs/adr/`](./docs/adr/)：架构决策记录，涵盖纯异步运行时、带类型的 Router
   与 capability 目录、协议引擎与出站请求代理、取消模型、传输形式、`Layer`/`Service`
   栈、位置编码等。ADR 同时描述架构方向和已经交付的行为；ADR 被接受并不表示对应
   功能已经实现。
-- [`docs/guides/features-and-workspace.md`](./docs/guides/features-and-workspace.md)：
+- [`docs/guides/features-and-workspace.zh-CN.md`](./docs/guides/features-and-workspace.zh-CN.md)：
   如何注册功能、capability 从何而来、谁持有 workspace 和文档、Command 如何分发，
   以及 `FileProvider` 的配置方式。其中的每个示例都作为 doctest 编译。
-- [`docs/guides/outgoing-client.md`](./docs/guides/outgoing-client.md)：
+- [`docs/guides/outgoing-client.zh-CN.md`](./docs/guides/outgoing-client.zh-CN.md)：
   服务器到客户端的辅助方法全景：通知、窗口与 workspace 请求、动态注册、
   workspace 刷新和 work-done 进度，并附完整的辅助方法参考表。其中的每个示例都作为
   doctest 编译。
-- [`docs/guides/migrating-to-0.4.md`](./docs/guides/migrating-to-0.4.md)：
-  0.3 → 0.4 的破坏性变更与迁移方法。
+- [`docs/guides/transports.zh-CN.md`](./docs/guides/transports.zh-CN.md)：传输选择、target/feature
+  兼容矩阵、原生与 WASM 示例，以及自定义 `Transport` 契约。
 
-## 路线图
+## 当前范围
 
 当前已经可用：
 
@@ -209,13 +210,17 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
   自定义传输接口。
 - 构建出的 `Server`：带类型的请求、通知、Command、覆盖稳定 LSP 3.17 功能的封闭
   功能目录、用户 `Layer`，以及唯一的 `configure_initialize` 事务。
-- 生命周期、增量或全量文本文档同步，以及变更后文档钩子。
+- 覆盖 shutdown 与 exit 的生命周期钩子、增量或全量文本文档同步，以及变更后
+  文档钩子。
 - 多根 `Workspace`、最新配置设置，以及基于 `FileProvider` 的未打开文件查找。
 - 通过 `Client` 发送带类型的服务端通知与可关联响应的请求。
 - 并发分发、有界并发、请求取消和 `tracing` span。
 - 基于 rope 的文档，以及 UTF-8/UTF-16 位置编码协商。
 
 ## 示例
+
+原生与 WASM 传输示例共用同一套处理器。TCP、WebSocket、browser Worker 和
+Node Worker 的构建命令见[传输指南](./docs/guides/transports.zh-CN.md)。
 
 可以直接在 workspace 中运行模板服务器，也可以让任何 LSP 客户端启动该进程：
 
@@ -232,11 +237,12 @@ cargo run -p lspf-hello
 
 本仓库是包含两个成员的 Cargo workspace：
 
-- [`crates/lspf`](./crates/lspf)：应用依赖的框架库（`lspf = "0.2"`）。
+- [`crates/lspf`](./crates/lspf)：应用依赖的框架库（`lspf = "0.5.2"`）。
 - [`crates/lspf-hello`](./crates/lspf-hello)：可安装的**模板服务器**。它生成通过
   stdio 使用 LSP 的 `lspf-hello` 二进制：应答 hover 与 completion（含 resolve），
-  分发 `lspf-hello.workspaceRoots` 与 `lspf-hello.readFile` 两个 Command，
-  通过 `OsFileProvider` 读取未打开文件；每次收到 `textDocument/didOpen` 时，
+  分发用于 workspace root、文件读取、出站 client 辅助方法和可取消进度的四个
+  Command，通过 `OsFileProvider` 读取未打开文件；每次收到
+  `textDocument/didOpen` 时，
   都会发布一条 “lspf saw this document open” 信息级诊断。你可以 fork 它作为自己
   语言服务器的起点。
 
@@ -267,8 +273,40 @@ VS Code 没有内置的通用 LSP 客户端，因此需要安装轻量的通用�
 “lspf saw this document open” 诊断。
 
 > 开发框架时可以跳过安装，改用仓库内置的
-> [`tools/vscode-test-client`](./tools/vscode-test-client)。它会直接启动
+> [`tools/vscode-test-client/README.zh-CN.md`](./tools/vscode-test-client/README.zh-CN.md)。它会直接启动
 > `target/` 中刚刚构建的二进制。
+
+#### 仓库开发
+
+在 VS Code 中打开仓库根目录，并安装推荐的 rust-analyzer 与 CodeLLDB 扩展。仓库中的
+`.vscode` 配置提供以下入口：
+
+- `Debug LSP client (Extension Host)` 是默认端到端路径。它会构建 `lspf-hello`、
+  根据 lock file 安装缺少的测试客户端依赖、编译客户端，再打开 Extension
+  Development Host。在其中打开 `.txt` 文件即可测试服务器。
+- `Run LSP example client (select example)` 会构建 stdio 示例，让你选择一个示例，
+  再打开由该示例真实进程支持的 Extension Development Host。
+- `Attach to running LSP server/example` 使用 CodeLLDB 连接由上述任一客户端配置
+  启动的进程。
+- 另外还提供 build、quick test、完整 workspace test 和示例运行 task。quick test
+  是 `cargo test -p lspf-hello`，完整 task 与 CI 的主要测试命令相同。
+
+调试示例时，先运行 `Run LSP example client (select example)`，并选择 `hover` 等
+示例。在新 Extension Development Host 中打开 `.txt` 文件，再回到仓库窗口运行
+`Attach to running LSP server/example`，选择以该示例命名的进程，然后在
+`crates/lspf/examples/<name>.rs` 中设置 breakpoint。编辑器操作会通过真实 stdio
+连接到达 Rust 处理器。
+
+除非环境中已有对应值，Extension Host debug 配置默认使用 `RUST_LOG=lspf=trace` 和
+`LSPF_LOG_FORMAT=json`。stderr 每行包含一个 JSON event，其中带有 event field 与
+当前 span。启动 VS Code 前设置 `LSPF_LOG_FORMAT=text` 可改用紧凑文本。run 与 test
+task 不会修改这两个变量。
+
+服务器初始化后，`vscode-languageclient` 会自动注册 `executeCommandProvider` 宣告的
+四个 Command。扩展 manifest 在 Command Palette 的 `lspf hello` 分类下提供标题。
+middleware 会为 `Read Active File` 和 `Run Outgoing Helper Journey` 加入当前编辑器的
+URI，并把结果写入 `lspf-hello commands` output channel。outgoing journey 会调用
+`workspace/applyEdit`，在当前文档开头插入注释。
 
 ### Zed
 
@@ -277,8 +315,14 @@ Zed 目前要求语言扩展预先注册每个 language-server adapter。
 `settings.json` 注册 `lspf-hello` 这样的任意新服务器。
 
 本仓库暂未提供 Zed 扩展。可以参考 Zed 的
-[语言扩展文档](https://zed.dev/docs/extensions/languages)创建注册 `lspf-hello`
+[语言扩展文档](https://zed.dev/docs/extensions/languages)，创建注册 `lspf-hello`
 的开发扩展，或者使用上面的 VS Code 测试客户端完成仓库支持的编辑器冒烟测试。
+
+仓库中的 `.zed/tasks.json` 提供 build、quick test、完整 workspace test 和 `hover`
+示例 task。`.zed/debug.json` 中的 `Attach to running LSP server/example` 会打开 Zed
+进程选择器，并通过 CodeLLDB 连接正在运行的服务器。连接前，请先通过上面的 VS Code
+测试客户端、其他 LSP client 或本地 Zed 语言扩展启动进程。这些 Zed 文件用于 Rust
+调试，不会把 `lspf-hello` 注册为 Zed language server。
 
 ### 故障排除
 
@@ -288,23 +332,26 @@ Zed 目前要求语言扩展预先注册每个 language-server adapter。
 - **服务器未启动或没有出现诊断。** 确保修改代码后重新执行了
   `cargo install --path crates/lspf-hello`，并确认编辑器客户端会把当前文件路由给
   这个服务器。示例编辑器配置以纯文本文件为目标；服务器本身不会按语言 ID 过滤
-  `didOpen`。可以在终端中用 `RUST_LOG=lspf=trace` 运行 `lspf-hello`，确认它能够
-  启动并在 stderr 中查看 LSP 流量。
+  `didOpen`。可以在终端中运行
+  `RUST_LOG=lspf=trace LSPF_LOG_FORMAT=json lspf-hello`，确认它能够启动，并在
+  stderr 中输出 newline-delimited JSON 日志。
 - **修改配置后没有变化。** 编辑器会在启动时读取 LSP 设置。修改 `settings.json`
   后请重新加载窗口（VS Code：*Developer: Reload Window*；Zed：重新打开 workspace）。
+- **直接运行后看起来卡住。** `lspf-hello` 和框架示例通过 stdio 等待 LSP
+  客户端。请让 VS Code 测试客户端启动进程，或运行 quick test 完成自动检查。
 
 ## 参与贡献
 
-Issue 位于 GitHub 仓库
-[meymchen/lspf](https://github.com/meymchen/lspf/issues)，并通过 `gh` 管理。
-分类使用固定标签：`needs-triage`、`needs-info`、`ready-for-agent`、
-`ready-for-human`、`wontfix`，方便 agent 或开发者直接接手。
+Issue 位于 [GitHub tracker](https://github.com/meymchen/lspf/issues)。
 
 提交 PR 前，请先浏览：
 
 - [`CONTEXT.md`](./CONTEXT.md)：确认修改符合项目词汇。
 - 相关的 `docs/adr/*.md`：如果修改重新讨论了已有决策，请在 PR 描述中解释偏离原因，
   或新增一份 ADR。
+
+手写的用户向文档需要同时维护中英文版本。每份英文 README 或 guide 都应有对应的
+`.zh-CN.md` 文件；自动生成的发布文档除外。
 
 使用仓库共享配置检查全部 Markdown（Node.js 24）：
 
