@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Store scratch files in `.scratch/`, ask before delete anything within it.
+Store scratch files in `.scratch/`, ask before delete things within it.
 
 ## Agent skills
 

@@ -47,11 +47,21 @@ async fn controlled(
     ct: lspf::CancellationToken,
 ) -> Result<String, lspf::LspError> {
     state.calls.fetch_add(1, Ordering::SeqCst);
+    // Register for the release notification before signalling `started`. A
+    // `notify_one` that lands between `started.send` and the select's first
+    // poll finds no registered waiter and collapses into the Notify's single
+    // stored permit; a second `notify_one` is then a no-op, so with two
+    // handlers racing on the same Notify one of them would starve. `enable`
+    // puts this waiter in the list up front, so the first notification is
+    // always assigned to a waiter and the second always stores a fresh permit.
+    let notified = state.release.notified();
+    tokio::pin!(notified);
+    let _ = notified.as_mut().enable();
     if let Some(started) = state.started.lock().await.take() {
         let _ = started.send(());
     }
     tokio::select! {
-        _ = state.release.notified() => Ok(value),
+        _ = notified => Ok(value),
         _ = ct.cancelled() => {
             if let Some(observed) = state.cancellation_observed.lock().await.take() {
                 let _ = observed.send(());

@@ -16,6 +16,14 @@
     // structure; duplicates among siblings remain errors.
     "MD024": {
       "siblings_only": true
+    },
+
+    // Skill documents (e.g. .agents/skills/**/SKILL.md) carry their title in
+    // the front matter `name` field and start the body at `##`; treating both
+    // `title` and `name` front matter properties as the document heading keeps
+    // the H1 requirement for prose files without imposing it on skills.
+    "MD041": {
+      "front_matter_title": "^\\s*(title|name)\\s*[:=]"
     }
   }
 }
