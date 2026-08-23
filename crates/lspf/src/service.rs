@@ -15,7 +15,9 @@ use crate::{Context, LspError, RequestId, TaskFuture, TaskSend};
 /// Whether a normalized user call came from a request or a notification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CallKind {
+    /// A call that must resolve to a response or error.
     Request,
+    /// A fire-and-forget call.
     Notification,
 }
 
@@ -70,30 +72,37 @@ impl<S> IncomingCall<S> {
         }
     }
 
+    /// Whether this call is a request or notification.
     pub fn kind(&self) -> CallKind {
         self.kind
     }
 
+    /// The LSP or custom method name.
     pub fn method(&self) -> &str {
         &self.method
     }
 
+    /// The JSON-RPC request ID, or `None` for a notification.
     pub fn request_id(&self) -> Option<&RequestId> {
         self.request_id.as_ref()
     }
 
+    /// The decoded JSON parameters.
     pub fn params(&self) -> &Value {
         &self.params
     }
 
+    /// Mutably borrow the decoded parameters before forwarding the call.
     pub fn params_mut(&mut self) -> &mut Value {
         &mut self.params
     }
 
+    /// The framework context for this call.
     pub fn context(&self) -> &Context {
         &self.context
     }
 
+    /// The connection's shared application state.
     pub fn state(&self) -> &Arc<S> {
         &self.state
     }
@@ -101,8 +110,11 @@ impl<S> IncomingCall<S> {
 
 /// The only outcomes of normalized user dispatch.
 pub enum ServiceResult {
+    /// A successful request result.
     Response(Value),
+    /// A request error.
     Error(LspError),
+    /// No response, as required for notifications.
     NoResponse,
 }
 
@@ -136,6 +148,7 @@ impl<S> Clone for Next<S> {
 }
 
 impl<S: Send + Sync + 'static> Next<S> {
+    /// Forward `call` to the next inner Layer or the Router.
     pub fn call(&self, call: IncomingCall<S>) -> ServiceFuture {
         self.inner.call(call)
     }
@@ -149,6 +162,7 @@ macro_rules! layer_trait {
         /// outermost among user Layers. Framework panic isolation, tracing, and
         /// concurrency limiting always remain outside every user Layer.
         pub trait Layer<S>: TaskSend $($native_bound)* + 'static {
+            /// Process `call`, optionally forwarding it through `next`.
             fn call(&self, call: IncomingCall<S>, next: Next<S>) -> ServiceFuture;
         }
     };

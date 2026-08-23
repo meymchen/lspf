@@ -10,15 +10,18 @@ use super::{
 };
 use crate::raw::RawMessage;
 
+/// A `Content-Length` framed Transport over process standard input and output.
 pub struct StdioTransport {
     reader: StdioReader,
     writer: StdioWriter,
 }
 
+/// Read half of [`StdioTransport`].
 pub struct StdioReader {
     framed_in: FramedRead<Pin<Box<dyn AsyncRead + Send>>, ContentLengthCodec>,
 }
 
+/// Write half of [`StdioTransport`].
 pub struct StdioWriter {
     stdout: Pin<Box<dyn AsyncWrite + Send>>,
     codec: ContentLengthCodec,
@@ -31,6 +34,7 @@ impl Default for StdioTransport {
 }
 
 impl StdioTransport {
+    /// Connect a Transport to the process standard input and output streams.
     pub fn new() -> Self {
         Self {
             reader: StdioReader {

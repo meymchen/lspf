@@ -749,7 +749,7 @@ pub struct CompletionResolveFeature(());
 ///
 /// Resolve is a dependent feature: registering it without the base
 /// [`completion`] feature fails validation with
-/// [`BuildError::ConflictingCapability`](crate::BuildError::ConflictingCapability)
+/// [`BuildError::ConflictingCapability`]
 /// rather than advertising a dangling `resolveProvider`.
 pub fn completion_resolve() -> CompletionResolveFeature {
     CompletionResolveFeature(())
@@ -845,7 +845,7 @@ pub struct WorkspaceSymbolResolveFeature(());
 ///
 /// Resolve is a dependent feature: registering it without the base
 /// [`workspace_symbol`] feature fails validation with
-/// [`BuildError::ConflictingCapability`](crate::BuildError::ConflictingCapability)
+/// [`BuildError::ConflictingCapability`]
 /// rather than advertising a dangling `resolveProvider`.
 pub fn workspace_symbol_resolve() -> WorkspaceSymbolResolveFeature {
     WorkspaceSymbolResolveFeature(())
@@ -894,7 +894,7 @@ pub struct PrepareRenameFeature(());
 ///
 /// Prepare rename is a dependent feature: registering it without the base
 /// [`rename`] feature fails validation with
-/// [`BuildError::ConflictingCapability`](crate::BuildError::ConflictingCapability)
+/// [`BuildError::ConflictingCapability`]
 /// rather than advertising a dangling `prepareProvider`.
 pub fn prepare_rename() -> PrepareRenameFeature {
     PrepareRenameFeature(())
@@ -946,7 +946,7 @@ pub struct CodeActionResolveFeature(());
 ///
 /// Resolve is a dependent feature: registering it without the base
 /// [`code_action`] feature fails validation with
-/// [`BuildError::ConflictingCapability`](crate::BuildError::ConflictingCapability)
+/// [`BuildError::ConflictingCapability`]
 /// rather than advertising a dangling `resolveProvider`.
 pub fn code_action_resolve() -> CodeActionResolveFeature {
     CodeActionResolveFeature(())
@@ -997,7 +997,7 @@ pub struct CodeLensResolveFeature(());
 ///
 /// Resolve is a dependent feature: registering it without the base
 /// [`code_lens`] feature fails validation with
-/// [`BuildError::ConflictingCapability`](crate::BuildError::ConflictingCapability)
+/// [`BuildError::ConflictingCapability`]
 /// rather than advertising a dangling `resolveProvider`.
 pub fn code_lens_resolve() -> CodeLensResolveFeature {
     CodeLensResolveFeature(())
@@ -1049,7 +1049,7 @@ pub struct DocumentLinkResolveFeature(());
 ///
 /// Resolve is a dependent feature: registering it without the base
 /// [`document_link`] feature fails validation with
-/// [`BuildError::ConflictingCapability`](crate::BuildError::ConflictingCapability)
+/// [`BuildError::ConflictingCapability`]
 /// rather than advertising a dangling `resolveProvider`.
 pub fn document_link_resolve() -> DocumentLinkResolveFeature {
     DocumentLinkResolveFeature(())
@@ -1100,7 +1100,7 @@ pub struct InlayHintResolveFeature(());
 ///
 /// Resolve is a dependent feature: registering it without the base
 /// [`inlay_hint`] feature fails validation with
-/// [`BuildError::ConflictingCapability`](crate::BuildError::ConflictingCapability)
+/// [`BuildError::ConflictingCapability`]
 /// rather than advertising a dangling `resolveProvider`.
 pub fn inlay_hint_resolve() -> InlayHintResolveFeature {
     InlayHintResolveFeature(())
@@ -1130,7 +1130,7 @@ pub struct WillCreateFilesFeature {
 ///
 /// The create family is shared with [`did_create_files`]: both sides must
 /// contribute identical filters, or the build fails with
-/// [`BuildError::ConflictingCapability`](crate::BuildError::ConflictingCapability).
+/// [`BuildError::ConflictingCapability`].
 pub fn will_create_files(options: FileOperationRegistrationOptions) -> WillCreateFilesFeature {
     WillCreateFilesFeature { options }
 }
@@ -1158,7 +1158,7 @@ pub struct WillRenameFilesFeature {
 ///
 /// The rename family is shared with [`did_rename_files`]: both sides must
 /// contribute identical filters, or the build fails with
-/// [`BuildError::ConflictingCapability`](crate::BuildError::ConflictingCapability).
+/// [`BuildError::ConflictingCapability`].
 pub fn will_rename_files(options: FileOperationRegistrationOptions) -> WillRenameFilesFeature {
     WillRenameFilesFeature { options }
 }
@@ -1186,7 +1186,7 @@ pub struct WillDeleteFilesFeature {
 ///
 /// The delete family is shared with [`did_delete_files`]: both sides must
 /// contribute identical filters, or the build fails with
-/// [`BuildError::ConflictingCapability`](crate::BuildError::ConflictingCapability).
+/// [`BuildError::ConflictingCapability`].
 pub fn will_delete_files(options: FileOperationRegistrationOptions) -> WillDeleteFilesFeature {
     WillDeleteFilesFeature { options }
 }
@@ -1241,7 +1241,7 @@ pub struct DidCreateFilesFeature {
 ///
 /// The create family is shared with [`will_create_files`]: both sides must
 /// contribute identical filters, or the build fails with
-/// [`BuildError::ConflictingCapability`](crate::BuildError::ConflictingCapability).
+/// [`BuildError::ConflictingCapability`].
 pub fn did_create_files(options: FileOperationRegistrationOptions) -> DidCreateFilesFeature {
     DidCreateFilesFeature { options }
 }
@@ -1269,7 +1269,7 @@ pub struct DidRenameFilesFeature {
 ///
 /// The rename family is shared with [`will_rename_files`]: both sides must
 /// contribute identical filters, or the build fails with
-/// [`BuildError::ConflictingCapability`](crate::BuildError::ConflictingCapability).
+/// [`BuildError::ConflictingCapability`].
 pub fn did_rename_files(options: FileOperationRegistrationOptions) -> DidRenameFilesFeature {
     DidRenameFilesFeature { options }
 }
@@ -1297,7 +1297,7 @@ pub struct DidDeleteFilesFeature {
 ///
 /// The delete family is shared with [`will_delete_files`]: both sides must
 /// contribute identical filters, or the build fails with
-/// [`BuildError::ConflictingCapability`](crate::BuildError::ConflictingCapability).
+/// [`BuildError::ConflictingCapability`].
 pub fn did_delete_files(options: FileOperationRegistrationOptions) -> DidDeleteFilesFeature {
     DidDeleteFilesFeature { options }
 }

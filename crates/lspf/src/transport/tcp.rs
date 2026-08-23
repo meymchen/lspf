@@ -50,6 +50,7 @@ where
     }
 }
 
+/// Configures one native TCP listener before serving its first client.
 pub struct TcpBuilder<S, A> {
     server: Server<S>,
     addr: A,
@@ -114,10 +115,12 @@ pub struct TcpTransport {
     writer: TcpWriter,
 }
 
+/// Read half of [`TcpTransport`].
 pub struct TcpReader {
     framed_in: FramedRead<OwnedReadHalf, ContentLengthCodec>,
 }
 
+/// Write half of [`TcpTransport`].
 pub struct TcpWriter {
     sink: OwnedWriteHalf,
     codec: ContentLengthCodec,

@@ -68,20 +68,31 @@ pub(crate) fn classify_io_error(error: io::Error) -> TransportError {
     }
 }
 
+/// A Transport framing, channel, or serialization failure.
 #[derive(Debug, Error)]
 pub enum TransportError {
+    /// An underlying I/O operation failed.
     #[error("io error: {0}")]
     Io(#[from] io::Error),
 
+    /// The peer or local channel closed normally.
     #[error("connection closed by peer")]
     Closed,
 
+    /// An incoming message was not a valid supported JSON-RPC envelope.
     #[error("malformed message: {0}")]
     Malformed(String),
 
+    /// An incoming or outgoing message exceeded its configured size limit.
     #[error("message exceeds size limit ({length} > {limit} bytes)")]
-    OversizedMessage { length: usize, limit: usize },
+    OversizedMessage {
+        /// Actual message size in bytes.
+        length: usize,
+        /// Configured maximum size in bytes.
+        limit: usize,
+    },
 
+    /// An outgoing message could not be serialized.
     #[error("serialization error: {0}")]
     Serde(#[from] serde_json::Error),
 }
@@ -99,30 +110,43 @@ pub enum TransportError {
 /// values across awaits (ADR 0020), and the framework never fakes `Send`.
 #[cfg(not(target_arch = "wasm32"))]
 pub trait Transport: Send + 'static {
+    /// Read half produced by [`Transport::split`].
     type Reader: TransportReader;
+    /// Write half produced by [`Transport::split`].
     type Writer: TransportWriter;
 
+    /// Split the channel into independently owned read and write halves.
     fn split(self) -> (Self::Reader, Self::Writer);
 }
 
+/// A message-framed channel for LSP JSON-RPC envelopes on WASM.
+///
+/// This is the thread-affine counterpart of the native [`Transport`] trait;
+/// it deliberately has no `Send` bound (ADR 0020).
 #[cfg(target_arch = "wasm32")]
 pub trait Transport: 'static {
+    /// Read half produced by [`Transport::split`].
     type Reader: TransportReader;
+    /// Write half produced by [`Transport::split`].
     type Writer: TransportWriter;
 
+    /// Split the channel into independently owned read and write halves.
     fn split(self) -> (Self::Reader, Self::Writer);
 }
 
 /// Read half of a [`Transport`] (ADR 0011, ADR 0015).
 #[cfg(not(target_arch = "wasm32"))]
 pub trait TransportReader: Send + 'static {
+    /// Receive the next decoded envelope.
     fn recv(
         &mut self,
     ) -> impl Future<Output = std::result::Result<RawMessage, TransportError>> + Send;
 }
 
+/// Read half of a WASM [`Transport`] (ADR 0011, ADR 0015).
 #[cfg(target_arch = "wasm32")]
 pub trait TransportReader: 'static {
+    /// Receive the next decoded envelope.
     fn recv(&mut self) -> impl Future<Output = std::result::Result<RawMessage, TransportError>>;
 }
 
@@ -131,21 +155,26 @@ pub trait TransportReader: 'static {
 /// after the outgoing channel is drained.
 #[cfg(not(target_arch = "wasm32"))]
 pub trait TransportWriter: Send + 'static {
+    /// Serialize and send one envelope.
     fn send(
         &mut self,
         msg: RawMessage,
     ) -> impl Future<Output = std::result::Result<(), TransportError>> + Send;
 
+    /// Consume the writer and flush any buffered output.
     fn shutdown(self) -> impl Future<Output = std::result::Result<(), TransportError>> + Send;
 }
 
+/// Write half of a WASM [`Transport`] (ADR 0011, ADR 0015).
 #[cfg(target_arch = "wasm32")]
 pub trait TransportWriter: 'static {
+    /// Serialize and send one envelope.
     fn send(
         &mut self,
         msg: RawMessage,
     ) -> impl Future<Output = std::result::Result<(), TransportError>>;
 
+    /// Consume the writer and flush any buffered output.
     fn shutdown(self) -> impl Future<Output = std::result::Result<(), TransportError>>;
 }
 
@@ -176,6 +205,7 @@ where
 }
 
 #[cfg(all(feature = "stdio", not(target_arch = "wasm32")))]
+/// A default-stdio Server builder ready to be served.
 pub struct StdioBuilder<S> {
     server: Server<S>,
 }

@@ -39,6 +39,12 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all -- --check
 
+  public-docs:
+    name: public docs
+    uses: ./.github/workflows/public-docs.yml
+    permissions:
+      contents: read
+
   msrv:
     name: msrv
     runs-on: ubuntu-latest

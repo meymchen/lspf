@@ -1,0 +1,18 @@
+name: Public docs
+
+on:
+  workflow_call:
+
+jobs:
+  public-docs:
+    name: public docs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: bash ci/check-public-docs.sh

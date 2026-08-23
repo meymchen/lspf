@@ -1265,8 +1265,8 @@ impl<S: Send + Sync + 'static> Server<S> {
     /// LSP exit code; serving never terminates the process, so the caller
     /// decides what the outcome means. A reader transport error is returned as
     /// [`Error::Transport`](crate::Error::Transport) instead, and on native
-    /// targets serving without a running Tokio runtime returns
-    /// [`Error::RuntimeRequired`](crate::Error::RuntimeRequired).
+    /// targets serving without a running Tokio runtime returns the
+    /// [`Error`](crate::Error) variant `RuntimeRequired`.
     #[cfg(any(feature = "runtime-tokio", target_arch = "wasm32"))]
     pub async fn serve<T>(self, transport: T) -> crate::Result<crate::Outcome>
     where

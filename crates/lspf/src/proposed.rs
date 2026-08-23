@@ -1,5 +1,5 @@
-//! Proposed LSP protocol surface, available only with the crate's `proposed`
-//! Cargo feature.
+//! **Unstable proposed API.** Proposed LSP protocol surface, available only
+//! with the crate's `proposed` Cargo feature.
 //!
 //! `lsp-types` 0.97.x ships only the stable protocol, so the proposed
 //! workspace refresh requests get their request markers and parameter types

@@ -2,7 +2,12 @@
 //!
 //! See `CONTEXT.md` and `docs/adr/` at the repository root for the domain
 //! language and the architectural decisions that shape this crate.
+//!
+//! The default documentation is the stable LSP 3.17 surface. APIs in the
+//! `proposed` module and proposed-only [`Client`] methods are explicitly
+//! marked unstable and appear only when the `proposed` feature is enabled.
 
+#![deny(missing_docs)]
 // A protocol-only feature row intentionally has no serving engine. The
 // public registration and protocol types remain useful there, while the
 // engine-owned internals are necessarily dormant until a Transport selects a
