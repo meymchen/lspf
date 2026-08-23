@@ -1,0 +1,16 @@
+name: Packaged crate
+
+on:
+  workflow_call:
+
+jobs:
+  packaged-crate:
+    name: packaged crate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: bash ci/check-packaged-crate.sh
