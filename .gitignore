@@ -14,7 +14,6 @@ tarpaulin-report.html
 !.env.example
 
 # Editor and IDE files
-/.idea/
 *.code-workspace
 *.swp
 *.swo
@@ -29,7 +28,7 @@ Desktop.ini
 *.log
 
 # Scratch files
-/.scratch/
+.scratch/
 
 # Agent run state
-/.agent-runs/
+.agent-runs/
