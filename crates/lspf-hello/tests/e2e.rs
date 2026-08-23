@@ -95,6 +95,7 @@ async fn the_zero_three_journey_runs_over_stdio() {
     // 1. initialize: the generated capabilities cover document sync, the
     //    typed features, the Commands in registration order, and multi-root
     //    workspace support — none of them handwritten in the server.
+    eprintln!("[native-lifecycle] stage=initialize");
     send(&mut stdin, initialize_request(1)).await;
     let resp = read_response(&mut stdout, 1).await;
     assert_eq!(resp["jsonrpc"], "2.0");
@@ -198,6 +199,7 @@ async fn the_zero_three_journey_runs_over_stdio() {
     );
 
     // 6. completion: typed request, typed response.
+    eprintln!("[native-lifecycle] stage=typed-request method=textDocument/completion");
     send(
         &mut stdin,
         json!({
@@ -300,6 +302,7 @@ async fn the_zero_three_journey_runs_over_stdio() {
     assert_eq!(resp["result"], "read from disk");
 
     // 12. shutdown then exit: the server reports a clean ending.
+    eprintln!("[native-lifecycle] stage=shutdown");
     send(
         &mut stdin,
         json!({ "jsonrpc": "2.0", "id": 9, "method": "shutdown" }),
@@ -308,6 +311,7 @@ async fn the_zero_three_journey_runs_over_stdio() {
     let resp = read_response(&mut stdout, 9).await;
     assert_eq!(resp["result"], Value::Null);
 
+    eprintln!("[native-lifecycle] stage=exit");
     send(&mut stdin, json!({ "jsonrpc": "2.0", "method": "exit" })).await;
     drop(stdin);
 
