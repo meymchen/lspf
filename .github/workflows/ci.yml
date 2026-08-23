@@ -101,6 +101,28 @@ jobs:
       - run: cargo test --workspace --features stdio,tcp,websocket,proposed --all-targets
       - run: cargo test --workspace --features stdio,tcp,websocket,proposed --doc
 
+  native-lifecycle:
+    name: native lifecycle (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            os: ubuntu-latest
+          - name: Windows
+            os: windows-latest
+          - name: macOS (Intel)
+            os: macos-15-intel
+          - name: macOS (Apple Silicon)
+            os: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Initialize, typed request, shutdown, and exit
+        run: cargo test -p lspf-hello --test e2e -- --nocapture
+
   wasm:
     name: wasm
     runs-on: ubuntu-latest

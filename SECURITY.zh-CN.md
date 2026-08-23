@@ -35,15 +35,16 @@ workspace 的 `rust-version` 字段是唯一准则。CI `feature-contract` 使�
 
 | Host | Rust target | 状态 | Enforcement gate |
 | --- | --- | --- | --- |
-| Linux | `x86_64-unknown-linux-gnu` | 受支持 | CI `native-matrix` 与 `test`；跨 OS lifecycle gate 由 #155 跟踪 |
-| Windows | `x86_64-pc-windows-msvc` | 受支持 | 跨 OS lifecycle gate 由 #155 跟踪 |
-| macOS | `x86_64-apple-darwin` | 受支持 | 跨 OS lifecycle gate 由 #155 跟踪 |
-| macOS | `aarch64-apple-darwin` | 受支持 | 跨 OS lifecycle gate 由 #155 跟踪 |
+| Linux | `x86_64-unknown-linux-gnu` | 受支持 | CI `native-matrix`、`test` 与 `native-lifecycle` |
+| Windows | `x86_64-pc-windows-msvc` | 受支持 | CI `native-lifecycle` |
+| macOS | `x86_64-apple-darwin` | 受支持 | CI `native-lifecycle` |
+| macOS | `aarch64-apple-darwin` | 受支持 | CI `native-lifecycle` |
 | Browser 或 Node Worker | `wasm32-unknown-unknown` | 受支持 | CI `wasm` 与 `feature-contract` |
 
-在 #155 完成前，Windows 与 macOS 支持是维护者承诺，并非持续测试的声明。其他操作
-系统、架构、WASI target，以及嵌入式或 `no_std` 环境均不受支持。维护者欢迎影响范围
-小且可移植的修复，但接受此类修复不会自动把对应 host 或 target 加入支持矩阵。
+CI `native-lifecycle` 会在 Linux、Windows 与 macOS 上运行相同的默认 feature stdio
+journey。其他操作系统、架构、WASI target，以及嵌入式或 `no_std` 环境均不受支持。
+维护者欢迎影响范围小且可移植的修复，但接受此类修复不会自动把对应 host 或 target
+加入支持矩阵。
 
 ## Cargo feature 契约
 
