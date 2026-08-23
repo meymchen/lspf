@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2](https://github.com/meymchen/lspf/compare/v0.5.1...v0.5.2) - 2026-08-23
+
+### Other
+
+- Fix CI: markdownlint MD041 for skill docs and flaky cancel race test
+- Improve editor LSP debugging workflow ([#152](https://github.com/meymchen/lspf/pull/152))
+- Add runnable LSP feature examples ([#150](https://github.com/meymchen/lspf/pull/150))
+
 ## [0.5.1](https://github.com/meymchen/lspf/compare/v0.5.0...v0.5.1) - 2026-08-20
 
 ### Other
