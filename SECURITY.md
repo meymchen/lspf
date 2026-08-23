@@ -105,11 +105,40 @@ APIs behind `proposed` track draft LSP specifications. A patch release does
 not intentionally break them, but a minor release may change or remove them
 without a deprecation cycle. Such changes still appear in the changelog.
 
-The current automated release jobs are Release-plz workflow jobs
-`release-plz-pr` and `release-plz-release`; they prepare release metadata and
-publish releases but do not prove API compatibility. The machine-readable
-compatibility gate is tracked by #157. Until that gate lands, reviewers
-enforce this section from the public diff and changelog.
+CI `public API compatibility` compares the crate with the latest version on
+crates.io, which is the maintained baseline. It runs `cargo-semver-checks` for
+every native feature selection in the table, the two supported WASM
+selections, and each selection again with `proposed`. The default surface is
+the same as the explicit `stdio` surface and is covered by that row. The job
+uploads `public-api-compatibility-report`, a JSON artifact containing the
+baseline, current version, command output, result, and exit code for every
+surface.
+
+For the WASM rows, rustdoc runs on the CI host with the crate's
+`target_arch = "wasm32"` branches selected. This works around a
+cargo-semver-checks target-metadata limitation while still comparing the
+WASM-only Rust interface. The separate CI `wasm` and `feature-contract` jobs
+compile those selections for the real `wasm32-unknown-unknown` target.
+
+The gate always asks cargo-semver-checks to apply patch-level compatibility.
+Exit code 100 means the tool found a break. Each failing report row includes a
+hash of the exact normalized findings, so an intentional break can be approved
+in `ci/public-api-breaking-approvals.json` for one baseline, current version,
+target, and feature selection. A different or additional finding changes the
+hash and still fails the gate.
+
+To approve a reviewed break, copy the failing row's `baselineVersion`,
+`currentVersion`, `target`, `features`, and `findingsSha256` values into a new
+entry in the `approvals` array. Rerun the gate and commit the approval with the
+breaking change. Remove approval entries after their `currentVersion` is
+released; a later baseline or version cannot reuse them.
+
+An approval is valid only for a pre-1.0 minor version bump or a post-1.0 major
+version bump. The changelog and release notes must describe every approved
+break. An unchanged version, a patch version, and a post-1.0 minor version
+reject approval records. Any other nonzero tool exit means a surface could not
+be checked. Both tool errors and unapproved findings fail the CI job after the
+report is written. Setup failures write a JSON error report before exiting.
 
 ## Deprecation
 
@@ -124,10 +153,10 @@ unsound, enables a vulnerability, or cannot work as documented. The release
 notes must explain the exception and provide migration instructions when a
 safe replacement exists.
 
-The planned public API compatibility gate in #157 will detect removal of
-deprecated and non-deprecated API. CI `markdownlint` checks the policy and
-other Markdown today; the warning-free public documentation gate is tracked
-by #156.
+The public API compatibility gate detects removal of deprecated and
+non-deprecated API. CI `markdownlint` checks this policy and the other
+Markdown files. CI `public docs` checks warning-free documentation for the
+same target and feature surfaces.
 
 ## Reporting a vulnerability
 
