@@ -1,4 +1,4 @@
-﻿name: CI
+name: CI
 
 on:
   push:
@@ -9,34 +9,43 @@ env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
 
+permissions: {}
+
 jobs:
   feature-matrix:
     name: load native feature matrix
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       matrix: ${{ steps.matrix.outputs.value }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - id: matrix
         run: echo "value=$(jq -c . ci/native-feature-matrix.json)" >> "$GITHUB_OUTPUT"
 
   markdownlint:
     name: markdownlint
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v6
-      - uses: DavidAnson/markdownlint-cli2-action@v23.2.0
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: DavidAnson/markdownlint-cli2-action@ded1f9488f68a970bc66ea5619e13e9b52e601cd # v23.2.0
         with:
           globs: "**/*.md"
 
   fmt:
     name: fmt
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: ./.github/actions/setup-rust
         with:
           components: rustfmt
+          cache: "false"
       - run: cargo fmt --all -- --check
 
   public-docs:
@@ -51,15 +60,22 @@ jobs:
     permissions:
       contents: read
 
+  security:
+    name: supply-chain security
+    uses: ./.github/workflows/security.yml
+    permissions:
+      contents: read
+
   public-api:
     name: public API compatibility
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: ./.github/actions/setup-rust
         with:
           targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
       - run: cargo install cargo-semver-checks --version 0.50.0 --locked
       - name: Test compatibility gate behavior
         run: bash ci/test-check-public-api.sh
@@ -67,7 +83,7 @@ jobs:
         run: bash ci/check-public-api.sh
       - name: Upload machine-readable compatibility report
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: public-api-compatibility-report
           path: target/public-api-compatibility/report.json
@@ -77,6 +93,8 @@ jobs:
   msrv:
     name: msrv
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     needs: feature-matrix
     strategy:
       fail-fast: false
@@ -86,9 +104,10 @@ jobs:
     env:
       RUSTUP_TOOLCHAIN: "1.96.0"
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@1.96.0
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: 1.96.0
       - run: cargo check -p lspf --locked ${{ matrix.cargo_args }}
         env:
           RUSTFLAGS: ${{ matrix.msrv_rustflags }}
@@ -98,29 +117,32 @@ jobs:
   feature-contract:
     name: feature contract
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     env:
       RUSTUP_TOOLCHAIN: "1.96.0"
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@1.96.0
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: ./.github/actions/setup-rust
         with:
+          toolchain: 1.96.0
           targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
       - run: bash ci/check-feature-contract.sh
 
   native-matrix:
     name: native ${{ matrix.name }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     needs: feature-matrix
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.feature-matrix.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: ./.github/actions/setup-rust
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@v2
       - name: Clippy with warnings denied
         run: cargo clippy -p lspf --all-targets --locked ${{ matrix.cargo_args }} -- -D warnings
       - name: All-target tests
@@ -129,16 +151,19 @@ jobs:
   test:
     name: test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: ./.github/actions/setup-rust
       - run: cargo test --workspace --features stdio,tcp,websocket,proposed --all-targets
       - run: cargo test --workspace --features stdio,tcp,websocket,proposed --doc
 
   native-lifecycle:
     name: native lifecycle (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -152,21 +177,21 @@ jobs:
           - name: macOS (Apple Silicon)
             os: macos-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: ./.github/actions/setup-rust
       - name: Initialize, typed request, shutdown, and exit
         run: cargo test -p lspf-hello --test e2e -- --nocapture
 
   wasm:
     name: wasm
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: ./.github/actions/setup-rust
         with:
           targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
       - run: cargo install wasm-bindgen-cli --version 0.2.126 --locked
       # The pre-0.5 compile spike (ADR 0020): the protocol kernel must compile
       # for wasm32 without enabling the Tokio runtime.
@@ -183,11 +208,14 @@ jobs:
   test-coverage:
     name: test coverage
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@1.97.1
-      - run: rustup component add llvm-tools-preview
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: 1.97.1
+          components: llvm-tools-preview
       - run: cargo install cargo-llvm-cov --version 0.6.21 --locked
       - name: Test the test-coverage gate behavior
         run: bash ci/test-check-test-coverage.sh
@@ -204,7 +232,7 @@ jobs:
         run: bash ci/check-test-coverage.sh
       - name: Upload test-coverage reports
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: test-coverage-report
           path: |

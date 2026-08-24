@@ -3,6 +3,8 @@ name: Packaged crate
 on:
   workflow_call:
 
+permissions: {}
+
 jobs:
   packaged-crate:
     name: packaged crate
@@ -10,7 +12,6 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: ./.github/actions/setup-rust
       - run: bash ci/check-packaged-crate.sh
