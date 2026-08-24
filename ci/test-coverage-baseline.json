@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "thresholds": {
+    "workspaceLines": {
+      "count": 10218,
+      "covered": 9734
+    },
+    "protocolEngineLines": {
+      "count": 1021,
+      "covered": 891
+    }
+  },
+  "protocolEngineFiles": [
+    "crates/lspf/src/engine.rs"
+  ],
+  "evidence": {
+    "lifecycle": [
+      {"target": "lifecycle_hooks",
+       "name": "failed_shutdown_hook_leaves_the_connection_running_for_retry"},
+      {"target": "session_close",
+       "name": "a_failed_initialize_transaction_closes_the_session"}
+    ],
+    "cancellation": [
+      {"target": "session_close",
+       "name": "shutdown_answers_itself_then_cancels_and_refuses_later_work"},
+      {"target": "progress_cancellation",
+       "name": "cancel_before_any_report_fires_the_token_without_an_implicit_end"}
+    ],
+    "malformedMessage": [
+      {"target": "lifecycle_hooks",
+       "name": "malformed_shutdown_params_skip_the_hook_and_leave_the_connection_running"},
+      {"target": "progress_cancellation",
+       "name": "malformed_params_are_dropped_without_running_the_hook"}
+    ],
+    "close": [
+      {"target": "session_close",
+       "name": "reader_eof_closes_the_session_and_joins_the_writer"},
+      {"target": "session_close",
+       "name": "writer_failure_closes_the_session_without_any_further_input"},
+      {"target": "session_close",
+       "name": "a_reader_transport_error_closes_the_session_and_is_reported"}
+    ]
+  }
+}
