@@ -51,6 +51,21 @@ impl Semaphore {
     pub(crate) fn acquire_owned(self: Arc<Self>) -> Acquire {
         Acquire { sem: self }
     }
+
+    /// Acquire one slot immediately, or return `None` when every slot is held.
+    pub(crate) fn try_acquire_owned(self: &Arc<Self>) -> Option<OwnedPermit> {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.permits > 0 {
+            inner.permits -= 1;
+        } else if inner.waking > 0 {
+            inner.waking -= 1;
+        } else {
+            return None;
+        }
+        Some(OwnedPermit {
+            sem: Arc::clone(self),
+        })
+    }
 }
 
 /// The future for [`Semaphore::acquire_owned`].
@@ -159,6 +174,23 @@ mod tests {
         timeout(Duration::from_secs(5), semaphore.clone().acquire_owned())
             .await
             .expect("the freed slot is immediately re-acquirable");
+    }
+
+    #[test]
+    fn try_acquire_never_waits_and_a_drop_restores_the_slot() {
+        let semaphore = Semaphore::shared(1);
+        let permit = semaphore
+            .try_acquire_owned()
+            .expect("the initial slot is available");
+        assert!(
+            semaphore.try_acquire_owned().is_none(),
+            "an exhausted semaphore rejects immediately"
+        );
+        drop(permit);
+        assert!(
+            semaphore.try_acquire_owned().is_some(),
+            "dropping the owned permit restores the slot"
+        );
     }
 
     #[tokio::test]

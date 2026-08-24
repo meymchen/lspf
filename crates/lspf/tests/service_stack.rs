@@ -3,7 +3,6 @@
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use lspf::types::notification::Notification;
@@ -105,44 +104,6 @@ struct ChannelTransport {
 
 struct ChannelReader(mpsc::UnboundedReceiver<RawMessage>);
 struct ChannelWriter(mpsc::UnboundedSender<RawMessage>);
-
-#[derive(Clone, Default)]
-struct SpanCapture {
-    closed: Arc<Mutex<Vec<(String, Duration)>>>,
-}
-
-struct OpenedAt(Instant);
-
-impl<S> tracing_subscriber::Layer<S> for SpanCapture
-where
-    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
-{
-    fn on_new_span(
-        &self,
-        _attrs: &tracing::span::Attributes<'_>,
-        id: &tracing::Id,
-        context: tracing_subscriber::layer::Context<'_, S>,
-    ) {
-        if let Some(span) = context.span(id) {
-            span.extensions_mut().insert(OpenedAt(Instant::now()));
-        }
-    }
-
-    fn on_close(&self, id: tracing::Id, context: tracing_subscriber::layer::Context<'_, S>) {
-        let Some(span) = context.span(&id) else {
-            return;
-        };
-        let elapsed = span
-            .extensions()
-            .get::<OpenedAt>()
-            .map(|opened| opened.0.elapsed())
-            .unwrap_or_default();
-        self.closed
-            .lock()
-            .unwrap()
-            .push((span.metadata().name().to_string(), elapsed));
-    }
-}
 
 impl Transport for ChannelTransport {
     type Reader = ChannelReader;
@@ -421,15 +382,7 @@ fn zero_concurrency_limit_is_rejected() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn concurrency_limit_covers_the_complete_user_layer_chain() {
-    use tracing_subscriber::layer::SubscriberExt;
-    use tracing_subscriber::util::SubscriberInitExt;
-
-    let capture = SpanCapture::default();
-    tracing_subscriber::registry()
-        .with(capture.clone())
-        .try_init()
-        .expect("this integration-test process installs one subscriber");
+async fn inbound_budget_rejects_before_a_second_call_enters_the_user_layer_chain() {
     let (entered_tx, mut entered_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Semaphore::new(0));
     let active = Arc::new(AtomicUsize::new(0));
@@ -450,36 +403,29 @@ async fn concurrency_limit_covers_the_complete_user_layer_chain() {
     incoming_tx
         .send(request(2, Slow::METHOD, json!(1)))
         .unwrap();
+    assert_eq!(entered_rx.recv().await, Some(1), "one Layer call entered");
     incoming_tx
         .send(request(3, Slow::METHOD, json!(2)))
         .unwrap();
-
-    let first = entered_rx.recv().await.expect("one Layer call entered");
-    const QUEUE_HOLD: Duration = Duration::from_millis(80);
-    tokio::time::sleep(QUEUE_HOLD).await;
-    release.add_permits(1);
-    let _ = receive_for(&mut outgoing_rx, first as i32 + 1).await;
-    let second = entered_rx
-        .recv()
-        .await
-        .expect("the queued Layer call entered");
-    assert_ne!(first, second);
-    release.add_permits(1);
-    let _ = receive_for(&mut outgoing_rx, second as i32 + 1).await;
-    assert_eq!(max_active.load(Ordering::SeqCst), 1);
-    let max_queue = capture
-        .closed
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|(name, _)| name == "handler.acquire_permit")
-        .map(|(_, elapsed)| *elapsed)
-        .max()
-        .unwrap_or_default();
     assert!(
-        max_queue >= QUEUE_HOLD / 2,
-        "the acquire span must include permit queue time; longest was {max_queue:?}"
+        matches!(
+            receive_for(&mut outgoing_rx, 3).await,
+            RawMessage::Response {
+                result: Err(ref error),
+                ..
+            } if error.code == -32802
+        ),
+        "the second request is rejected before its Layer call"
     );
+    assert!(
+        entered_rx.try_recv().is_err(),
+        "no second Layer call entered"
+    );
+    assert_eq!(max_active.load(Ordering::SeqCst), 1);
+
+    release.add_permits(1);
+    let _ = receive_for(&mut outgoing_rx, 2).await;
+    assert_eq!(active.load(Ordering::SeqCst), 0);
 
     stop(incoming_tx, serve).await;
 }
