@@ -88,7 +88,7 @@ current_version=$(cargo metadata --no-deps --format-version 1 \
     | jq -er --arg name "$CRATE_NAME" '.packages[] | select(.name == $name) | .version')
 
 if [[ -z $baseline_version ]]; then
-    baseline_version=$(cargo info "$CRATE_NAME" --registry crates-io 2>/dev/null \
+    baseline_version=$(cargo info --color never "$CRATE_NAME" --registry crates-io 2>/dev/null \
         | sed -n 's/^version: //p' \
         | head -n 1)
 fi
