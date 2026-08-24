@@ -11,8 +11,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use bytes::Bytes;
 use lspf::types::request::Request;
 use lspf::{
-    Context, RawMessage, RequestId, Server, Transport, TransportError, TransportReader,
-    TransportWriter,
+    Context, RawMessage, RequestId, ResourcePolicy, Server, Transport, TransportError,
+    TransportReader, TransportWriter,
 };
 use serde_json::json;
 use tokio::sync::{Mutex, Notify, mpsc, oneshot};
@@ -77,6 +77,7 @@ async fn returns_after_cancellation(
     (): (),
     ct: lspf::CancellationToken,
 ) -> Result<String, lspf::LspError> {
+    state.calls.fetch_add(1, Ordering::SeqCst);
     if let Some(started) = state.started.lock().await.take() {
         let _ = started.send(());
     }
@@ -156,6 +157,64 @@ async fn receive_for(
     .expect("server response before watchdog timeout")
 }
 
+type Serving = tokio::task::JoinHandle<lspf::Result<lspf::Outcome>>;
+
+fn one_slot_policy() -> ResourcePolicy {
+    ResourcePolicy {
+        max_inbound_requests: 1,
+        ..ResourcePolicy::default()
+    }
+}
+
+async fn start_initialized(
+    server: Server<AppState>,
+) -> (
+    mpsc::UnboundedSender<RawMessage>,
+    mpsc::UnboundedReceiver<RawMessage>,
+    Serving,
+) {
+    let (incoming_tx, incoming_rx) = mpsc::unbounded_channel();
+    let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel();
+    let serve = tokio::spawn(server.serve(ChannelTransport {
+        incoming: incoming_rx,
+        outgoing: outgoing_tx,
+    }));
+    incoming_tx
+        .send(request(
+            1,
+            "initialize",
+            json!({ "processId": null, "rootUri": null, "capabilities": {} }),
+        ))
+        .unwrap();
+    let _ = receive_for(&mut outgoing_rx, 1).await;
+    (incoming_tx, outgoing_rx, serve)
+}
+
+async fn cancel_first_request_admitted_after_reap(
+    incoming: &mpsc::UnboundedSender<RawMessage>,
+    outgoing: &mut mpsc::UnboundedReceiver<RawMessage>,
+    ids: std::ops::RangeInclusive<i32>,
+    method: &'static str,
+    params: serde_json::Value,
+) -> i32 {
+    for id in ids {
+        incoming.send(request(id, method, params.clone())).unwrap();
+        incoming
+            .send(notification("$/cancelRequest", json!({ "id": id })))
+            .unwrap();
+        match receive_for(outgoing, id).await {
+            RawMessage::Response {
+                result: Err(error), ..
+            } if error.code == -32802 => continue,
+            RawMessage::Response {
+                result: Err(error), ..
+            } if error.code == -32800 => return id,
+            other => panic!("expected overload or admitted cancellation, got {other:?}"),
+        }
+    }
+    panic!("a finished task was not reaped within the retry budget");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn duplicate_in_flight_id_is_rejected_without_replacing_original_request() {
     let (incoming_tx, incoming_rx) = mpsc::unbounded_channel();
@@ -215,6 +274,93 @@ async fn duplicate_in_flight_id_is_rejected_without_replacing_original_request()
         } if serde_json::from_slice::<String>(result).unwrap() == "original"
     ));
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    incoming_tx.send(notification("exit", json!(null))).unwrap();
+    serve
+        .await
+        .expect("serve task did not panic")
+        .expect("serve ended cleanly");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn excess_requests_are_rejected_before_dispatch_and_completion_releases_capacity() {
+    let (started_tx, started_rx) = oneshot::channel();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let release = Arc::new(Notify::new());
+    let state = AppState {
+        calls: Arc::clone(&calls),
+        started: Mutex::new(Some(started_tx)),
+        cancellation_observed: Mutex::new(None),
+        release: Arc::clone(&release),
+    };
+    let server = Server::builder(state)
+        .request::<Controlled, _, _>(controlled)
+        .resource_policy(one_slot_policy())
+        .build()
+        .expect("server builds");
+    let (incoming_tx, mut outgoing_rx, serve) = start_initialized(server).await;
+
+    incoming_tx
+        .send(request(2, Controlled::METHOD, json!("accepted")))
+        .unwrap();
+    started_rx.await.expect("accepted handler started");
+    incoming_tx
+        .send(request(2, Controlled::METHOD, json!("duplicate")))
+        .unwrap();
+    assert!(matches!(
+        receive_for(&mut outgoing_rx, 2).await,
+        RawMessage::Response {
+            result: Err(ref error),
+            ..
+        } if error.code == -32600 && error.message == "duplicate request id"
+    ));
+
+    for id in 3..=66 {
+        incoming_tx
+            .send(request(id, Controlled::METHOD, json!("excess")))
+            .unwrap();
+    }
+    for id in 3..=66 {
+        let excess = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            receive_for(&mut outgoing_rx, id),
+        )
+        .await
+        .expect("excess request is rejected without waiting for handler capacity");
+        assert!(matches!(
+            excess,
+            RawMessage::Response {
+                result: Err(ref error),
+                ..
+            } if error.code == -32802
+                && error.message == "inbound request capacity exhausted"
+        ));
+    }
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "excess work was not dispatched"
+    );
+
+    release.notify_one();
+    assert!(matches!(
+        receive_for(&mut outgoing_rx, 2).await,
+        RawMessage::Response { result: Ok(_), .. }
+    ));
+
+    let admitted = cancel_first_request_admitted_after_reap(
+        &incoming_tx,
+        &mut outgoing_rx,
+        67..=74,
+        Controlled::METHOD,
+        json!("after completion"),
+    )
+    .await;
+    assert!(
+        admitted >= 67,
+        "completion released capacity after task reap"
+    );
+    assert!(calls.load(Ordering::SeqCst) <= 2);
 
     incoming_tx.send(notification("exit", json!(null))).unwrap();
     serve
@@ -342,6 +488,112 @@ async fn cancellation_wins_when_handler_returns_success_after_observing_token() 
         .await
         .expect("serve task did not panic")
         .expect("serve ended cleanly");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancellation_releases_capacity_for_a_later_request() {
+    let (started_tx, started_rx) = oneshot::channel();
+    let (observed_tx, observed_rx) = oneshot::channel();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let state = AppState {
+        calls: Arc::clone(&calls),
+        started: Mutex::new(Some(started_tx)),
+        cancellation_observed: Mutex::new(Some(observed_tx)),
+        release: Arc::new(Notify::new()),
+    };
+    let server = Server::builder(state)
+        .request::<ReturnsAfterCancellation, _, _>(returns_after_cancellation)
+        .resource_policy(one_slot_policy())
+        .build()
+        .expect("server builds");
+    let (incoming_tx, mut outgoing_rx, serve) = start_initialized(server).await;
+    incoming_tx
+        .send(request(2, ReturnsAfterCancellation::METHOD, json!(null)))
+        .unwrap();
+    started_rx.await.expect("first handler started");
+    incoming_tx
+        .send(notification("$/cancelRequest", json!({ "id": 2 })))
+        .unwrap();
+    assert!(matches!(
+        receive_for(&mut outgoing_rx, 2).await,
+        RawMessage::Response {
+            result: Err(ref error),
+            ..
+        } if error.code == -32800
+    ));
+    observed_rx
+        .await
+        .expect("first handler observed cancellation");
+
+    let admitted = cancel_first_request_admitted_after_reap(
+        &incoming_tx,
+        &mut outgoing_rx,
+        3..=10,
+        ReturnsAfterCancellation::METHOD,
+        json!(null),
+    )
+    .await;
+    assert!(
+        admitted >= 3,
+        "cancellation released capacity after task reap"
+    );
+    assert!(
+        calls.load(Ordering::SeqCst) <= 2,
+        "at most the two admitted requests reached user dispatch"
+    );
+
+    incoming_tx.send(notification("exit", json!(null))).unwrap();
+    serve
+        .await
+        .expect("serve task did not panic")
+        .expect("serve ended cleanly");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn disconnect_cancels_only_admitted_work_after_a_flood() {
+    let (started_tx, started_rx) = oneshot::channel();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let state = AppState {
+        calls: Arc::clone(&calls),
+        started: Mutex::new(Some(started_tx)),
+        cancellation_observed: Mutex::new(None),
+        release: Arc::new(Notify::new()),
+    };
+    let server = Server::builder(state)
+        .request::<Controlled, _, _>(controlled)
+        .resource_policy(one_slot_policy())
+        .build()
+        .expect("server builds");
+    let (incoming_tx, mut outgoing_rx, serve) = start_initialized(server).await;
+    incoming_tx
+        .send(request(2, Controlled::METHOD, json!("accepted")))
+        .unwrap();
+    started_rx.await.expect("accepted handler started");
+    for id in 3..=34 {
+        incoming_tx
+            .send(request(id, Controlled::METHOD, json!("excess")))
+            .unwrap();
+    }
+    for id in 3..=34 {
+        assert!(matches!(
+            receive_for(&mut outgoing_rx, id).await,
+            RawMessage::Response {
+                result: Err(ref error),
+                ..
+            } if error.code == -32802
+        ));
+    }
+
+    drop(incoming_tx);
+    serve
+        .await
+        .expect("serve task did not panic")
+        .expect("serve ended cleanly");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "the flood spawned no extra work"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -32,6 +32,7 @@ use futures_channel::mpsc::UnboundedReceiver;
 use futures_util::FutureExt;
 use futures_util::future::{Either, select};
 use futures_util::select_biased;
+use lsp_types::error_codes::SERVER_CANCELLED;
 use lsp_types::{
     DidChangeConfigurationParams, DidChangeTextDocumentParams, DidChangeWorkspaceFoldersParams,
     DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
@@ -58,6 +59,7 @@ use crate::progress::{ProgressCancel, ProgressRegistry};
 use crate::raw::{JsonRpcError, RawMessage, RequestId};
 use crate::runtime::{Runtime, TaskHandle, TaskSend, default_runtime, ensure_runtime_available};
 use crate::service::{IncomingCall, ServiceResult, UserLayer, UserService, build_service_stack};
+use crate::sync::{OwnedPermit, Semaphore};
 use crate::transport::{Transport, TransportError, TransportReader, TransportWriter};
 use crate::workspace::Workspace;
 
@@ -254,7 +256,12 @@ where
 
 struct TaskGroup<R> {
     runtime: R,
-    handles: Vec<TaskHandle>,
+    handles: Vec<InboundTask>,
+}
+
+struct InboundTask {
+    handle: TaskHandle,
+    _permit: Arc<OwnedPermit>,
 }
 
 #[derive(Clone, Copy, Default, Eq, PartialEq)]
@@ -276,35 +283,38 @@ impl<R: Runtime> TaskGroup<R> {
         }
     }
 
-    fn spawn<F>(&mut self, future: F)
+    fn spawn<F>(&mut self, future: F, permit: Arc<OwnedPermit>)
     where
         F: Future<Output = ()> + TaskSend + 'static,
     {
-        self.handles.push(self.runtime.spawn(future));
+        self.handles.push(InboundTask {
+            handle: self.runtime.spawn(future),
+            _permit: permit,
+        });
     }
 
     async fn reap_finished(&mut self) {
         let mut running = Vec::with_capacity(self.handles.len());
-        for handle in std::mem::take(&mut self.handles) {
-            if handle.is_finished() {
-                handle.join().await;
+        for task in std::mem::take(&mut self.handles) {
+            if task.handle.is_finished() {
+                task.handle.join().await;
             } else {
-                running.push(handle);
+                running.push(task);
             }
         }
         self.handles = running;
     }
 
     async fn abort_and_join(&mut self) {
-        for handle in &self.handles {
-            handle.abort();
+        for task in &self.handles {
+            task.handle.abort();
         }
         self.join_all().await;
     }
 
     async fn join_all(&mut self) {
-        for handle in std::mem::take(&mut self.handles) {
-            handle.join().await;
+        for task in std::mem::take(&mut self.handles) {
+            task.handle.join().await;
         }
     }
 }
@@ -318,50 +328,89 @@ impl<R: Runtime> TaskGroup<R> {
 /// identity-scoped: a task whose result arrives after its own entry was claimed
 /// — by `$/cancelRequest`, by `shutdown`, or by session close — cannot then
 /// claim the entry a later request has since reserved under the same ID.
-#[derive(Clone)]
 struct Reservation {
     id: RequestId,
     generation: RequestGeneration,
+    _permit: Arc<OwnedPermit>,
 }
 
 struct InboundEntry {
     generation: RequestGeneration,
     /// `None` for `initialize`, the one request that is not cancellable.
     cancellation: Option<CancellationToken>,
+    _permit: Arc<OwnedPermit>,
 }
 
-#[derive(Default)]
 struct InboundInner {
     entries: HashMap<RequestId, InboundEntry>,
     next_generation: RequestGeneration,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct InboundRegistry {
     inner: Arc<Mutex<InboundInner>>,
+    capacity: Arc<Semaphore>,
+}
+
+#[derive(Debug)]
+enum InboundReserveError {
+    DuplicateId,
+    CapacityExhausted,
+}
+
+const INBOUND_CAPACITY_EXHAUSTED: &str = "inbound request capacity exhausted";
+
+struct ReservedRequest {
+    reservation: Reservation,
+    cancellation: Option<CancellationToken>,
 }
 
 impl InboundRegistry {
-    /// Reserve `id` for a new request, or return `None` if it is already in
-    /// flight — a duplicate never replaces or cancels the original (ADR 0018).
+    fn new(capacity: usize) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(InboundInner {
+                entries: HashMap::new(),
+                next_generation: RequestGeneration::default(),
+            })),
+            capacity: Semaphore::shared(capacity),
+        }
+    }
+
+    /// Reserve capacity and `id` before allocating request-scoped cancellation
+    /// state. A duplicate never replaces or cancels the original (ADR 0018),
+    /// and an exhausted connection never grows its registry or task group.
     fn reserve(
         &self,
         id: RequestId,
-        cancellation: Option<CancellationToken>,
-    ) -> Option<Reservation> {
+        cancellation_parent: Option<&CancellationToken>,
+    ) -> std::result::Result<ReservedRequest, InboundReserveError> {
         let mut inner = self.inner.lock().unwrap();
         if inner.entries.contains_key(&id) {
-            return None;
+            return Err(InboundReserveError::DuplicateId);
         }
+        let permit = self
+            .capacity
+            .try_acquire_owned()
+            .ok_or(InboundReserveError::CapacityExhausted)?;
+        let permit = Arc::new(permit);
+        let cancellation = cancellation_parent.map(CancellationToken::child_token);
         let generation = inner.next_generation.take_next();
         inner.entries.insert(
             id.clone(),
             InboundEntry {
                 generation,
-                cancellation,
+                cancellation: cancellation.clone(),
+                _permit: Arc::clone(&permit),
             },
         );
-        Some(Reservation { id, generation })
+        Ok(ReservedRequest {
+            reservation: Reservation {
+                id,
+                generation,
+                _permit: permit,
+            },
+            cancellation,
+        })
     }
 
     /// Claim the completion gate for `reservation` and enqueue its one response.
@@ -402,6 +451,7 @@ impl InboundRegistry {
             Reservation {
                 id: id.clone(),
                 generation: entry.generation,
+                _permit: entry._permit,
             }
         })
     }
@@ -612,6 +662,7 @@ where
         close: CloseSignal,
         send_task: TaskHandle,
     ) -> Self {
+        let max_inbound_requests = server.resource_policy.max_inbound_requests;
         Self {
             state: server.state,
             documents: Documents::new(),
@@ -628,12 +679,12 @@ where
                 on_shutdown: server.on_shutdown,
                 on_exit: server.on_exit,
                 layers: server.layers,
-                concurrency_limit: server.resource_policy.max_inbound_requests,
+                concurrency_limit: max_inbound_requests,
             })),
             on_initialized: None,
             on_shutdown: None,
             on_exit: None,
-            inbound: InboundRegistry::default(),
+            inbound: InboundRegistry::new(max_inbound_requests),
             tasks: TaskGroup::new(runtime),
             out_tx,
             client,
@@ -655,13 +706,17 @@ where
     {
         let requested = self.close.requested();
         loop {
-            self.tasks.reap_finished().await;
             let msg = select_biased! {
                 // `biased`: an already-requested close wins over a message that
                 // happens to be ready, so the ending stays deterministic.
                 () = requested.cancelled().fuse() => break,
                 msg = reader.recv().fuse() => msg,
             };
+            // Reap immediately before dispatch so a completed handler releases
+            // its task-owned admission permit before the next request tries to
+            // reserve capacity. Finished handles cannot accumulate behind an
+            // idle read loop.
+            self.tasks.reap_finished().await;
 
             match msg {
                 Ok(msg) => match self.dispatch(msg).await {
@@ -694,19 +749,37 @@ where
         match msg {
             RawMessage::Request { id, method, params } => {
                 let span = info_span!("request", method = %method, id = ?id);
-                // Request tokens descend from the session token, so closing the
-                // session cancels in-flight user work even after the completion
-                // gate has claimed its registry entry.
-                let cancellation = (method != "initialize").then(|| self.session.child_token());
-                let Some(reservation) = self.inbound.reserve(id.clone(), cancellation.clone())
-                else {
-                    enqueue_error(
-                        &self.out_tx,
-                        id,
-                        LspError::invalid_request("duplicate request id"),
-                    );
-                    return Flow::Continue;
+                // Admission happens before request-scoped cancellation state,
+                // parameter decoding, and runtime task creation. The owned
+                // permit remains attached to the task handle until the engine
+                // reaps it, even if cancellation or close claims the response
+                // gate first.
+                let cancellation_parent = (method != "initialize").then_some(&self.session);
+                let reserved = match self.inbound.reserve(id.clone(), cancellation_parent) {
+                    Ok(reserved) => reserved,
+                    Err(InboundReserveError::DuplicateId) => {
+                        enqueue_error(
+                            &self.out_tx,
+                            id,
+                            LspError::invalid_request("duplicate request id"),
+                        );
+                        return Flow::Continue;
+                    }
+                    Err(InboundReserveError::CapacityExhausted) => {
+                        enqueue_error(
+                            &self.out_tx,
+                            id,
+                            LspError::ServerError {
+                                code: SERVER_CANCELLED as i32,
+                                message: INBOUND_CAPACITY_EXHAUSTED.to_string(),
+                                data: None,
+                            },
+                        );
+                        return Flow::Continue;
+                    }
                 };
+                let reservation = reserved.reservation;
+                let cancellation = reserved.cancellation;
 
                 // Initialize precedence: until `initialize` completes, refuse
                 // every other request with `ServerNotInitialized`.
@@ -1307,37 +1380,41 @@ where
         let out_tx = self.out_tx.clone();
         let client = self.client.clone();
         let inbound = self.inbound.clone();
-        self.tasks.spawn(async move {
-            let id = reservation.id.clone();
-            let cancellation_for_handler = cancellation.clone();
-            let ctx = Context::for_request(id.clone(), span, client, workspace)
-                .with_cancellation(cancellation_for_handler);
-            let call = IncomingCall::request(method, id, params, ctx, state);
-            let result = match select(
-                Box::pin(service.call(call)),
-                Box::pin(cancellation.cancelled()),
-            )
-            .await
-            {
-                Either::Left((result, _)) => result,
-                Either::Right(((), handler)) => {
-                    // CancellationToken wakes every waiter, but an executor
-                    // yield does not guarantee this handler is polled before a
-                    // separate abort. Poll it here, in its own task, then end
-                    // the task without relying on scheduler fairness.
-                    let _ = handler.now_or_never();
-                    ServiceResult::Error(LspError::RequestCancelled)
-                }
-            };
-            let result = match result {
-                ServiceResult::Response(value) => encode_body(&value),
-                ServiceResult::Error(error) => Err(error),
-                ServiceResult::NoResponse => {
-                    Err(LspError::internal("request service returned no response"))
-                }
-            };
-            inbound.complete(&out_tx, reservation, result);
-        });
+        let permit = Arc::clone(&reservation._permit);
+        self.tasks.spawn(
+            async move {
+                let id = reservation.id.clone();
+                let cancellation_for_handler = cancellation.clone();
+                let ctx = Context::for_request(id.clone(), span, client, workspace)
+                    .with_cancellation(cancellation_for_handler);
+                let call = IncomingCall::request(method, id, params, ctx, state);
+                let result = match select(
+                    Box::pin(service.call(call)),
+                    Box::pin(cancellation.cancelled()),
+                )
+                .await
+                {
+                    Either::Left((result, _)) => result,
+                    Either::Right(((), handler)) => {
+                        // CancellationToken wakes every waiter, but an executor
+                        // yield does not guarantee this handler is polled before a
+                        // separate abort. Poll it here, in its own task, then end
+                        // the task without relying on scheduler fairness.
+                        let _ = handler.now_or_never();
+                        ServiceResult::Error(LspError::RequestCancelled)
+                    }
+                };
+                let result = match result {
+                    ServiceResult::Response(value) => encode_body(&value),
+                    ServiceResult::Error(error) => Err(error),
+                    ServiceResult::NoResponse => {
+                        Err(LspError::internal("request service returned no response"))
+                    }
+                };
+                inbound.complete(&out_tx, reservation, result);
+            },
+            permit,
+        );
     }
 
     /// The engine's one close operation (ADR 0018).
@@ -1386,8 +1463,11 @@ where
 /// against a connection nobody owns.
 impl<S, R> Drop for ProtocolEngine<S, R> {
     fn drop(&mut self) {
-        for handle in self.tasks.handles.iter().chain(self.send_task.iter()) {
-            handle.abort();
+        for task in &self.tasks.handles {
+            task.handle.abort();
+        }
+        if let Some(send_task) = &self.send_task {
+            send_task.abort();
         }
     }
 }
@@ -1621,16 +1701,19 @@ mod tests {
     #[test]
     fn a_stale_reservation_cannot_claim_a_reused_request_id() {
         let (out_tx, mut out_rx) = OutboundQueue::new(crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD);
-        let registry = InboundRegistry::default();
+        let registry = InboundRegistry::new(2);
         let id = RequestId::Number(2);
+        let session = CancellationToken::new();
 
         let first = registry
-            .reserve(id.clone(), Some(CancellationToken::new()))
-            .expect("the id is free");
+            .reserve(id.clone(), Some(&session))
+            .expect("the id is free")
+            .reservation;
         assert!(
-            registry
-                .reserve(id.clone(), Some(CancellationToken::new()))
-                .is_none(),
+            matches!(
+                registry.reserve(id.clone(), Some(&session)),
+                Err(InboundReserveError::DuplicateId)
+            ),
             "an in-flight id is not reserved twice"
         );
 
@@ -1641,8 +1724,9 @@ mod tests {
         enqueue_encoded(&out_tx, cancelled.id, Err(LspError::RequestCancelled));
         // The peer then reuses the id for a new request.
         let second = registry
-            .reserve(id.clone(), Some(CancellationToken::new()))
-            .expect("the id is free once the first request is answered");
+            .reserve(id.clone(), Some(&session))
+            .expect("the id is free once the first request is answered")
+            .reservation;
 
         // The first request's task only now produces a result.
         registry.complete(&out_tx, first, encode_body(&"race"));
@@ -1667,6 +1751,110 @@ mod tests {
         assert!(
             out_rx.try_recv().is_err(),
             "the stale reservation enqueued nothing"
+        );
+    }
+
+    #[test]
+    fn an_exhausted_registry_stays_bounded_and_cancellation_releases_its_entry() {
+        let registry = InboundRegistry::new(1);
+        let session = CancellationToken::new();
+        let accepted = registry
+            .reserve(RequestId::Number(2), Some(&session))
+            .expect("the one slot is available");
+
+        for id in 3..=66 {
+            assert!(matches!(
+                registry.reserve(RequestId::Number(id), Some(&session)),
+                Err(InboundReserveError::CapacityExhausted)
+            ));
+        }
+        assert_eq!(
+            registry.inner.lock().unwrap().entries.len(),
+            1,
+            "the flood retained only the admitted registry entry"
+        );
+
+        let cancelled = registry
+            .claim_cancellation(&RequestId::Number(2))
+            .expect("the admitted request is cancellable");
+        assert!(
+            registry.inner.lock().unwrap().entries.is_empty(),
+            "cancellation releases the registry entry"
+        );
+        drop(cancelled);
+        assert!(matches!(
+            registry.reserve(RequestId::Number(67), Some(&session)),
+            Err(InboundReserveError::CapacityExhausted)
+        ));
+        drop(accepted);
+        assert!(
+            registry
+                .reserve(RequestId::Number(67), Some(&session))
+                .is_ok(),
+            "capacity returns after the admitted task drops its reservation"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn a_finished_task_holds_capacity_until_its_handle_is_reaped() {
+        let registry = InboundRegistry::new(1);
+        let session = CancellationToken::new();
+        let accepted = registry
+            .reserve(RequestId::Number(2), Some(&session))
+            .expect("the one slot is available");
+        let permit = Arc::clone(&accepted.reservation._permit);
+        let (out_tx, _out_rx) = OutboundQueue::new(crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD);
+        registry.complete(&out_tx, accepted.reservation, encode_body(&"done"));
+
+        let mut tasks = TaskGroup::new(default_runtime());
+        tasks.spawn(async {}, permit);
+        while !tasks.handles[0].handle.is_finished() {
+            tasks.runtime.yield_now().await;
+        }
+        assert_eq!(tasks.handles.len(), 1, "the finished handle is still owned");
+        assert!(matches!(
+            registry.reserve(RequestId::Number(3), Some(&session)),
+            Err(InboundReserveError::CapacityExhausted)
+        ));
+
+        tasks.reap_finished().await;
+        assert!(tasks.handles.is_empty(), "the finished handle was reaped");
+        assert!(
+            registry
+                .reserve(RequestId::Number(3), Some(&session))
+                .is_ok(),
+            "reaping the handle releases its admission permit"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn aborting_the_task_group_releases_disconnect_capacity() {
+        let registry = InboundRegistry::new(1);
+        let session = CancellationToken::new();
+        let accepted = registry
+            .reserve(RequestId::Number(2), Some(&session))
+            .expect("the one slot is available");
+        let permit = Arc::clone(&accepted.reservation._permit);
+        let mut tasks = TaskGroup::new(default_runtime());
+        tasks.spawn(std::future::pending(), permit);
+
+        registry.close_all();
+        drop(accepted);
+        assert!(registry.inner.lock().unwrap().entries.is_empty());
+        assert!(matches!(
+            registry.reserve(RequestId::Number(3), Some(&session)),
+            Err(InboundReserveError::CapacityExhausted)
+        ));
+
+        tasks.abort_and_join().await;
+        assert!(tasks.handles.is_empty(), "disconnect joined every task");
+        assert!(
+            registry
+                .reserve(RequestId::Number(3), Some(&session))
+                .is_ok(),
+            "joining aborted tasks releases their admission permits"
         );
     }
 
