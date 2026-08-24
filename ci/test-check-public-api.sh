@@ -17,6 +17,13 @@ cat >"$test_root/bin/cargo" <<'EOF'
 set -euo pipefail
 
 case ${1:-} in
+    info)
+        if [[ " $* " == *' --color never '* ]]; then
+            echo 'version: 0.5.2'
+        else
+            printf '\033[1mversion:\033[0m 0.5.2\n'
+        fi
+        ;;
     metadata)
         jq -cn --arg version "${FAKE_CURRENT_VERSION:?}" \
             '{packages: [{name: "lspf", version: $version}]}'
@@ -66,6 +73,14 @@ run_gate() {
     )
 }
 
+run_gate_with_automatic_baseline() {
+    (
+        cd "$test_root"
+        bash ci/check-public-api.sh \
+            --report target/automatic-baseline-report.json
+    )
+}
+
 assert_report() {
     local expression=$1
     jq -e "$expression" "$test_root/target/report.json" >/dev/null
@@ -87,6 +102,16 @@ assert_report '
           and (.command | contains("--color never"))
           and (.findingsSha256 | test("^[0-9a-f]{64}$")))
 '
+
+if run_gate_with_automatic_baseline; then
+    echo 'test failure: an unapproved breaking change passed the gate' >&2
+    exit 1
+fi
+jq -e '
+    .success == false
+    and .baselineVersion == "0.5.2"
+    and (.rows | length == 22)
+' "$test_root/target/automatic-baseline-report.json" >/dev/null
 
 findings_hash=$(jq -r \
     '.rows[] | select(.target == "native" and .features == "none")
