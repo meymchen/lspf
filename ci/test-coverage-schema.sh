@@ -24,7 +24,14 @@ test_coverage_baseline_is_valid() {
         and .schemaVersion == 1
         and ($root.evidence | valid_evidence)
         and ($validationMode == "evidence" or (
-          all(.thresholds.workspaceLines, .thresholds.protocolEngineLines;
+          (.policy | type == "object")
+          and (.policy | keys | sort == ["maximumRegressionPercentagePoints",
+            "minimumWorkspacePercentExclusive"])
+          and (.policy.minimumWorkspacePercentExclusive | type == "number"
+            and . >= 0 and . < 100)
+          and (.policy.maximumRegressionPercentagePoints | type == "number"
+            and . >= 0 and . <= 100)
+          and all(.thresholds.workspaceLines, .thresholds.protocolEngineLines;
             . as $threshold
             | ($threshold.count | type == "number" and . > 0)
             and ($threshold.covered | type == "number" and . >= 0)

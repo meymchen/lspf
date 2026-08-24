@@ -1,5 +1,9 @@
 {
   "schemaVersion": 1,
+  "policy": {
+    "minimumWorkspacePercentExclusive": 90,
+    "maximumRegressionPercentagePoints": 5
+  },
   "thresholds": {
     "workspaceLines": {
       "count": 10218,

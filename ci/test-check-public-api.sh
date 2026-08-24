@@ -121,7 +121,7 @@ jq -n \
     --arg hash "$findings_hash" \
     '{schemaVersion: 1, approvals: [{
         baselineVersion: "0.5.2", currentVersion: "0.6.0",
-        target: "native", features: "none", findingsSha256: $hash
+        target: "*", features: "*", findingsSha256: $hash
     }]}' >"$test_root/ci/public-api-breaking-approvals.json"
 
 run_gate

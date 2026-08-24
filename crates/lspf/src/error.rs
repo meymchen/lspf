@@ -109,6 +109,7 @@ pub enum ProgressError {
 /// never a value that goes on the wire. `build()` performs no I/O and returns
 /// this before any transport is touched.
 #[derive(Debug, Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum BuildError {
     /// Two handlers were registered for the same request method.
     #[error("duplicate handler registered for method `{0}`")]

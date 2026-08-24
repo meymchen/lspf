@@ -197,8 +197,8 @@ check_surface() {
                 '.approvals[] | select(
                     .baselineVersion == $baseline
                     and .currentVersion == $current
-                    and .target == $target
-                    and .features == $features
+                    and (.target == $target or .target == "*")
+                    and (.features == $features or .features == "*")
                 ) | .findingsSha256' \
                 "$APPROVALS_PATH" 2>/dev/null || true)
             if [[ $breaking_approvals_allowed == true \

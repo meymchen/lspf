@@ -50,6 +50,7 @@ src/lib.rs
 src/progress.rs
 src/proposed.rs
 src/raw.rs
+src/resource_policy.rs
 src/runtime.rs
 src/service.rs
 src/sync.rs
@@ -123,6 +124,7 @@ tests/outgoing_requests.rs
 tests/progress.rs
 tests/progress_cancellation.rs
 tests/resolve_prepare_families.rs
+tests/resource_policy.rs
 tests/runtime_boundary.rs
 tests/service_stack.rs
 tests/session_close.rs
