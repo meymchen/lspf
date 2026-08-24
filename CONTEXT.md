@@ -45,7 +45,15 @@ _Avoid_: Session, backend, dispatcher (the pre-0.2 concept).
 **Resource policy**:
 The single connection-owned value that declares finite budgets for admitted
 inbound requests, queued outbound messages and bytes, tracked Documents and
-their text, and request and handler deadlines.
+their text, and request and handler deadlines. Inbound request admission occurs
+before parameter decoding, cancellation-token allocation, registry insertion,
+and handler-task creation. Once the budget is full, a unique request receives
+`ServerCancelled` (`-32802`, `inbound request capacity exhausted`) without
+entering those structures; a duplicate ID remains `InvalidRequest` and never
+replaces the admitted request. Completion, peer cancellation, and connection
+close release registry ownership immediately; the admission permit remains
+attached to admitted handler tasks until completion or abort and is released
+when the engine reaps the finished task handle.
 _Avoid_: Concurrency limit (only one budget), resource options (does not express
 the enforced contract).
 

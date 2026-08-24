@@ -46,6 +46,10 @@ impl fmt::Display for ResourcePolicyField {
 /// The production defaults admit 64 inbound requests, queue 1,024 outbound
 /// messages using at most 16 MiB, track 1,024 Documents using at most 64 MiB
 /// of text, and apply 30-second outbound-request and handler deadlines.
+/// Inbound admission happens before parameter decoding, cancellation-token
+/// allocation, or handler-task creation; excess requests receive LSP
+/// `ServerCancelled` (`-32802`) with the stable message
+/// `inbound request capacity exhausted`.
 /// Setting `outbound_request_timeout` to `None` explicitly disables that
 /// deadline. All numeric budgets and enabled deadlines must be greater than
 /// zero; invalid policies are rejected by [`ServerBuilder::build`](crate::ServerBuilder::build).
