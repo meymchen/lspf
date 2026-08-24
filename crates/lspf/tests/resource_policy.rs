@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use lspf::{ResourcePolicy, Server};
+use lspf::{ResourcePolicy, ResourcePolicyField, Server};
 
 fn build_error(policy: ResourcePolicy) -> lspf::BuildError {
     Server::builder(())
@@ -47,7 +47,7 @@ fn explicitly_disabled_outbound_request_deadline_is_buildable() {
 }
 
 #[test]
-fn zero_handler_deadline_fails_endpoint_construction() {
+fn zero_handler_deadline_fails_server_build() {
     let policy = ResourcePolicy {
         handler_timeout: Duration::ZERO,
         ..ResourcePolicy::default()
@@ -66,38 +66,38 @@ fn zero_handler_deadline_fails_endpoint_construction() {
 }
 
 #[test]
-fn every_zero_connection_budget_fails_endpoint_construction() {
+fn every_zero_connection_budget_fails_server_build() {
     let cases = [
         (
-            "max_inbound_requests",
+            ResourcePolicyField::MaxInboundRequests,
             ResourcePolicy {
                 max_inbound_requests: 0,
                 ..ResourcePolicy::default()
             },
         ),
         (
-            "max_outbound_messages",
+            ResourcePolicyField::MaxOutboundMessages,
             ResourcePolicy {
                 max_outbound_messages: 0,
                 ..ResourcePolicy::default()
             },
         ),
         (
-            "max_outbound_bytes",
+            ResourcePolicyField::MaxOutboundBytes,
             ResourcePolicy {
                 max_outbound_bytes: 0,
                 ..ResourcePolicy::default()
             },
         ),
         (
-            "max_documents",
+            ResourcePolicyField::MaxDocuments,
             ResourcePolicy {
                 max_documents: 0,
                 ..ResourcePolicy::default()
             },
         ),
         (
-            "max_document_bytes",
+            ResourcePolicyField::MaxDocumentBytes,
             ResourcePolicy {
                 max_document_bytes: 0,
                 ..ResourcePolicy::default()
@@ -114,7 +114,7 @@ fn every_zero_connection_budget_fails_endpoint_construction() {
 }
 
 #[test]
-fn zero_outbound_request_deadline_fails_endpoint_construction() {
+fn zero_outbound_request_deadline_fails_server_build() {
     let policy = ResourcePolicy {
         outbound_request_timeout: Some(Duration::ZERO),
         ..ResourcePolicy::default()
@@ -123,7 +123,7 @@ fn zero_outbound_request_deadline_fails_endpoint_construction() {
     assert_eq!(
         build_error(policy),
         lspf::BuildError::InvalidResourcePolicy {
-            field: "outbound_request_timeout"
+            field: ResourcePolicyField::OutboundRequestTimeout
         }
     );
 }

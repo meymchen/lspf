@@ -121,7 +121,7 @@ pub use file_provider::{FileProvider, MemoryFileProvider};
 pub use file_provider::{OsFileProvider, OsFileProviderBuilder};
 pub use progress::{ProgressHandle, ProgressOptions};
 pub use raw::{JsonRpcError, RawMessage, RequestId};
-pub use resource_policy::ResourcePolicy;
+pub use resource_policy::{ResourcePolicy, ResourcePolicyField};
 #[doc(hidden)]
 pub use runtime::{TaskFuture, TaskSend};
 pub use service::{CallKind, IncomingCall, Layer, Next, ServiceFuture, ServiceResult};

@@ -1,6 +1,40 @@
+use std::fmt;
 use std::time::Duration;
 
 use crate::BuildError;
+
+/// A field whose value made a [`ResourcePolicy`] invalid.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResourcePolicyField {
+    /// [`ResourcePolicy::max_inbound_requests`].
+    MaxInboundRequests,
+    /// [`ResourcePolicy::max_outbound_messages`].
+    MaxOutboundMessages,
+    /// [`ResourcePolicy::max_outbound_bytes`].
+    MaxOutboundBytes,
+    /// [`ResourcePolicy::max_documents`].
+    MaxDocuments,
+    /// [`ResourcePolicy::max_document_bytes`].
+    MaxDocumentBytes,
+    /// [`ResourcePolicy::outbound_request_timeout`].
+    OutboundRequestTimeout,
+    /// [`ResourcePolicy::handler_timeout`].
+    HandlerTimeout,
+}
+
+impl fmt::Display for ResourcePolicyField {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::MaxInboundRequests => "max_inbound_requests",
+            Self::MaxOutboundMessages => "max_outbound_messages",
+            Self::MaxOutboundBytes => "max_outbound_bytes",
+            Self::MaxDocuments => "max_documents",
+            Self::MaxDocumentBytes => "max_document_bytes",
+            Self::OutboundRequestTimeout => "outbound_request_timeout",
+            Self::HandlerTimeout => "handler_timeout",
+        })
+    }
+}
 
 /// Finite budgets for resources owned by one LSP connection.
 ///
@@ -36,11 +70,23 @@ pub struct ResourcePolicy {
 impl ResourcePolicy {
     pub(crate) fn validate(self) -> Result<(), BuildError> {
         for (field, value) in [
-            ("max_inbound_requests", self.max_inbound_requests),
-            ("max_outbound_messages", self.max_outbound_messages),
-            ("max_outbound_bytes", self.max_outbound_bytes),
-            ("max_documents", self.max_documents),
-            ("max_document_bytes", self.max_document_bytes),
+            (
+                ResourcePolicyField::MaxInboundRequests,
+                self.max_inbound_requests,
+            ),
+            (
+                ResourcePolicyField::MaxOutboundMessages,
+                self.max_outbound_messages,
+            ),
+            (
+                ResourcePolicyField::MaxOutboundBytes,
+                self.max_outbound_bytes,
+            ),
+            (ResourcePolicyField::MaxDocuments, self.max_documents),
+            (
+                ResourcePolicyField::MaxDocumentBytes,
+                self.max_document_bytes,
+            ),
         ] {
             if value == 0 {
                 return Err(BuildError::InvalidResourcePolicy { field });
@@ -48,12 +94,12 @@ impl ResourcePolicy {
         }
         if self.outbound_request_timeout == Some(Duration::ZERO) {
             return Err(BuildError::InvalidResourcePolicy {
-                field: "outbound_request_timeout",
+                field: ResourcePolicyField::OutboundRequestTimeout,
             });
         }
         if self.handler_timeout == Duration::ZERO {
             return Err(BuildError::InvalidResourcePolicy {
-                field: "handler_timeout",
+                field: ResourcePolicyField::HandlerTimeout,
             });
         }
         Ok(())

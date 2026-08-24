@@ -170,7 +170,7 @@ pub enum BuildError {
     #[error("resource policy `{field}` must be greater than zero when enabled")]
     InvalidResourcePolicy {
         /// The invalid [`ResourcePolicy`](crate::ResourcePolicy) field.
-        field: &'static str,
+        field: crate::ResourcePolicyField,
     },
 }
 

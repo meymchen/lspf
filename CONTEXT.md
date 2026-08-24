@@ -162,10 +162,9 @@ ignored; a registered notification hook runs after a successful decode and
 observes the updated cancellation state. Session close clears the registry,
 so a handle that outlives the connection observes an unknown token.
 `Client` is only a handle — the outbound queue, ID allocator, and pending
-registry are owned by the connection's protocol engine and governed by the
-connection's [[Resource policy]]. Ordinary overload is explicit rather than a
-silent message drop, while protocol-required traffic has a deterministic
-reserve or failure-close path.
+registry are owned by the connection's protocol engine and covered by the
+connection's [[Resource policy]]. `Client` itself neither owns nor configures
+those resources.
 _Avoid_: Connection (that is the transport level), sender.
 
 **Command**:
