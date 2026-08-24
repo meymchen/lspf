@@ -109,6 +109,7 @@ pub enum ProgressError {
 /// never a value that goes on the wire. `build()` performs no I/O and returns
 /// this before any transport is touched.
 #[derive(Debug, Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum BuildError {
     /// Two handlers were registered for the same request method.
     #[error("duplicate handler registered for method `{0}`")]
@@ -165,6 +166,13 @@ pub enum BuildError {
     /// A zero outbound warning threshold could never be crossed from below.
     #[error("outbound warning threshold must be greater than zero")]
     InvalidOutboundWarningThreshold,
+
+    /// A connection resource budget or enabled deadline was zero.
+    #[error("resource policy `{field}` must be greater than zero when enabled")]
+    InvalidResourcePolicy {
+        /// The invalid [`ResourcePolicy`](crate::ResourcePolicy) field.
+        field: crate::ResourcePolicyField,
+    },
 }
 
 /// A JSON-RPC/LSP error suitable for returning from a handler.

@@ -16,8 +16,12 @@ cp ci/test-coverage-schema.sh "$test_root/ci/"
 cat >"$test_root/ci/test-coverage-baseline.json" <<'EOF'
 {
   "schemaVersion": 1,
+  "policy": {
+    "minimumWorkspacePercentExclusive": 90,
+    "maximumRegressionPercentagePoints": 5
+  },
   "thresholds": {
-    "workspaceLines": {"count": 1000, "covered": 800},
+    "workspaceLines": {"count": 1000, "covered": 950},
     "protocolEngineLines": {"count": 1000, "covered": 750}
   },
   "protocolEngineFiles": ["crates/lspf/src/engine.rs"],
@@ -75,13 +79,15 @@ run_gate() {
     )
 }
 
-write_export 86.5 81.0
+write_export 90.1 70.0
 run_gate
 jq -e '
   .schemaVersion == 1
   and .success == true
-  and .testCoverage.workspace.lines.percent == 86.5
-  and .testCoverage.protocolEngine.lines.percent == 81
+  and .policy.minimumWorkspacePercentExclusive == 90
+  and .policy.maximumRegressionPercentagePoints == 5
+  and .testCoverage.workspace.lines.percent == 90.1
+  and .testCoverage.protocolEngine.lines.percent == 70
   and .testCoverage.protocolEngine.files == ["crates/lspf/src/engine.rs"]
   and (.evidence | keys | sort
     == ["cancellation", "close", "lifecycle", "malformedMessage"])
@@ -100,41 +106,41 @@ jq -e '
 ' "$test_root/target/summary.json" >/dev/null
 mv "$test_root/target/test-evidence-good.json" "$test_root/target/test-evidence.json"
 
-write_export 79.9 81.0
+write_export 90.0 75.0
 if run_gate; then
-    echo 'test failure: workspace test-coverage regression passed the gate' >&2
+    echo 'test failure: the workspace minimum accepted exactly 90 percent' >&2
     exit 1
 fi
 jq -e '
   .success == false
-  and .failures == [{scope: "workspace", actual: 79.9, required: 80}]
+  and .failures == [{scope: "workspaceMinimum", actual: 90, requiredExclusive: 90}]
 ' "$test_root/target/summary.json" >/dev/null
 
-# The displayed percentage rounds to the baseline, but the exact ratio is
-# lower. Cross-multiplication must still catch this otherwise-silent regression.
-write_export 86.5 81.0
-jq '.data[0].totals.lines = {count: 100001, covered: 80000, percent: 79.9992}' \
-    "$test_root/target/test-coverage.json" \
-    >"$test_root/target/test-coverage-within-rounding-bucket.json"
-mv "$test_root/target/test-coverage-within-rounding-bucket.json" \
-    "$test_root/target/test-coverage.json"
+jq '.thresholds.workspaceLines = {count: 1000, covered: 970}' \
+    "$test_root/ci/test-coverage-baseline.json" \
+    >"$test_root/ci/test-coverage-baseline-updated.json"
+mv "$test_root/ci/test-coverage-baseline-updated.json" \
+    "$test_root/ci/test-coverage-baseline.json"
+write_export 91.9 75.0
 if run_gate; then
-    echo 'test failure: a workspace ratio below the displayed baseline passed' >&2
+    echo 'test failure: a workspace regression over five points passed the gate' >&2
     exit 1
 fi
 jq -e '
   .success == false
-  and .failures == [{scope: "workspace", actual: 80, required: 80}]
+  and .failures == [{scope: "workspaceRegression", actual: 91.9,
+    baseline: 97, maximumDrop: 5}]
 ' "$test_root/target/summary.json" >/dev/null
 
-write_export 86.5 74.9
+write_export 92.0 69.9
 if run_gate; then
-    echo 'test failure: protocol-engine test-coverage regression passed the gate' >&2
+    echo 'test failure: a protocol-engine regression over five points passed the gate' >&2
     exit 1
 fi
 jq -e '
   .success == false
-  and .failures == [{scope: "protocolEngine", actual: 74.9, required: 75}]
+  and .failures == [{scope: "protocolEngineRegression", actual: 69.9,
+    baseline: 75, maximumDrop: 5}]
 ' "$test_root/target/summary.json" >/dev/null
 
 echo 'Test-coverage gate tests passed'
