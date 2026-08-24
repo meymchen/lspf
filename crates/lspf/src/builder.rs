@@ -691,8 +691,7 @@ pub struct ServerBuilder<S> {
     on_shutdown: Option<OnShutdown<S>>,
     on_exit: Option<OnExit<S>>,
     layers: Vec<UserLayer<S>>,
-    concurrency_limit: usize,
-    outbound_warning_threshold: usize,
+    resource_policy: crate::ResourcePolicy,
     /// First registration error seen, if any. Reported by `build`.
     error: Option<BuildError>,
 }
@@ -709,8 +708,7 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
             on_shutdown: None,
             on_exit: None,
             layers: Vec::new(),
-            concurrency_limit: crate::DEFAULT_CONCURRENCY_LIMIT,
-            outbound_warning_threshold: crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD,
+            resource_policy: crate::ResourcePolicy::default(),
             error: None,
         }
     }
@@ -1036,27 +1034,44 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
         self
     }
 
-    /// Set the maximum number of calls executing inside the complete user
-    /// Layer chain. Zero is rejected by [`build`](Self::build).
+    /// Set the inbound-request budget in the connection's resource policy.
+    ///
+    /// This compatibility shorthand updates
+    /// [`ResourcePolicy::max_inbound_requests`](crate::ResourcePolicy::max_inbound_requests).
+    /// Zero is rejected by [`build`](Self::build).
     pub fn concurrency_limit(mut self, limit: usize) -> Self {
         if limit == 0 {
             self.record(BuildError::InvalidConcurrencyLimit);
         } else {
-            self.concurrency_limit = limit;
+            self.resource_policy.max_inbound_requests = limit;
         }
         self
     }
 
-    /// Set the outbound queue depth at which the engine warns once per upward
-    /// crossing. Zero is rejected by [`build`](Self::build). The queue itself
-    /// stays unbounded regardless: the threshold only controls when sustained
-    /// depth produces a warning, never whether a message is sent.
+    /// Set the outbound-message budget in the connection's resource policy.
+    ///
+    /// This compatibility shorthand updates
+    /// [`ResourcePolicy::max_outbound_messages`](crate::ResourcePolicy::max_outbound_messages).
+    /// Until bounded queue admission is implemented, the same value is the
+    /// queue-depth warning threshold. Zero is rejected by [`build`](Self::build).
     pub fn outbound_warning_threshold(mut self, threshold: usize) -> Self {
         if threshold == 0 {
             self.record(BuildError::InvalidOutboundWarningThreshold);
         } else {
-            self.outbound_warning_threshold = threshold;
+            self.resource_policy.max_outbound_messages = threshold;
         }
+        self
+    }
+
+    /// Replace all finite budgets and deadlines owned by this connection.
+    ///
+    /// Invalid zero budgets or enabled zero deadlines are reported by
+    /// [`build`](Self::build). An outbound-request deadline may be explicitly
+    /// disabled by setting
+    /// [`ResourcePolicy::outbound_request_timeout`](crate::ResourcePolicy::outbound_request_timeout)
+    /// to `None`.
+    pub fn resource_policy(mut self, policy: crate::ResourcePolicy) -> Self {
+        self.resource_policy = policy;
         self
     }
 
@@ -1066,6 +1081,9 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
     /// frozen later, when the engine commits the initialize transaction. Returns
     /// the first [`BuildError`] recorded during registration, if any.
     pub fn build(mut self) -> Result<Server<S>, BuildError> {
+        if let Err(err) = self.resource_policy.validate() {
+            self.record(err);
+        }
         if let Err(err) = self.registrations.validate() {
             self.record(err);
         }
@@ -1082,8 +1100,7 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
             on_shutdown: self.on_shutdown,
             on_exit: self.on_exit,
             layers: self.layers,
-            concurrency_limit: self.concurrency_limit,
-            outbound_warning_threshold: self.outbound_warning_threshold,
+            resource_policy: self.resource_policy,
         })
     }
 
@@ -1237,8 +1254,7 @@ pub struct Server<S> {
     pub(crate) on_shutdown: Option<OnShutdown<S>>,
     pub(crate) on_exit: Option<OnExit<S>>,
     pub(crate) layers: Vec<UserLayer<S>>,
-    pub(crate) concurrency_limit: usize,
-    pub(crate) outbound_warning_threshold: usize,
+    pub(crate) resource_policy: crate::ResourcePolicy,
 }
 
 impl<S: Send + Sync + 'static> Server<S> {
@@ -2043,9 +2059,9 @@ mod tests {
         let server = Server::builder(DummyState)
             .build()
             .expect("the default threshold builds");
-        assert_eq!(server.outbound_warning_threshold, 1024);
+        assert_eq!(server.resource_policy.max_outbound_messages, 1024);
         assert_eq!(
-            server.outbound_warning_threshold,
+            server.resource_policy.max_outbound_messages,
             crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD
         );
     }
@@ -2056,7 +2072,7 @@ mod tests {
             .outbound_warning_threshold(7)
             .build()
             .expect("a positive threshold builds");
-        assert_eq!(server.outbound_warning_threshold, 7);
+        assert_eq!(server.resource_policy.max_outbound_messages, 7);
     }
 
     #[test]

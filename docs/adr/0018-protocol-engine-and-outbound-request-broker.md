@@ -1,5 +1,8 @@
 # ProtocolEngine and the outbound request broker
 
+Status note: ADR 0025 supersedes this decision's unbounded outbound-queue
+assumption; its ownership and completion rules remain in force.
+
 Status: Accepted. Extends the ownership boundaries and uses the type names and
 registration model fixed by
 [ADR 0017](0017-typed-router-and-capability-catalog.md). Clarifies ownership

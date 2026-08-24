@@ -57,6 +57,7 @@ mod progress;
 #[cfg(feature = "proposed")]
 pub mod proposed;
 mod raw;
+mod resource_policy;
 mod runtime;
 mod service;
 mod sync;
@@ -120,6 +121,7 @@ pub use file_provider::{FileProvider, MemoryFileProvider};
 pub use file_provider::{OsFileProvider, OsFileProviderBuilder};
 pub use progress::{ProgressHandle, ProgressOptions};
 pub use raw::{JsonRpcError, RawMessage, RequestId};
+pub use resource_policy::{ResourcePolicy, ResourcePolicyField};
 #[doc(hidden)]
 pub use runtime::{TaskFuture, TaskSend};
 pub use service::{CallKind, IncomingCall, Layer, Next, ServiceFuture, ServiceResult};

@@ -1,5 +1,9 @@
 # Bounded concurrency by default
 
+Status: Superseded in part by ADR 0025. The concurrency Layer remains, but a
+single connection `ResourcePolicy` now defines admission and every other
+connection-owned budget.
+
 The default [[Default stack]] includes a concurrency layer capped at 64
 in-flight requests. The cap is tunable
 (`.layer(ConcurrencyLayer::new(N))`) and removable

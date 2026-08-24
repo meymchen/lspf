@@ -186,8 +186,8 @@ check_surface() {
             findings=$(sed -n '/^--- failure /,/^    Finished /p' "$row_output" \
                 | sed -E \
                     -e '/^    Finished /d' \
-                    -e 's#file /[^ ]*/lspf-'"$baseline_version"'/#file <baseline>/#g' \
-                    -e 's#file [^ ]*/crates/lspf/#file <current>/#g')
+                    -e 's#[^[:space:]]*/lspf-'"$baseline_version"'/#<baseline>/#g' \
+                    -e 's#[^[:space:]]*/crates/lspf/#<current>/#g')
             findings_hash=$(printf '%s' "$findings" | sha256sum | cut -d' ' -f1)
             approved_hash=$(jq -er \
                 --arg baseline "$baseline_version" \
@@ -197,8 +197,8 @@ check_surface() {
                 '.approvals[] | select(
                     .baselineVersion == $baseline
                     and .currentVersion == $current
-                    and .target == $target
-                    and .features == $features
+                    and (.target == $target or .target == "*")
+                    and (.features == $features or .features == "*")
                 ) | .findingsSha256' \
                 "$APPROVALS_PATH" 2>/dev/null || true)
             if [[ $breaking_approvals_allowed == true \

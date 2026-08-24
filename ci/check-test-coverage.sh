@@ -18,7 +18,8 @@ usage() {
 Usage: bash ci/check-test-coverage.sh [--input PATH] [--baseline PATH] [--evidence PATH] [--summary PATH]
 
 Build a stable test-coverage summary from cargo-llvm-cov's JSON export and fail
-if whole-workspace or protocol-engine line test coverage is below the baseline.
+if workspace coverage is not above the configured minimum, or if workspace or
+protocol-engine coverage drops more than the configured regression tolerance.
 Failure-path evidence must come from ci/run-coverage-evidence-tests.sh.
 EOF
 }
@@ -85,25 +86,39 @@ jq -n \
   | ($data.totals.lines) as $workspaceLines
   | percent($workspaceLines.covered; $workspaceLines.count) as $workspacePercent
   | percent($engineCovered; $engineCount) as $enginePercent
+  | percent($base.thresholds.workspaceLines.covered;
+      $base.thresholds.workspaceLines.count) as $workspaceBaselinePercent
+  | percent($base.thresholds.protocolEngineLines.covered;
+      $base.thresholds.protocolEngineLines.count) as $engineBaselinePercent
+  | ($base.policy.minimumWorkspacePercentExclusive) as $workspaceMinimum
+  | ($base.policy.maximumRegressionPercentagePoints) as $maximumDrop
   | ([
-      if ($workspaceLines.covered * $base.thresholds.workspaceLines.count)
-          < ($base.thresholds.workspaceLines.covered * $workspaceLines.count) then
-        {scope: "workspace", actual: $workspacePercent,
-          required: percent($base.thresholds.workspaceLines.covered;
-            $base.thresholds.workspaceLines.count)}
+      if ($workspaceLines.covered * 100)
+          <= ($workspaceMinimum * $workspaceLines.count) then
+        {scope: "workspaceMinimum", actual: $workspacePercent,
+          requiredExclusive: $workspaceMinimum}
+      else empty end,
+      if (100 * $workspaceLines.covered * $base.thresholds.workspaceLines.count)
+          < ((100 * $base.thresholds.workspaceLines.covered
+            - $maximumDrop * $base.thresholds.workspaceLines.count)
+            * $workspaceLines.count) then
+        {scope: "workspaceRegression", actual: $workspacePercent,
+          baseline: $workspaceBaselinePercent, maximumDrop: $maximumDrop}
       else empty end,
       if $engineFiles | length != ($base.protocolEngineFiles | length) then
         {scope: "protocolEngine", error: "configured source file missing from export"}
-      elif ($engineCovered * $base.thresholds.protocolEngineLines.count)
-          < ($base.thresholds.protocolEngineLines.covered * $engineCount) then
-        {scope: "protocolEngine", actual: $enginePercent,
-          required: percent($base.thresholds.protocolEngineLines.covered;
-            $base.thresholds.protocolEngineLines.count)}
+      elif (100 * $engineCovered * $base.thresholds.protocolEngineLines.count)
+          < ((100 * $base.thresholds.protocolEngineLines.covered
+            - $maximumDrop * $base.thresholds.protocolEngineLines.count)
+            * $engineCount) then
+        {scope: "protocolEngineRegression", actual: $enginePercent,
+          baseline: $engineBaselinePercent, maximumDrop: $maximumDrop}
       else empty end
     ]) as $failures
   | {
       schemaVersion: 1,
       success: ($failures | length == 0),
+      policy: $base.policy,
       thresholds: $base.thresholds,
       testCoverage: {
         workspace: {lines: {count: $data.totals.lines.count,
@@ -119,7 +134,14 @@ jq -n \
 ' >"$summary_path"
 
 if ! jq -e '.success' "$summary_path" >/dev/null; then
-    jq -r '.failures[] | "test-coverage regression: \(.scope) \(.actual // .error) (required \(.required // "configured source"))"' \
+    jq -r '.failures[] |
+      if .scope == "workspaceMinimum" then
+        "test-coverage minimum: workspace \(.actual)% (required > \(.requiredExclusive)%)"
+      elif (.scope | endswith("Regression")) then
+        "test-coverage regression: \(.scope) \(.actual)% (baseline \(.baseline)%, maximum drop \(.maximumDrop) points)"
+      else
+        "test-coverage error: \(.scope) \(.error)"
+      end' \
         "$summary_path" >&2
     exit 1
 fi
