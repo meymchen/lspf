@@ -14,7 +14,8 @@
       "test": { "contents": "read" },
       "native-lifecycle": { "contents": "read" },
       "wasm": { "contents": "read" },
-      "test-coverage": { "contents": "read" }
+      "test-coverage": { "contents": "read" },
+      "gate-a-evidence": { "contents": "read" }
     },
     ".github/workflows/packaged-crate.yml": {
       "packaged-crate": { "contents": "read" }
