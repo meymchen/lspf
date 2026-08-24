@@ -31,5 +31,7 @@ jobs:
           force: true
       - name: Test workflow policy diagnostics
         run: bash ci/test-check-workflow-security.sh
+      - name: Test release artifact workflow contract
+        run: bash ci/test-release-artifacts-workflow.sh
       - name: Enforce Action pins and minimal job permissions
         run: bash ci/check-workflow-security.sh
