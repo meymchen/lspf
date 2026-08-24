@@ -1,0 +1,42 @@
+{
+  "workflows": {
+    ".github/workflows/ci.yml": {
+      "feature-matrix": { "contents": "read" },
+      "markdownlint": { "contents": "read" },
+      "fmt": { "contents": "read" },
+      "public-docs": { "contents": "read" },
+      "packaged-crate": { "contents": "read" },
+      "security": { "contents": "read" },
+      "public-api": { "contents": "read" },
+      "msrv": { "contents": "read" },
+      "feature-contract": { "contents": "read" },
+      "native-matrix": { "contents": "read" },
+      "test": { "contents": "read" },
+      "native-lifecycle": { "contents": "read" },
+      "wasm": { "contents": "read" },
+      "test-coverage": { "contents": "read" }
+    },
+    ".github/workflows/packaged-crate.yml": {
+      "packaged-crate": { "contents": "read" }
+    },
+    ".github/workflows/public-docs.yml": {
+      "public-docs": { "contents": "read" }
+    },
+    ".github/workflows/release-plz.yml": {
+      "public-docs": { "contents": "read" },
+      "packaged-crate": { "contents": "read" },
+      "security": { "contents": "read" },
+      "release-plz-release": {
+        "contents": "write",
+        "pull-requests": "read"
+      },
+      "release-plz-pr": {
+        "contents": "write",
+        "pull-requests": "write"
+      }
+    },
+    ".github/workflows/security.yml": {
+      "supply-chain": { "contents": "read" }
+    }
+  }
+}

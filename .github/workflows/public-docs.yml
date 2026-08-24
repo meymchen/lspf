@@ -3,6 +3,8 @@ name: Public docs
 on:
   workflow_call:
 
+permissions: {}
+
 jobs:
   public-docs:
     name: public docs
@@ -10,9 +12,8 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: ./.github/actions/setup-rust
         with:
           targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
       - run: bash ci/check-public-docs.sh
