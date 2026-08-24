@@ -180,22 +180,38 @@ jobs:
         env:
           CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
 
-  coverage:
-    name: coverage
+  test-coverage:
+    name: test coverage
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.97.1
       - run: rustup component add llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
       - run: cargo install cargo-llvm-cov --version 0.6.21 --locked
-      - run: cargo llvm-cov --workspace --features stdio,tcp,websocket,proposed --all-targets --no-report
-      - run: cargo llvm-cov report --html --output-dir target/coverage
-      - run: cargo llvm-cov report --lcov --output-path target/coverage/lcov.info
-      - uses: actions/upload-artifact@v5
+      - name: Test the test-coverage gate behavior
+        run: bash ci/test-check-test-coverage.sh
+      - name: Exercise the whole workspace
+        run: cargo llvm-cov --workspace --features stdio,tcp,websocket,proposed --all-targets --no-report
+      - name: Generate human- and machine-readable reports
+        run: |
+          cargo llvm-cov report --html --output-dir target/test-coverage
+          cargo llvm-cov report --lcov --output-path target/test-coverage/lcov.info
+          cargo llvm-cov report --json --summary-only --output-path target/test-coverage/raw-summary.json
+      - name: Execute declared failure-path evidence tests
+        run: bash ci/run-coverage-evidence-tests.sh
+      - name: Enforce workspace and protocol-engine baselines
+        run: bash ci/check-test-coverage.sh
+      - name: Upload test-coverage reports
+        if: always()
+        uses: actions/upload-artifact@v5
         with:
-          name: coverage-report
+          name: test-coverage-report
           path: |
-            target/coverage/html
-            target/coverage/lcov.info
-          retention-days: 3
+            target/test-coverage/html
+            target/test-coverage/lcov.info
+            target/test-coverage/raw-summary.json
+            target/test-coverage/evidence.json
+            target/test-coverage/summary.json
+          if-no-files-found: error
+          retention-days: 14
