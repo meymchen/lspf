@@ -158,6 +158,45 @@ non-deprecated API. CI `markdownlint` checks this policy and the other
 Markdown files. CI `public docs` checks warning-free documentation for the
 same target and feature surfaces.
 
+## Gate A release evidence
+
+CI `gate-a-evidence` waits for the support matrix, documentation,
+compatibility, packaged consumer, coverage, and supply-chain jobs. It writes
+`gate-a-release-evidence`, which contains a JSON manifest and a Markdown
+summary. Both files identify the full commit SHA and workflow run. Source
+links use that SHA rather than a moving branch, and the manifest records the
+other machine-readable artifacts by name.
+
+The job runs even when one of its dependencies fails or is skipped. In that
+case, the evidence files list each result and explain why the claim is not
+established. The assembler then exits unsuccessfully, while the upload step
+still retains the files for diagnosis.
+
+Download an evidence artifact and reproduce its generated files with:
+
+```bash
+gh run download RUN_ID \
+  --name gate-a-release-evidence \
+  --dir target/downloaded-gate-a-evidence
+revision="$(jq -r .revision target/downloaded-gate-a-evidence/evidence.json)"
+run_url="$(jq -r .workflowRun target/downloaded-gate-a-evidence/evidence.json)"
+job_results="$(jq '
+  [.claims[].checks[]]
+  | unique_by(.id)
+  | map({key: .id, value: {result: .result}})
+  | from_entries
+' target/downloaded-gate-a-evidence/evidence.json)"
+GATE_A_JOB_RESULTS="$job_results" \
+  bash ci/prepare-gate-a-evidence.sh \
+    "$revision" "$run_url" target/reproduced-gate-a-evidence
+```
+
+The manifest labels maintainer commitments and reviews as human judgments.
+For example, CI can verify the support policy exists and that its named gates
+passed. It cannot prove that future support responses will meet the policy,
+approve the substance of an intentional breaking change, or assess a private
+vulnerability report.
+
 ## Reporting a vulnerability
 
 Do not open a public issue for a suspected vulnerability. Use GitHub's
