@@ -42,7 +42,6 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ github.sha }}
       - name: Install Rust toolchain
         uses: ./.github/actions/setup-rust
         with:
