@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.3](https://github.com/meymchen/lspf/compare/v0.5.2...v0.5.3) - 2026-08-24
+
+### Other
+
+- Enforce warning-free public API documentation ([#156](https://github.com/meymchen/lspf/pull/156))
+- publish support and security contract ([#154](https://github.com/meymchen/lspf/pull/154)) ([#194](https://github.com/meymchen/lspf/pull/194))
+- refresh and bilingualize user documentation
+
 ## [0.5.2](https://github.com/meymchen/lspf/compare/v0.5.1...v0.5.2) - 2026-08-23
 
 ### Other
