@@ -131,6 +131,40 @@ notes 必须解释例外原因；存在安全替代方案时，还必须提供�
 和其他 Markdown 文件。CI `public docs` 对相同 target 与 feature surface 检查无
 warning 的文档。
 
+## Gate A 发布证据
+
+CI `gate-a-evidence` 会等待支持矩阵、文档、兼容性、packaged consumer、coverage 与
+supply-chain job。随后它会写出 `gate-a-release-evidence`，其中包含 JSON manifest 和
+Markdown 摘要。两个文件都会记录完整 commit SHA 与 workflow run。源码链接固定到该
+SHA，而非随分支移动；manifest 也会按名称记录其他可机读 artifact。
+
+即使依赖 job 失败或被跳过，该 job 仍会运行。此时证据文件会列出每个结果，并说明对应
+声明为何尚未得到证明。assembler 随后以失败状态退出，但 upload step 仍会保留文件，
+以便诊断。
+
+可用以下命令下载证据 artifact 并重新生成文件：
+
+```bash
+gh run download RUN_ID \
+  --name gate-a-release-evidence \
+  --dir target/downloaded-gate-a-evidence
+revision="$(jq -r .revision target/downloaded-gate-a-evidence/evidence.json)"
+run_url="$(jq -r .workflowRun target/downloaded-gate-a-evidence/evidence.json)"
+job_results="$(jq '
+  [.claims[].checks[]]
+  | unique_by(.id)
+  | map({key: .id, value: {result: .result}})
+  | from_entries
+' target/downloaded-gate-a-evidence/evidence.json)"
+GATE_A_JOB_RESULTS="$job_results" \
+  bash ci/prepare-gate-a-evidence.sh \
+    "$revision" "$run_url" target/reproduced-gate-a-evidence
+```
+
+manifest 会把维护者承诺与评审标记为人工判断。例如，CI 可以验证支持政策存在，且其中
+列出的 gate 已通过；它无法证明未来的支持响应一定符合政策，也不能批准 intentional
+breaking change 的内容或评估私密漏洞报告。
+
 ## 报告漏洞
 
 请勿为疑似漏洞创建公开 issue。请使用 GitHub 的

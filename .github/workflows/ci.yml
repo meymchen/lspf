@@ -243,3 +243,41 @@ jobs:
             target/test-coverage/summary.json
           if-no-files-found: error
           retention-days: 14
+
+  gate-a-evidence:
+    name: Gate A release evidence
+    if: ${{ always() }}
+    needs:
+      - markdownlint
+      - public-docs
+      - packaged-crate
+      - security
+      - public-api
+      - msrv
+      - feature-contract
+      - native-matrix
+      - test
+      - native-lifecycle
+      - wasm
+      - test-coverage
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Assemble revision-locked Gate A evidence
+        env:
+          GATE_A_JOB_RESULTS: ${{ toJSON(needs) }}
+        run: >-
+          bash ci/prepare-gate-a-evidence.sh
+          "$GITHUB_SHA"
+          "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          target/gate-a-evidence
+      - name: Retain Gate A release evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: gate-a-release-evidence
+          path: target/gate-a-evidence
+          if-no-files-found: error
+          retention-days: 90
