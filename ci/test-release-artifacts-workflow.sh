@@ -19,7 +19,7 @@ jq -e '
         "pull-requests": "read"
     } and
     ([.steps[] | select((.uses? // "") | startswith("actions/checkout@"))] | length) == 1 and
-    [.steps[] | select((.uses? // "") | startswith("actions/checkout@"))][0].with.ref == "${{ github.sha }}"
+    ([.steps[] | select((.uses? // "") | startswith("actions/checkout@"))][0].with | has("ref") | not)
 ' <<<"$release_job" >/dev/null
 
 prepare_index="$(jq -r '.steps | map(.name) | index("Prepare release artifacts from the validated revision")' \
