@@ -150,5 +150,6 @@ warning 的文档。
 公告会为其署名。如果报告不属于漏洞，维护者会在私密报告中解释原因并关闭报告，也可能
 建议为底层 bug 创建公开 issue。
 
-本仓库已经启用 GitHub 私密漏洞报告。自动依赖 advisory 与 license gate 由 #160 跟踪；
-在它落地前，依赖审查由人工完成。自动化不能替代针对 lspf 自有代码的私密漏洞报告。
+本仓库已经启用 GitHub 私密漏洞报告。CI 与 release workflow 会运行供应链安全 gate，
+拒绝已知的依赖 advisory、未经批准的 license、可变的 Action 引用，以及超出仓库策略的
+workflow permission。自动化不能替代针对 lspf 自有代码的私密漏洞报告。

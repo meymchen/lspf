@@ -1,0 +1,35 @@
+name: Security
+
+on:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  supply-chain:
+    name: dependencies and workflow policy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Audit dependency advisories and licenses
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
+        with:
+          command: check advisories licenses
+      - name: Audit npm dependency advisories
+        run: npm audit --package-lock-only --audit-level=low --prefix tools/vscode-test-client
+      - name: Test npm license policy diagnostics
+        run: bash ci/test-check-npm-licenses.sh
+      - name: Audit npm dependency licenses
+        run: bash ci/check-npm-licenses.sh
+      - name: Install the workflow policy YAML parser
+        uses: dcarbone/install-yq-action@4075b4dca348d74bd83f2bf82d30f25d7c54539b # v1.3.1
+        with:
+          version: v4.53.6
+          force: true
+      - name: Test workflow policy diagnostics
+        run: bash ci/test-check-workflow-security.sh
+      - name: Enforce Action pins and minimal job permissions
+        run: bash ci/check-workflow-security.sh

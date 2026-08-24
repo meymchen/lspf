@@ -183,7 +183,8 @@ consent. If a report is not a vulnerability, the maintainers will close the
 private report with an explanation and may suggest a public issue for the
 underlying bug.
 
-GitHub private vulnerability reporting is enabled for this repository. The
-automated dependency advisory and license gate is tracked by #160; until it
-lands, dependency review is manual. No automation replaces private reports
-about vulnerabilities in lspf's own code.
+GitHub private vulnerability reporting is enabled for this repository. CI and
+the release workflow run the supply-chain security gate, which rejects known
+dependency advisories, unapproved licenses, mutable Action references, and
+workflow permissions outside the repository policy. No automation replaces
+private reports about vulnerabilities in lspf's own code.

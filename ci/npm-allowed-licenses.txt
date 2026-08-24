@@ -1,0 +1,4 @@
+# SPDX license identifiers approved for the tracked npm dependency graph.
+Apache-2.0
+ISC
+MIT
