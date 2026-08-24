@@ -42,11 +42,11 @@ case ${1:-} in
         fi
         if [[ " $* " != *' --features '* \
             && ${RUSTFLAGS:-} != *'target_arch="wasm32"'* ]]; then
-            cat <<'OUTPUT'
---- failure function_missing: pub function removed ---
-       reference: https://example.invalid/function_missing
-       baseline: file /tmp/registry/lspf-0.5.2/src/lib.rs:10
-       current: file /workspace/crates/lspf/src/lib.rs:10
+            cat <<OUTPUT
+--- failure enum_marked_non_exhaustive: enum marked non-exhaustive ---
+       reference: https://example.invalid/enum_marked_non_exhaustive
+Failed in:
+  enum BuildError in ${FAKE_CHECKOUT_ROOT:?}/crates/lspf/src/error.rs:113
     Finished [   1.000s] lspf
 OUTPUT
             exit 100
@@ -62,6 +62,7 @@ chmod +x "$test_root/bin/cargo"
 
 export PATH="$test_root/bin:$PATH"
 export FAKE_CURRENT_VERSION=0.6.0
+export FAKE_CHECKOUT_ROOT=/workspace
 export CARGO_TERM_COLOR=always
 
 run_gate() {
@@ -124,6 +125,8 @@ jq -n \
         target: "*", features: "*", findingsSha256: $hash
     }]}' >"$test_root/ci/public-api-breaking-approvals.json"
 
+# The same finding must have the same hash on a different checkout path.
+export FAKE_CHECKOUT_ROOT=/home/runner/work/lspf/lspf
 run_gate
 assert_report '
     .success == true
