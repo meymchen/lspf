@@ -42,6 +42,13 @@ registrations and served through a [[Transport]] constructor such as
 connection state is never shared between servers. Defined by ADR 0017.
 _Avoid_: Session, backend, dispatcher (the pre-0.2 concept).
 
+**Resource policy**:
+The single connection-owned value that declares finite budgets for admitted
+inbound requests, queued outbound messages and bytes, tracked Documents and
+their text, and request and handler deadlines.
+_Avoid_: Concurrency limit (only one budget), resource options (does not express
+the enforced contract).
+
 **Router**:
 The permanently frozen table (`Router<S>`) of user request, notification,
 and [[Command]] handlers for one connection, plus the capability catalog
@@ -155,17 +162,10 @@ ignored; a registered notification hook runs after a successful decode and
 observes the updated cancellation state. Session close clears the registry,
 so a handle that outlives the connection observes an unknown token.
 `Client` is only a handle — the outbound queue, ID allocator, and pending
-registry are owned by the connection's protocol engine. The outbound queue
-stays unbounded and is observed by a connection-scoped depth counter: every
-enqueued request, response, and notification increments it, the writer
-decrements it after each attempted transport send, and once the depth
-reaches the warning threshold tracing records the current value as
-`outbound.queue_depth` (a healthy queue stays silent, so notification
-helpers never echo into local tracing). Sustained depth warns once per
-upward crossing of `ServerBuilder::outbound_warning_threshold`
-(`DEFAULT_OUTBOUND_WARNING_THRESHOLD` = 1024 by default; zero is a
-`BuildError`); dropping below the threshold rearms one warning. The counting
-never drops, reorders, or delays a message.
+registry are owned by the connection's protocol engine and governed by the
+connection's [[Resource policy]]. Ordinary overload is explicit rather than a
+silent message drop, while protocol-required traffic has a deterministic
+reserve or failure-close path.
 _Avoid_: Connection (that is the transport level), sender.
 
 **Command**:

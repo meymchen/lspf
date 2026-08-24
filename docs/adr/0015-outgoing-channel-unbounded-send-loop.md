@@ -1,5 +1,8 @@
 # Outgoing channel: unbounded, drained by a dedicated send-loop task
 
+Status: Superseded by ADR 0025. The dedicated send loop remains, but accepting
+unbounded connection-owned queue growth is no longer architectural policy.
+
 Status note: [ADR 0018](0018-protocol-engine-and-outbound-request-broker.md)
 assigns ownership of the outbound queue to `ProtocolEngine`.
 [ADR 0020](0020-runtime-and-native-wasm-send-model.md) retains the

@@ -1,5 +1,9 @@
 # Runtime and the native/WASM Send model
 
+Status note: ADR 0025 supersedes this decision's retained unbounded
+outbound-queue assumption; the runtime and target-specific `Send` model remain
+in force.
+
 Status note: `OsFileProvider` (issue #80) is a native-only adapter in the
 same class as the native Transport adapters: its `tokio::fs` usage is
 confined to a `#[cfg(not(target_arch = "wasm32"))]` module, so the portable

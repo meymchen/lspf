@@ -242,7 +242,7 @@ where
     // first spawn (ADR 0020). The framework never starts a runtime implicitly.
     ensure_runtime_available()?;
     let (reader, writer) = transport.split();
-    let (out_tx, out_rx) = OutboundQueue::new(server.outbound_warning_threshold);
+    let (out_tx, out_rx) = OutboundQueue::new(server.resource_policy.max_outbound_messages);
     let client = Client::new(out_tx.clone(), OutboundRegistry::default());
     let close = CloseSignal::new();
     let runtime = default_runtime();
@@ -628,7 +628,7 @@ where
                 on_shutdown: server.on_shutdown,
                 on_exit: server.on_exit,
                 layers: server.layers,
-                concurrency_limit: server.concurrency_limit,
+                concurrency_limit: server.resource_policy.max_inbound_requests,
             })),
             on_initialized: None,
             on_shutdown: None,

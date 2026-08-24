@@ -165,6 +165,13 @@ pub enum BuildError {
     /// A zero outbound warning threshold could never be crossed from below.
     #[error("outbound warning threshold must be greater than zero")]
     InvalidOutboundWarningThreshold,
+
+    /// A connection resource budget or enabled deadline was zero.
+    #[error("resource policy `{field}` must be greater than zero when enabled")]
+    InvalidResourcePolicy {
+        /// The invalid [`ResourcePolicy`](crate::ResourcePolicy) field.
+        field: &'static str,
+    },
 }
 
 /// A JSON-RPC/LSP error suitable for returning from a handler.
