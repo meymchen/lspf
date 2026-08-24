@@ -27,7 +27,9 @@
       "packaged-crate": { "contents": "read" },
       "security": { "contents": "read" },
       "release-plz-release": {
+        "attestations": "write",
         "contents": "write",
+        "id-token": "write",
         "pull-requests": "read"
       },
       "release-plz-pr": {

@@ -32,7 +32,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: [public-docs, packaged-crate, security]
     permissions:
+      attestations: write
       contents: write
+      id-token: write
       pull-requests: read
     steps:
       - name: Checkout repository
@@ -40,17 +42,84 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+          ref: ${{ github.sha }}
       - name: Install Rust toolchain
         uses: ./.github/actions/setup-rust
         with:
           cache: "false"
+      - name: Prepare release artifacts from the validated revision
+        id: artifacts
+        run: bash ci/prepare-release-artifacts.sh "$GITHUB_SHA" "$RUNNER_TEMP/release-artifacts"
+      - name: Generate crate SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          file: ${{ steps.artifacts.outputs.crate }}
+          format: spdx-json
+          output-file: ${{ steps.artifacts.outputs.sbom }}
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Generate build provenance statement
+        id: provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: |
+            ${{ steps.artifacts.outputs.crate }}
+            ${{ steps.artifacts.outputs.metadata }}
+            ${{ steps.artifacts.outputs.sbom }}
+            ${{ steps.artifacts.outputs.directory }}/CHANGELOG.md
+            ${{ steps.artifacts.outputs.directory }}/lspf-CHANGELOG.md
+      - name: Generate SBOM attestation
+        id: sbom-attestation
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: ${{ steps.artifacts.outputs.crate }}
+          sbom-path: ${{ steps.artifacts.outputs.sbom }}
+      - name: Retain attestation statements and artifact hashes
+        env:
+          ARTIFACT_DIRECTORY: ${{ steps.artifacts.outputs.directory }}
+          CRATE_PATH: ${{ steps.artifacts.outputs.crate }}
+          PROVENANCE_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+          SBOM_PATH: ${{ steps.artifacts.outputs.sbom }}
+          SBOM_ATTESTATION_BUNDLE: ${{ steps.sbom-attestation.outputs.bundle-path }}
+        run: |
+          cp "$PROVENANCE_BUNDLE" "$ARTIFACT_DIRECTORY/provenance.jsonl"
+          cp "$SBOM_ATTESTATION_BUNDLE" "$ARTIFACT_DIRECTORY/sbom-attestation.jsonl"
+          crate_file=$(basename "$CRATE_PATH")
+          sbom_file=$(basename "$SBOM_PATH")
+          cd "$ARTIFACT_DIRECTORY"
+          sha256sum \
+            "$crate_file" \
+            CHANGELOG.md \
+            lspf-CHANGELOG.md \
+            release-metadata.json \
+            "$sbom_file" \
+            provenance.jsonl \
+            sbom-attestation.jsonl \
+            > SHA256SUMS
+      - name: Retain traceable release artifacts
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: lspf-${{ steps.artifacts.outputs.version }}-release-artifacts
+          path: ${{ steps.artifacts.outputs.directory }}
+          if-no-files-found: error
+          retention-days: 90
       - name: Run release-plz
+        id: release
         uses: release-plz/action@2eb1d8bcb770b4c48ccfaad919734b38b51958c9 # v0.5
         with:
           command: release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - name: Attach artifacts to the GitHub release
+        if: steps.release.outputs.releases_created == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload \
+            "${{ steps.artifacts.outputs.tag }}" \
+            "${{ steps.artifacts.outputs.directory }}"/* \
+            --clobber
 
   # Open/update a release PR with version bumps and changelog.
   release-plz-pr:
