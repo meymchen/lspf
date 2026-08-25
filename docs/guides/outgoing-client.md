@@ -18,8 +18,10 @@ end-to-end stdio test beside it.
 ## Notifications
 
 A notification is fire-and-forget: it is encoded and enqueued synchronously,
-allocates no ID, and fails only if the connection is closing or the params
-cannot be encoded. The named helpers cover the stable outgoing surface —
+allocates no ID, and returns `ClientError::OutboundOverloaded` if the
+connection's message-count or encoded-byte budget is full. It can also fail if
+the connection is closing or the params cannot be encoded. The named helpers
+cover the stable outgoing surface —
 [`publish_diagnostics`](lspf::Client::publish_diagnostics),
 [`show_message`](lspf::Client::show_message),
 [`log_message`](lspf::Client::log_message),
@@ -237,7 +239,9 @@ are correlated by ID; abandoning the future before the response arrives
 removes the pending entry and emits one `$/cancelRequest`; session close
 resolves every pending request with `ClientError::Cancelled`; a peer's
 JSON-RPC error surfaces as [`ClientError::Remote`](lspf::ClientError::Remote)
-carrying the full code, message, and data.
+carrying the full code, message, and data. A request rejected by the outbound
+message or byte budget returns `ClientError::OutboundOverloaded` and removes
+the pending entry before returning.
 
 ## Helper reference
 

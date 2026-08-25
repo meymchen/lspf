@@ -13,8 +13,9 @@
 
 ## 通知
 
-通知发送后不等待回应：框架同步编码并放入队列，不分配 ID。只有连接正在关闭或参数
-无法编码时才会失败。稳定出站接口包括
+通知发送后不等待回应：框架同步编码并放入队列，不分配 ID。如果连接的消息数或编码
+字节预算已满，方法会返回 `ClientError::OutboundOverloaded`；连接正在关闭或参数无法
+编码时也会失败。稳定出站接口包括
 [`publish_diagnostics`](lspf::Client::publish_diagnostics)、
 [`show_message`](lspf::Client::show_message)、
 [`log_message`](lspf::Client::log_message)、
@@ -215,7 +216,8 @@ async fn syntax_tree(client: &Client, params: serde_json::Value) -> Result<Strin
 丢弃 future 会移除 pending entry，并发送一次 `$/cancelRequest`；连接关闭时，所有
 pending 请求都以 `ClientError::Cancelled` 完成；客户端返回的 JSON-RPC error 会
 变为 [`ClientError::Remote`](lspf::ClientError::Remote)，并保留完整 code、message
-和 data。
+和 data。请求若因出站消息或字节预算已满而被拒绝，会返回
+`ClientError::OutboundOverloaded`，并在返回前移除 pending entry。
 
 ## 辅助方法参考
 

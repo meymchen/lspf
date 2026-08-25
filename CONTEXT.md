@@ -54,6 +54,12 @@ replaces the admitted request. Completion, peer cancellation, and connection
 close release registry ownership immediately; the admission permit remains
 attached to admitted handler tasks until completion or abort and is released
 when the engine reaps the finished task handle.
+Outbound admission charges one message and its exact encoded JSON-RPC envelope
+bytes until the transport attempt finishes. Ordinary `Client` sends fail with
+`ClientError::OutboundOverloaded` when either budget is full. Required
+responses, protocol errors, and `$/cancelRequest` use the connection's single
+failure-close path if admission fails; normal close stops admission and drains
+the already-accounted queue.
 _Avoid_: Concurrency limit (only one budget), resource options (does not express
 the enforced contract).
 
@@ -172,7 +178,9 @@ so a handle that outlives the connection observes an unknown token.
 `Client` is only a handle — the outbound queue, ID allocator, and pending
 registry are owned by the connection's protocol engine and covered by the
 connection's [[Resource policy]]. `Client` itself neither owns nor configures
-those resources.
+those resources. An ordinary send that would exceed the policy returns
+`ClientError::OutboundOverloaded` without retaining the message or leaking a
+pending request entry.
 _Avoid_: Connection (that is the transport level), sender.
 
 **Command**:

@@ -127,8 +127,8 @@ pub enum Outcome {
     },
     /// The peer closed the transport before sending `exit`.
     TransportClosed,
-    /// The writer half failed terminally, so no further response could reach
-    /// the peer.
+    /// The outbound path failed terminally: the writer failed, or required
+    /// protocol traffic could not fit within the configured queue budgets.
     WriterFailed,
     /// A failed initialize transaction terminated the connection after its
     /// fixed error response was enqueued (ADR 0018).
@@ -158,7 +158,8 @@ enum CloseCause {
     ReaderEof,
     /// The reader failed with a transport error.
     ReaderFailed(TransportError),
-    /// The writer failed to send or to shut down.
+    /// The writer failed to send or shut down, or required protocol traffic
+    /// could not fit within the outbound resource policy.
     WriterFailed,
     /// A failed initialize transaction terminated the connection (ADR 0018).
     InitializeFailed,
@@ -244,7 +245,10 @@ where
     // first spawn (ADR 0020). The framework never starts a runtime implicitly.
     ensure_runtime_available()?;
     let (reader, writer) = transport.split();
-    let (out_tx, out_rx) = OutboundQueue::new(server.resource_policy.max_outbound_messages);
+    let (out_tx, out_rx) = OutboundQueue::bounded(
+        server.resource_policy.max_outbound_messages,
+        server.resource_policy.max_outbound_bytes,
+    );
     let client = Client::new(out_tx.clone(), OutboundRegistry::default());
     let close = CloseSignal::new();
     let runtime = default_runtime();
@@ -705,11 +709,16 @@ where
         Rd: TransportReader,
     {
         let requested = self.close.requested();
+        let outbound_failed = self.out_tx.failure();
         loop {
             let msg = select_biased! {
                 // `biased`: an already-requested close wins over a message that
                 // happens to be ready, so the ending stays deterministic.
                 () = requested.cancelled().fuse() => break,
+                () = outbound_failed.cancelled().fuse() => {
+                    self.close.request(CloseCause::WriterFailed);
+                    break;
+                },
                 msg = reader.recv().fuse() => msg,
             };
             // Reap immediately before dispatch so a completed handler releases
@@ -1024,7 +1033,9 @@ where
                 }
             }
             RawMessage::ProtocolError { error } => {
-                let _ = self.out_tx.send(RawMessage::ProtocolError { error });
+                let _ = self
+                    .out_tx
+                    .send_required(RawMessage::ProtocolError { error });
             }
         }
 
@@ -1494,7 +1505,7 @@ fn enqueue_encoded(
         },
         Err(err) => error_response(id, &err),
     };
-    let _ = out_tx.send(response);
+    let _ = out_tx.send_required(response);
 }
 
 fn error_response(id: RequestId, err: &LspError) -> RawMessage {
@@ -1509,7 +1520,7 @@ fn error_response(id: RequestId, err: &LspError) -> RawMessage {
 }
 
 fn enqueue_error(out_tx: &OutboundQueue, id: RequestId, err: LspError) {
-    let _ = out_tx.send(error_response(id, &err));
+    let _ = out_tx.send_required(error_response(id, &err));
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -1945,6 +1956,12 @@ mod tests {
         }
     }
 
+    fn encoded_len(message: &RawMessage) -> usize {
+        crate::transport::envelope::serialize(message)
+            .expect("the test message encodes")
+            .len()
+    }
+
     /// A writer that records what it sent and fails the `fail_on_send`-th send
     /// (1-based; `None` never fails), driving the send-loop through its
     /// success, draining, and terminal-failure paths.
@@ -1952,6 +1969,27 @@ mod tests {
         outbox: Arc<Mutex<Vec<RawMessage>>>,
         fail_on_send: Option<usize>,
         sends: usize,
+    }
+
+    struct SlowWriter {
+        started: Arc<tokio::sync::Notify>,
+        releases: Arc<tokio::sync::Semaphore>,
+    }
+
+    impl TransportWriter for SlowWriter {
+        async fn send(&mut self, _msg: RawMessage) -> std::result::Result<(), TransportError> {
+            self.started.notify_one();
+            self.releases
+                .acquire()
+                .await
+                .expect("the test keeps the release gate open")
+                .forget();
+            Ok(())
+        }
+
+        async fn shutdown(self) -> std::result::Result<(), TransportError> {
+            Ok(())
+        }
     }
 
     impl TransportWriter for ScriptedWriter {
@@ -2009,6 +2047,7 @@ mod tests {
     async fn the_send_loop_decrements_each_attempted_send_including_the_failed_one() {
         let (queue, rx) = OutboundQueue::new(16);
         let client = Client::new(queue.clone(), OutboundRegistry::default());
+        let message_bytes = encoded_len(&send_loop_message(0));
         for tag in 0..3 {
             queue.send(send_loop_message(tag)).unwrap();
         }
@@ -2027,6 +2066,11 @@ mod tests {
             queue.depth(),
             1,
             "the succeeded and the terminally failed send are both decremented"
+        );
+        assert_eq!(
+            queue.encoded_bytes(),
+            message_bytes,
+            "only the never-attempted message remains byte-accounted"
         );
         assert_eq!(
             outbox.lock().unwrap().len(),
@@ -2062,6 +2106,11 @@ mod tests {
             0,
             "draining decrements every queued message, above and below the threshold"
         );
+        assert_eq!(
+            queue.encoded_bytes(),
+            0,
+            "close releases every encoded-byte charge after draining"
+        );
         let tags: Vec<u8> = outbox
             .lock()
             .unwrap()
@@ -2079,6 +2128,62 @@ mod tests {
         assert!(
             close.take_cause().is_none(),
             "clean draining is not a writer failure"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_slow_reader_cannot_grow_count_or_bytes_past_the_policy() {
+        let message_bytes = encoded_len(&send_loop_message(0));
+        let (queue, rx) = OutboundQueue::bounded(2, message_bytes * 2);
+        let client = Client::new(queue.clone(), OutboundRegistry::default());
+        queue.send(send_loop_message(0)).unwrap();
+        queue.send(send_loop_message(1)).unwrap();
+
+        let started = Arc::new(tokio::sync::Notify::new());
+        let releases = Arc::new(tokio::sync::Semaphore::new(0));
+        let writer = SlowWriter {
+            started: started.clone(),
+            releases: releases.clone(),
+        };
+        let close = CloseSignal::new();
+        let serving = tokio::spawn(send_loop(writer, rx, client.clone(), close));
+
+        started.notified().await;
+        assert_eq!(queue.depth(), 2, "the in-flight write remains accounted");
+        assert_eq!(queue.encoded_bytes(), message_bytes * 2);
+        assert!(matches!(
+            queue.send(send_loop_message(2)),
+            Err(crate::client::OutboundSendError::Overloaded)
+        ));
+        assert_eq!(queue.depth(), 2, "the rejected send consumes no slot");
+        assert_eq!(
+            queue.encoded_bytes(),
+            message_bytes * 2,
+            "the rejected send consumes no bytes"
+        );
+
+        releases.add_permits(1);
+        for _ in 0..100 {
+            if queue.depth() == 1 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(queue.depth(), 1, "a successful write releases one slot");
+        assert_eq!(
+            queue.encoded_bytes(),
+            message_bytes,
+            "a successful write releases exactly its encoded bytes"
+        );
+
+        client.close_outbound();
+        releases.add_permits(1);
+        serving.await.unwrap();
+        assert_eq!(queue.depth(), 0, "close drains the remaining message");
+        assert_eq!(
+            queue.encoded_bytes(),
+            0,
+            "close releases all byte accounting"
         );
     }
 }
