@@ -569,8 +569,12 @@ async fn send_loop<W: TransportWriter>(
         client.record_done();
         if let Err(e) = sent {
             warn!(error = %e, "send_loop: transport write failed");
+            out_rx.close();
+            client.discard_outbound();
             // ADR 0018: the writer reports its terminal failure and performs no
-            // cleanup of its own; the engine runs the one close operation.
+            // registry or task cleanup of its own; the engine runs the one
+            // close operation. Accounting is released here because the
+            // receiver is abandoning every message it retained.
             close.request(CloseCause::WriterFailed);
             return;
         }
@@ -580,6 +584,8 @@ async fn send_loop<W: TransportWriter>(
         client.record_done();
         if let Err(e) = sent {
             warn!(error = %e, "send_loop: transport write failed while draining");
+            out_rx.close();
+            client.discard_outbound();
             close.request(CloseCause::WriterFailed);
             return;
         }
@@ -731,7 +737,7 @@ where
                 Ok(msg) => match self.dispatch(msg).await {
                     Flow::Continue => {}
                     Flow::Close(cause) => {
-                        self.close.request(cause);
+                        request_dispatch_close(&self.close, &self.out_tx, cause);
                         break;
                     }
                 },
@@ -1491,6 +1497,14 @@ enum Flow {
     Close(CloseCause),
 }
 
+fn request_dispatch_close(close: &CloseSignal, out_tx: &OutboundQueue, cause: CloseCause) {
+    if out_tx.failure().is_cancelled() {
+        close.request(CloseCause::WriterFailed);
+    } else {
+        close.request(cause);
+    }
+}
+
 /// Enqueue a success response after the protocol engine's final wire encoding,
 /// or enqueue the mapped wire error.
 fn enqueue_encoded(
@@ -1679,6 +1693,22 @@ mod tests {
             close.take_cause().is_none(),
             "the cause is taken once, by the read-loop that ran the close"
         );
+    }
+
+    #[test]
+    fn a_required_enqueue_failure_precedes_a_dispatch_close_cause() {
+        let message = RawMessage::Notification {
+            method: "test/required".into(),
+            params: Bytes::new(),
+        };
+        let (queue, _rx) = OutboundQueue::bounded(1, usize::MAX);
+        queue.send(message.clone()).unwrap();
+        assert!(queue.send_required(message).is_err());
+        let close = CloseSignal::new();
+
+        request_dispatch_close(&close, &queue, CloseCause::InitializeFailed);
+
+        assert!(matches!(close.take_cause(), Some(CloseCause::WriterFailed)));
     }
 
     #[test]
@@ -2044,10 +2074,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_send_loop_decrements_each_attempted_send_including_the_failed_one() {
+    async fn writer_failure_releases_attempted_and_abandoned_accounting() {
         let (queue, rx) = OutboundQueue::new(16);
         let client = Client::new(queue.clone(), OutboundRegistry::default());
-        let message_bytes = encoded_len(&send_loop_message(0));
         for tag in 0..3 {
             queue.send(send_loop_message(tag)).unwrap();
         }
@@ -2064,13 +2093,13 @@ mod tests {
 
         assert_eq!(
             queue.depth(),
-            1,
-            "the succeeded and the terminally failed send are both decremented"
+            0,
+            "writer failure abandons every queued slot"
         );
         assert_eq!(
             queue.encoded_bytes(),
-            message_bytes,
-            "only the never-attempted message remains byte-accounted"
+            0,
+            "writer failure abandons every queued byte charge"
         );
         assert_eq!(
             outbox.lock().unwrap().len(),

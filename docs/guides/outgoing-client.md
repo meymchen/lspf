@@ -290,15 +290,10 @@ implicit behavior:
 - **No dynamic-registration state.** The framework keeps no list of
   capabilities registered with the client; tracking what you registered is
   the application's job.
-- **No default request timeout.** A request future resolves when the peer
-  answers, errors, or the session closes — or when you drop it, which sends
-  `$/cancelRequest`. Any deadline is yours to impose (for example with
-  `tokio::time::timeout`).
-- **No bounded queue.** The outbound queue is unbounded and never drops,
-  reorders, or delays a message. Depth is observed only: past
-  [`DEFAULT_OUTBOUND_WARNING_THRESHOLD`](lspf::DEFAULT_OUTBOUND_WARNING_THRESHOLD)
-  (1024 by default, configurable per server) the engine warns once per upward
-  crossing and records `outbound.queue_depth` in tracing.
+- **No implicit overload recovery.** The resource policy bounds queued message
+  count and encoded bytes. When either budget is full, ordinary sends return
+  `ClientError::OutboundOverloaded`; the application decides whether to retry
+  or skip optional output.
 - **No notebook support.** The helper surface contains no notebook method.
 - **No implicit progress end.** Dropping a [`ProgressHandle`] removes its
   token with a warning but sends nothing; only `end` ends a progress.

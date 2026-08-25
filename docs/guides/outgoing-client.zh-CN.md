@@ -262,13 +262,9 @@ pending 请求都以 `ClientError::Cancelled` 完成；客户端返回的 JSON-R
   清除 diagnostics。
 - **动态注册状态。** 框架不保存已向客户端注册的 capability 清单；应用需要自行
   跟踪。
-- **默认请求超时。** 请求 future 会在客户端响应、返回错误或连接关闭时完成。丢弃
-  future 会发送 `$/cancelRequest`。超时需要由应用设置，例如使用
-  `tokio::time::timeout`。
-- **有界队列。** 出站队列不设上限，也不会丢弃、重排或延迟消息。框架只观察深度：
-  超过 [`DEFAULT_OUTBOUND_WARNING_THRESHOLD`](lspf::DEFAULT_OUTBOUND_WARNING_THRESHOLD)
-  时，默认值为 1024 且可按服务器配置，引擎会在每次向上跨越阈值时警告一次，并在
-  tracing 中记录 `outbound.queue_depth`。
+- **自动处理过载。** Resource policy 会限制队列中的消息数和编码字节数。任一预算
+  已满时，普通发送会返回 `ClientError::OutboundOverloaded`；应用自行决定重试还是
+  跳过可选输出。
 - **Notebook 支持。** 辅助方法中没有 notebook 方法。
 - **隐式结束 progress。** 丢弃 [`ProgressHandle`] 会移除 token 并记录警告，但
   不发送消息；只有 `end` 会结束 progress。

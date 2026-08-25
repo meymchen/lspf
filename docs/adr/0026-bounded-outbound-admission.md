@@ -9,7 +9,9 @@ Each connection admits an outbound message only when both
 serialized JSON-RPC envelope body, excluding transport framing. A message
 keeps its slot and byte charge while waiting and during the transport send.
 The send-loop releases both after every transport attempt, successful or
-failed. A rejected message is never charged.
+failed. If a terminal writer failure abandons later queued messages, their
+charges are released when the receiver closes. A rejected message is never
+charged.
 
 The channel primitive remains unbounded because it is a runtime-neutral wake-up
 mechanism shared by native and WASM targets. Admission happens under the

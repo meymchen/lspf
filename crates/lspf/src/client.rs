@@ -219,21 +219,26 @@ impl OutboundRegistry {
 #[derive(Clone)]
 pub(crate) struct OutboundQueue {
     tx: UnboundedSender<RawMessage>,
-    inner: Arc<OutboundDepth>,
+    inner: Arc<OutboundAdmission>,
 }
 
-struct OutboundDepth {
+struct OutboundAdmission {
     threshold: usize,
-    max_messages: usize,
-    max_bytes: usize,
+    limits: OutboundLimits,
     failure: CancellationToken,
     /// Depth and warn-state move together under one lock, so a concurrent
     /// enqueue can never observe a stale warn-state for a depth that has
     /// already dropped back below the threshold (and vice versa).
-    state: Mutex<DepthState>,
+    state: Mutex<AdmissionState>,
 }
 
-struct DepthState {
+#[derive(Clone, Copy)]
+struct OutboundLimits {
+    max_messages: usize,
+    max_bytes: usize,
+}
+
+struct AdmissionState {
     depth: usize,
     encoded_bytes: usize,
     encoded_sizes: VecDeque<usize>,
@@ -249,36 +254,52 @@ pub(crate) enum OutboundSendError {
     Serialize(serde_json::Error),
 }
 
+#[derive(Clone, Copy)]
+enum DeliveryRequirement {
+    Ordinary,
+    Required,
+}
+
 impl OutboundQueue {
     /// Create the queue with its receiving half. `threshold` is the depth at
     /// which one warning is emitted per upward crossing.
     #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(crate) fn new(threshold: usize) -> (Self, UnboundedReceiver<RawMessage>) {
-        Self::with_limits(threshold, usize::MAX, usize::MAX)
+        Self::with_limits(
+            threshold,
+            OutboundLimits {
+                max_messages: usize::MAX,
+                max_bytes: usize::MAX,
+            },
+        )
     }
 
     pub(crate) fn bounded(
         max_messages: usize,
         max_bytes: usize,
     ) -> (Self, UnboundedReceiver<RawMessage>) {
-        Self::with_limits(max_messages, max_messages, max_bytes)
+        Self::with_limits(
+            max_messages,
+            OutboundLimits {
+                max_messages,
+                max_bytes,
+            },
+        )
     }
 
     fn with_limits(
         threshold: usize,
-        max_messages: usize,
-        max_bytes: usize,
+        limits: OutboundLimits,
     ) -> (Self, UnboundedReceiver<RawMessage>) {
         let (tx, rx) = mpsc::unbounded();
         (
             Self {
                 tx,
-                inner: Arc::new(OutboundDepth {
+                inner: Arc::new(OutboundAdmission {
                     threshold,
-                    max_messages,
-                    max_bytes,
+                    limits,
                     failure: CancellationToken::new(),
-                    state: Mutex::new(DepthState {
+                    state: Mutex::new(AdmissionState {
                         depth: 0,
                         encoded_bytes: 0,
                         encoded_sizes: VecDeque::new(),
@@ -301,17 +322,17 @@ impl OutboundQueue {
             })?
             .len();
         let mut state = self.inner.state.lock().unwrap();
-        if state.depth >= self.inner.max_messages
+        if state.depth >= self.inner.limits.max_messages
             || state
                 .encoded_bytes
                 .checked_add(encoded_bytes)
-                .is_none_or(|bytes| bytes > self.inner.max_bytes)
+                .is_none_or(|bytes| bytes > self.inner.limits.max_bytes)
         {
             warn!(
                 outbound.queue_depth = state.depth,
                 outbound.queue_bytes = state.encoded_bytes,
-                max_messages = self.inner.max_messages,
-                max_bytes = self.inner.max_bytes,
+                max_messages = self.inner.limits.max_messages,
+                max_bytes = self.inner.limits.max_bytes,
                 "outbound queue capacity is exhausted"
             );
             return Err(OutboundSendError::Overloaded);
@@ -357,7 +378,7 @@ impl OutboundQueue {
     /// Tracing stays silent below the threshold: a healthy queue produces no
     /// per-message events, so helpers like `log_message` never echo into the
     /// server's local tracing stream.
-    fn record_enqueue(&self, state: &mut DepthState, encoded_bytes: usize) {
+    fn record_enqueue(&self, state: &mut AdmissionState, encoded_bytes: usize) {
         state.depth += 1;
         state.encoded_bytes += encoded_bytes;
         state.encoded_sizes.push_back(encoded_bytes);
@@ -395,7 +416,7 @@ impl OutboundQueue {
         }
     }
 
-    fn record_failed_enqueue(&self, state: &mut DepthState) {
+    fn record_failed_enqueue(&self, state: &mut AdmissionState) {
         let encoded_bytes = state
             .encoded_sizes
             .pop_back()
@@ -405,6 +426,14 @@ impl OutboundQueue {
         if state.depth < self.inner.threshold {
             state.warned = false;
         }
+    }
+
+    pub(crate) fn discard_all(&self) {
+        let mut state = self.inner.state.lock().unwrap();
+        state.depth = 0;
+        state.encoded_bytes = 0;
+        state.encoded_sizes.clear();
+        state.warned = false;
     }
 }
 
@@ -503,20 +532,20 @@ impl Client {
     where
         N: Notification,
     {
-        self.notify_with_requirement::<N>(params, false)
+        self.notify_with_requirement::<N>(params, DeliveryRequirement::Ordinary)
     }
 
     fn notify_required<N>(&self, params: N::Params) -> Result<(), ClientError>
     where
         N: Notification,
     {
-        self.notify_with_requirement::<N>(params, true)
+        self.notify_with_requirement::<N>(params, DeliveryRequirement::Required)
     }
 
     fn notify_with_requirement<N>(
         &self,
         params: N::Params,
-        required: bool,
+        requirement: DeliveryRequirement,
     ) -> Result<(), ClientError>
     where
         N: Notification,
@@ -534,10 +563,9 @@ impl Client {
 
         let mut phase = self.state.phase.lock().unwrap();
         self.ensure_open(&mut phase)?;
-        let sent = if required {
-            self.outgoing.send_required(message)
-        } else {
-            self.outgoing.send(message)
+        let sent = match requirement {
+            DeliveryRequirement::Ordinary => self.outgoing.send(message),
+            DeliveryRequirement::Required => self.outgoing.send_required(message),
         };
         match sent {
             Ok(()) => {}
@@ -1114,6 +1142,10 @@ impl Client {
     /// is still waiting to be written.
     pub(crate) fn record_done(&self) {
         self.outgoing.record_done();
+    }
+
+    pub(crate) fn discard_outbound(&self) {
+        self.outgoing.discard_all();
     }
 
     /// Engine-private accessor to the shared outbound registry.
