@@ -4,9 +4,24 @@
 
 use std::path::Path;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use lsp_types::Uri;
+
+static TRACING_CAPTURE_LOCK: Mutex<()> = Mutex::new(());
+static TRACING_INTEREST: OnceLock<tracing::Dispatch> = OnceLock::new();
+
+/// Serialize scoped subscribers because `tracing` rebuilds one process-wide
+/// callsite interest cache whenever a default subscriber changes.
+pub(crate) fn tracing_capture_lock() -> std::sync::MutexGuard<'static, ()> {
+    // Keep one dispatch registered for the test binary's lifetime so a
+    // concurrent first use of a callsite cannot cache `Interest::never` while
+    // another thread is inside a scoped capture. The dispatch is never made
+    // current, so it retains no events; each test's scoped subscriber still
+    // receives only that test thread's events.
+    TRACING_INTEREST.get_or_init(|| tracing::Dispatch::new(tracing_subscriber::registry()));
+    TRACING_CAPTURE_LOCK.lock().unwrap()
+}
 
 /// An absolute `file:` URI for `path`, percent-encoding every byte that is
 /// not legal in a URI path.

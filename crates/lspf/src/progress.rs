@@ -1047,6 +1047,7 @@ mod tests {
         next_notification(&mut receiver).await; // begin
         assert!(registry.is_active(&ProgressToken::Number(1)));
 
+        let _capture = crate::test_util::tracing_capture_lock();
         let events = crate::test_util::EventCapture::new();
         let subscriber = tracing_subscriber::registry().with(events.clone());
         tracing::subscriber::with_default(subscriber, || drop(handle));

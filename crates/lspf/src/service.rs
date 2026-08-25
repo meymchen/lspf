@@ -2,6 +2,7 @@
 
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -12,6 +13,7 @@ use tracing::{Instrument, error, info_span};
 
 use crate::builder::Router;
 use crate::sync::Semaphore;
+use crate::telemetry::{Deadline, DeadlineAction, Direction, Instant};
 use crate::{Context, LspError, RequestId, TaskFuture, TaskSend};
 
 /// Whether a normalized user call came from a request or a notification.
@@ -45,13 +47,28 @@ pub struct IncomingCall<S> {
 pub(crate) struct HandlerTimeout {
     duration: Arc<Mutex<Duration>>,
     armed: CancellationToken,
+    trace: crate::telemetry::ConnectionTrace,
+    method: Arc<str>,
+    request_id: RequestId,
+    deadline_started: Arc<Mutex<Option<Instant>>>,
+    finished: Arc<AtomicBool>,
 }
 
 impl HandlerTimeout {
-    pub(crate) fn new(timeout: Duration) -> Self {
+    pub(crate) fn new(
+        timeout: Duration,
+        trace: crate::telemetry::ConnectionTrace,
+        method: impl Into<Arc<str>>,
+        request_id: RequestId,
+    ) -> Self {
         Self {
             duration: Arc::new(Mutex::new(timeout)),
             armed: CancellationToken::new(),
+            trace,
+            method: method.into(),
+            request_id,
+            deadline_started: Arc::new(Mutex::new(None)),
+            finished: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -64,7 +81,40 @@ impl HandlerTimeout {
     }
 
     fn arm(&self) {
+        *self.deadline_started.lock().unwrap() = Some(Instant::now());
+        self.trace.deadline(
+            Deadline::Handler,
+            DeadlineAction::Armed,
+            Direction::Inbound,
+            &self.method,
+            &self.request_id,
+            self.get(),
+            Duration::ZERO,
+        );
         self.armed.cancel();
+    }
+
+    pub(crate) fn finish(&self, action: DeadlineAction) {
+        let Some(started) = *self.deadline_started.lock().unwrap() else {
+            return;
+        };
+        if self.finished.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        let limit = self.get();
+        self.trace.deadline(
+            Deadline::Handler,
+            action,
+            Direction::Inbound,
+            &self.method,
+            &self.request_id,
+            limit,
+            if matches!(action, DeadlineAction::Expired) {
+                limit
+            } else {
+                started.elapsed()
+            },
+        );
     }
 
     pub(crate) async fn wait_until_armed(&self) {

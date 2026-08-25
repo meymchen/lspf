@@ -7,6 +7,7 @@ use lsp_types::{
 };
 use ropey::Rope;
 
+use crate::telemetry::{Resource, ResourceAction};
 use crate::uri_key::UriKey;
 
 const DOCUMENT_COUNT_CAPACITY_EXHAUSTED: &str = "document count capacity exhausted";
@@ -240,9 +241,19 @@ impl Default for DocumentsInner {
 /// handlers read through the [`DocumentsView`] the [`Context`] hands them.
 ///
 /// [`Context`]: crate::Context
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub(crate) struct Documents {
     inner: Arc<RwLock<DocumentsInner>>,
+    trace: crate::telemetry::ConnectionTrace,
+}
+
+impl Default for Documents {
+    fn default() -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(DocumentsInner::default())),
+            trace: crate::telemetry::ConnectionTrace::new(),
+        }
+    }
 }
 
 impl Documents {
@@ -251,13 +262,17 @@ impl Documents {
         Self::default()
     }
 
-    pub(crate) fn with_resource_policy(policy: crate::ResourcePolicy) -> Self {
+    pub(crate) fn with_resource_policy(
+        policy: crate::ResourcePolicy,
+        trace: crate::telemetry::ConnectionTrace,
+    ) -> Self {
         Self {
             inner: Arc::new(RwLock::new(DocumentsInner {
                 max_documents: policy.max_documents,
                 max_document_bytes: policy.max_document_bytes,
                 ..DocumentsInner::default()
             })),
+            trace,
         }
     }
 
@@ -266,6 +281,13 @@ impl Documents {
         let mut inner = self.inner.write().unwrap();
         let key = UriKey::new(&item.uri);
         if !inner.by_uri.contains_key(&key) && inner.by_uri.len() >= inner.max_documents {
+            self.trace.resource_budget(
+                Resource::Documents,
+                ResourceAction::Reject,
+                inner.by_uri.len(),
+                inner.max_documents,
+                Some((inner.document_bytes, inner.max_document_bytes)),
+            );
             return Err(crate::LspError::invalid_request(
                 DOCUMENT_COUNT_CAPACITY_EXHAUSTED,
             ));
@@ -278,9 +300,23 @@ impl Documents {
             .unwrap_or(0);
         let retained_bytes = inner.document_bytes - replaced_bytes;
         let Some(document_bytes) = retained_bytes.checked_add(item.text.len()) else {
+            self.trace.resource_budget(
+                Resource::Documents,
+                ResourceAction::Reject,
+                inner.by_uri.len(),
+                inner.max_documents,
+                Some((inner.document_bytes, inner.max_document_bytes)),
+            );
             return Err(document_text_capacity_exhausted());
         };
         if document_bytes > inner.max_document_bytes {
+            self.trace.resource_budget(
+                Resource::Documents,
+                ResourceAction::Reject,
+                inner.by_uri.len(),
+                inner.max_documents,
+                Some((inner.document_bytes, inner.max_document_bytes)),
+            );
             return Err(document_text_capacity_exhausted());
         }
 
@@ -294,6 +330,13 @@ impl Documents {
             },
         );
         inner.document_bytes = document_bytes;
+        self.trace.resource_budget(
+            Resource::Documents,
+            ResourceAction::Admit,
+            inner.by_uri.len(),
+            inner.max_documents,
+            Some((inner.document_bytes, inner.max_document_bytes)),
+        );
         Ok(())
     }
 
@@ -309,6 +352,13 @@ impl Documents {
         let removed = inner.by_uri.remove(&UriKey::new(uri));
         if let Some(document) = &removed {
             inner.document_bytes -= document.text.len_bytes();
+            self.trace.resource_budget(
+                Resource::Documents,
+                ResourceAction::Release,
+                inner.by_uri.len(),
+                inner.max_documents,
+                Some((inner.document_bytes, inner.max_document_bytes)),
+            );
         }
         removed
     }
@@ -318,6 +368,13 @@ impl Documents {
         let mut inner = self.inner.write().unwrap();
         inner.by_uri = HashMap::new();
         inner.document_bytes = 0;
+        self.trace.resource_budget(
+            Resource::Documents,
+            ResourceAction::Release,
+            0,
+            inner.max_documents,
+            Some((0, inner.max_document_bytes)),
+        );
     }
 
     /// Apply one `didChange` notification's content changes in order,
@@ -349,11 +406,29 @@ impl Documents {
         // more than the edits it actually makes.
         let mut updated = document;
         for change in changes {
-            updated.apply_change(encoding, change, available_document_bytes)?;
+            if let Err(error) = updated.apply_change(encoding, change, available_document_bytes) {
+                if error.message() == DOCUMENT_TEXT_CAPACITY_EXHAUSTED {
+                    self.trace.resource_budget(
+                        Resource::Documents,
+                        ResourceAction::Reject,
+                        inner.by_uri.len(),
+                        inner.max_documents,
+                        Some((inner.document_bytes, inner.max_document_bytes)),
+                    );
+                }
+                return Err(error);
+            }
         }
         updated.version = Some(version);
         inner.document_bytes = retained_bytes + updated.text.len_bytes();
         inner.by_uri.insert(key, updated);
+        self.trace.resource_budget(
+            Resource::Documents,
+            ResourceAction::Update,
+            inner.by_uri.len(),
+            inner.max_documents,
+            Some((inner.document_bytes, inner.max_document_bytes)),
+        );
         Ok(())
     }
 

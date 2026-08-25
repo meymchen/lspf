@@ -7,7 +7,7 @@
 use std::borrow::Cow;
 use std::fmt;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use bytes::Bytes;
 use lspf::types::notification::{DidCloseTextDocument, DidOpenTextDocument};
@@ -527,6 +527,15 @@ struct EventCapture {
     events: Arc<Mutex<Vec<(tracing::Level, String)>>>,
 }
 
+static TRACING_INTEREST: OnceLock<tracing::Dispatch> = OnceLock::new();
+
+fn keep_tracing_interest() {
+    // Callsite interest is cached process-wide, while scoped subscribers are
+    // thread-local. Keep one dispatch alive for this test binary so parallel
+    // tests cannot leave the queue callsites permanently disabled.
+    TRACING_INTEREST.get_or_init(|| tracing::Dispatch::new(tracing_subscriber::registry()));
+}
+
 struct FieldVisitor(String);
 
 impl tracing::field::Visit for FieldVisitor {
@@ -560,21 +569,32 @@ where
 async fn helper_failures_emit_a_tracing_event_without_suppressing_the_error() {
     use tracing_subscriber::layer::SubscriberExt;
 
+    keep_tracing_interest();
     let (mut session, captured) = initialized_session().await;
     let client = take_client(&captured);
     let capture = EventCapture::default();
 
-    // A successful log message goes to the client only: it is not duplicated
-    // into the server's local tracing stream.
+    // A successful log message records only queue accounting locally; its
+    // protocol payload is not duplicated into the tracing stream.
     tracing::subscriber::with_default(tracing_subscriber::registry().with(capture.clone()), || {
         client
             .log_message(log_message_params())
             .expect("a successful enqueue returns Ok(())");
     });
-    assert!(
-        capture.events.lock().unwrap().is_empty(),
-        "log_message must not echo the message into local tracing"
-    );
+    {
+        let events = capture.events.lock().unwrap();
+        assert!(events.iter().any(|(level, fields)| {
+            *level == tracing::Level::TRACE
+                && fields.contains("resource=\"outbound_queue\"")
+                && fields.contains("resource_action=\"admit\"")
+        }));
+        assert!(
+            events
+                .iter()
+                .all(|(_, fields)| !fields.contains("indexed 42 files")),
+            "log_message must not echo the payload into local tracing; got {events:?}"
+        );
+    }
     assert_wire_fixture(&receive(&mut session.out_rx).await, LOG_MESSAGE_FIXTURE);
 
     // A failed enqueue emits a tracing event naming the wire method, and the

@@ -43,7 +43,7 @@ use lsp_types::{
 };
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, Span, debug, info_span, warn};
+use tracing::{Instrument, Span, debug, warn};
 
 use crate::builder::{
     ConfigureInitialize, InitializeRegistrar, OnExit, OnInitialize, OnInitialized, OnShutdown,
@@ -63,6 +63,9 @@ use crate::service::{
     HandlerTimeout, IncomingCall, ServiceResult, UserLayer, UserService, build_service_stack,
 };
 use crate::sync::{OwnedPermit, Semaphore};
+use crate::telemetry::{
+    Completion, ConnectionTrace, DeadlineAction, Direction, Instant, Resource, ResourceAction,
+};
 use crate::transport::{Transport, TransportError, TransportReader, TransportWriter};
 use crate::workspace::Workspace;
 
@@ -169,6 +172,16 @@ enum CloseCause {
 }
 
 impl CloseCause {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Exit { .. } => "exit",
+            Self::ReaderEof => "reader_eof",
+            Self::ReaderFailed(_) => "reader_failed",
+            Self::WriterFailed => "writer_failed",
+            Self::InitializeFailed => "initialize_failed",
+        }
+    }
+
     /// Map the recorded cause onto what serving the connection returns.
     fn into_result(self) -> Result<Outcome> {
         match self {
@@ -249,10 +262,13 @@ where
     // Tokio runtime is reported as an error instead of panicking inside the
     // first spawn (ADR 0020). The framework never starts a runtime implicitly.
     ensure_runtime_available()?;
+    let connection_trace = ConnectionTrace::new();
+    let connection_span = connection_trace.span();
     let (reader, writer) = transport.split();
-    let (out_tx, out_rx) = OutboundQueue::bounded(
+    let (out_tx, out_rx) = OutboundQueue::bounded_with_trace(
         server.resource_policy.max_outbound_messages,
         server.resource_policy.max_outbound_bytes,
+        connection_trace,
     );
     let client = Client::new(
         out_tx.clone(),
@@ -261,10 +277,28 @@ where
     );
     let close = CloseSignal::new();
     let runtime = default_runtime();
-    let send_task = runtime.spawn(send_loop(writer, out_rx, client.clone(), close.clone()));
-    ProtocolEngine::new(server, runtime, out_tx, client, close, send_task)
-        .serve(reader)
-        .await
+    let send_task = runtime.spawn(
+        send_loop_with_trace(
+            writer,
+            out_rx,
+            client.clone(),
+            close.clone(),
+            connection_trace,
+        )
+        .instrument(connection_span.clone()),
+    );
+    ProtocolEngine::new(
+        server,
+        runtime,
+        out_tx,
+        client,
+        close,
+        send_task,
+        connection_trace,
+    )
+    .serve(reader)
+    .instrument(connection_span)
+    .await
 }
 
 struct TaskGroup<R> {
@@ -343,11 +377,15 @@ impl<R: Runtime> TaskGroup<R> {
 /// claim the entry a later request has since reserved under the same ID.
 struct Reservation {
     id: RequestId,
+    method: String,
+    started: Instant,
     generation: RequestGeneration,
     _permit: Arc<OwnedPermit>,
 }
 
 struct InboundEntry {
+    method: String,
+    started: Instant,
     generation: RequestGeneration,
     /// `None` for `initialize`, the one request that is not cancellable.
     cancellation: Option<CancellationToken>,
@@ -363,6 +401,8 @@ struct InboundInner {
 struct InboundRegistry {
     inner: Arc<Mutex<InboundInner>>,
     capacity: Arc<Semaphore>,
+    trace: ConnectionTrace,
+    limit: usize,
 }
 
 #[derive(Debug)]
@@ -380,46 +420,90 @@ struct ReservedRequest {
 }
 
 impl InboundRegistry {
+    #[cfg(all(test, not(target_arch = "wasm32")))]
     fn new(capacity: usize) -> Self {
+        Self::new_with_trace(capacity, ConnectionTrace::new())
+    }
+
+    fn new_with_trace(capacity: usize, trace: ConnectionTrace) -> Self {
         Self {
             inner: Arc::new(Mutex::new(InboundInner {
                 entries: HashMap::new(),
                 next_generation: RequestGeneration::default(),
             })),
             capacity: Semaphore::shared(capacity),
+            trace,
+            limit: capacity,
         }
     }
 
     /// Reserve capacity and `id` before allocating request-scoped cancellation
     /// state. A duplicate never replaces or cancels the original (ADR 0018),
     /// and an exhausted connection never grows its registry or task group.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
     fn reserve(
         &self,
         id: RequestId,
         cancellation_parent: Option<&CancellationToken>,
     ) -> std::result::Result<ReservedRequest, InboundReserveError> {
+        self.reserve_method(id, "test/request", cancellation_parent)
+    }
+
+    fn reserve_method(
+        &self,
+        id: RequestId,
+        method: &str,
+        cancellation_parent: Option<&CancellationToken>,
+    ) -> std::result::Result<ReservedRequest, InboundReserveError> {
         let mut inner = self.inner.lock().unwrap();
         if inner.entries.contains_key(&id) {
+            self.trace.resource_budget(
+                Resource::InboundRequests,
+                ResourceAction::Reject,
+                inner.entries.len(),
+                self.limit,
+                None,
+            );
             return Err(InboundReserveError::DuplicateId);
         }
-        let permit = self
-            .capacity
-            .try_acquire_owned()
-            .ok_or(InboundReserveError::CapacityExhausted)?;
+        let Some(permit) = self.capacity.try_acquire_owned() else {
+            self.trace.resource_budget(
+                Resource::InboundRequests,
+                ResourceAction::Reject,
+                inner.entries.len(),
+                self.limit,
+                None,
+            );
+            return Err(InboundReserveError::CapacityExhausted);
+        };
         let permit = Arc::new(permit);
         let cancellation = cancellation_parent.map(CancellationToken::child_token);
+        let started = Instant::now();
         let generation = inner.next_generation.take_next();
         inner.entries.insert(
             id.clone(),
             InboundEntry {
+                method: method.to_string(),
+                started,
                 generation,
                 cancellation: cancellation.clone(),
                 _permit: Arc::clone(&permit),
             },
         );
+        let current = inner.entries.len();
+        drop(inner);
+        self.trace.resource_budget(
+            Resource::InboundRequests,
+            ResourceAction::Admit,
+            current,
+            self.limit,
+            None,
+        );
         Ok(ReservedRequest {
             reservation: Reservation {
                 id,
+                method: method.to_string(),
+                started,
                 generation,
                 _permit: permit,
             },
@@ -435,35 +519,68 @@ impl InboundRegistry {
         reservation: Reservation,
         result: std::result::Result<Bytes, LspError>,
     ) {
-        let claimed = {
+        let current = {
             let mut inner = self.inner.lock().unwrap();
             match inner.entries.get(&reservation.id) {
                 Some(entry) if entry.generation == reservation.generation => {
-                    inner.entries.remove(&reservation.id).is_some()
+                    inner.entries.remove(&reservation.id);
+                    Some(inner.entries.len())
                 }
-                _ => false,
+                _ => None,
             }
         };
-        if claimed {
+        if let Some(current) = current {
+            self.trace.resource_budget(
+                Resource::InboundRequests,
+                ResourceAction::Release,
+                current,
+                self.limit,
+                None,
+            );
+            let completion = completion_kind(&result);
+            self.trace.request_completed(
+                &reservation.method,
+                &reservation.id,
+                reservation.started,
+                Direction::Inbound,
+                completion,
+            );
             enqueue_encoded(out_tx, reservation.id, result);
         }
     }
 
     fn claim_cancellation(&self, id: &RequestId) -> Option<Reservation> {
-        let entry = {
+        let claimed = {
             let mut inner = self.inner.lock().unwrap();
-            match inner.entries.get(id) {
+            let entry = match inner.entries.get(id) {
                 Some(entry) if entry.cancellation.is_some() => inner.entries.remove(id),
                 _ => None,
-            }
+            };
+            entry.map(|entry| (entry, inner.entries.len()))
         };
-        entry.map(|entry| {
+        claimed.map(|(entry, current)| {
+            self.trace.resource_budget(
+                Resource::InboundRequests,
+                ResourceAction::Release,
+                current,
+                self.limit,
+                None,
+            );
+            self.trace.request_completed(
+                &entry.method,
+                id,
+                entry.started,
+                Direction::Inbound,
+                Completion::Cancelled,
+            );
             let token = entry
                 .cancellation
                 .expect("only cancellable entries are claimed");
             token.cancel();
             Reservation {
                 id: id.clone(),
+                method: entry.method,
+                started: entry.started,
                 generation: entry.generation,
                 _permit: entry._permit,
             }
@@ -478,7 +595,23 @@ impl InboundRegistry {
     /// cancelled request still receives exactly one response.
     fn cancel_all_with_response(&self, out_tx: &OutboundQueue) {
         let entries = std::mem::take(&mut self.inner.lock().unwrap().entries);
+        if !entries.is_empty() {
+            self.trace.resource_budget(
+                Resource::InboundRequests,
+                ResourceAction::Release,
+                0,
+                self.limit,
+                None,
+            );
+        }
         for (id, entry) in entries {
+            self.trace.request_completed(
+                &entry.method,
+                &id,
+                entry.started,
+                Direction::Inbound,
+                Completion::Cancelled,
+            );
             if let Some(cancellation) = entry.cancellation {
                 cancellation.cancel();
             }
@@ -495,8 +628,26 @@ impl InboundRegistry {
     /// [`cancel_all_with_response`](Self::cancel_all_with_response).
     fn close_all(&self) {
         let entries = std::mem::take(&mut self.inner.lock().unwrap().entries);
-        for cancellation in entries.into_values().filter_map(|entry| entry.cancellation) {
-            cancellation.cancel();
+        if !entries.is_empty() {
+            self.trace.resource_budget(
+                Resource::InboundRequests,
+                ResourceAction::Release,
+                0,
+                self.limit,
+                None,
+            );
+        }
+        for (id, entry) in entries {
+            self.trace.request_completed(
+                &entry.method,
+                &id,
+                entry.started,
+                Direction::Inbound,
+                Completion::ConnectionClosed,
+            );
+            if let Some(cancellation) = entry.cancellation {
+                cancellation.cancel();
+            }
         }
     }
 }
@@ -551,11 +702,22 @@ fn gate_progress_cancel(registry: &ProgressRegistry, raw_params: &Bytes) -> Buil
     BuiltInGate::RunHook
 }
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
 async fn send_loop<W: TransportWriter>(
+    writer: W,
+    out_rx: UnboundedReceiver<RawMessage>,
+    client: Client,
+    close: CloseSignal,
+) {
+    send_loop_with_trace(writer, out_rx, client, close, ConnectionTrace::new()).await;
+}
+
+async fn send_loop_with_trace<W: TransportWriter>(
     mut writer: W,
     mut out_rx: UnboundedReceiver<RawMessage>,
     client: Client,
     close: CloseSignal,
+    trace: ConnectionTrace,
 ) {
     let outbound_closing = client.outbound_closing();
     loop {
@@ -575,6 +737,7 @@ async fn send_loop<W: TransportWriter>(
         // The depth counts what is still queued, so each message is decremented
         // once its transport send has succeeded or failed — including the
         // terminally failed send, after which the loop returns.
+        trace.message(Direction::Outbound, &msg);
         let sent = writer.send(msg).await;
         client.record_done();
         if let Err(e) = sent {
@@ -590,6 +753,7 @@ async fn send_loop<W: TransportWriter>(
         }
     }
     while let Ok(msg) = out_rx.recv().await {
+        trace.message(Direction::Outbound, &msg);
         let sent = writer.send(msg).await;
         client.record_done();
         if let Err(e) = sent {
@@ -665,6 +829,7 @@ struct ProtocolEngine<S, R> {
     /// even where the completion gate has already claimed its registry entry.
     session: CancellationToken,
     close: CloseSignal,
+    trace: ConnectionTrace,
     /// The writer's send-loop task. Signalled by closing the outbound queue and
     /// then joined by [`close`](Self::close), so it is never detached.
     send_task: Option<TaskHandle>,
@@ -682,12 +847,13 @@ where
         client: Client,
         close: CloseSignal,
         send_task: TaskHandle,
+        trace: ConnectionTrace,
     ) -> Self {
         let max_inbound_requests = server.resource_policy.max_inbound_requests;
         let handler_timeout = server.resource_policy.handler_timeout;
         Self {
             state: server.state,
-            documents: Documents::with_resource_policy(server.resource_policy),
+            documents: Documents::with_resource_policy(server.resource_policy, trace),
             workspace: None,
             // Document notifications are processed only after initialize has
             // replaced this with the validated effective configuration.
@@ -706,13 +872,14 @@ where
             on_initialized: None,
             on_shutdown: None,
             on_exit: None,
-            inbound: InboundRegistry::new(max_inbound_requests),
+            inbound: InboundRegistry::new_with_trace(max_inbound_requests, trace),
             handler_timeout,
             tasks: TaskGroup::new(runtime),
             out_tx,
             client,
             session: CancellationToken::new(),
             close,
+            trace,
             send_task: Some(send_task),
         }
     }
@@ -747,13 +914,16 @@ where
             self.tasks.reap_finished().await;
 
             match msg {
-                Ok(msg) => match self.dispatch(msg).await {
-                    Flow::Continue => {}
-                    Flow::Close(cause) => {
-                        self.close.request(cause);
-                        break;
+                Ok(msg) => {
+                    self.trace.message(Direction::Inbound, &msg);
+                    match self.dispatch(msg).await {
+                        Flow::Continue => {}
+                        Flow::Close(cause) => {
+                            self.close.request(cause);
+                            break;
+                        }
                     }
-                },
+                }
                 Err(TransportError::Closed) => {
                     warn!("transport closed by peer before exit notification");
                     self.close.request(CloseCause::ReaderEof);
@@ -767,22 +937,35 @@ where
         }
 
         self.close().await;
-        final_close_cause(&self.close, &self.out_tx).into_result()
+        let cause = final_close_cause(&self.close, &self.out_tx);
+        self.trace.connection_closed(cause.as_str());
+        cause.into_result()
     }
 
     async fn dispatch(&mut self, msg: RawMessage) -> Flow {
         match msg {
             RawMessage::Request { id, method, params } => {
-                let span = info_span!("request", method = %method, id = ?id);
+                let span = self.trace.request_span(method.as_ref(), &id);
                 // Admission happens before request-scoped cancellation state,
                 // parameter decoding, and runtime task creation. The owned
                 // permit remains attached to the task handle until the engine
                 // reaps it, even if cancellation or close claims the response
                 // gate first.
                 let cancellation_parent = (method != "initialize").then_some(&self.session);
-                let reserved = match self.inbound.reserve(id.clone(), cancellation_parent) {
+                let reserved = match self.inbound.reserve_method(
+                    id.clone(),
+                    method.as_ref(),
+                    cancellation_parent,
+                ) {
                     Ok(reserved) => reserved,
                     Err(InboundReserveError::DuplicateId) => {
+                        self.trace.request_completed(
+                            method.as_ref(),
+                            &id,
+                            Instant::now(),
+                            Direction::Inbound,
+                            Completion::Rejected,
+                        );
                         enqueue_error(
                             &self.out_tx,
                             id,
@@ -791,6 +974,13 @@ where
                         return Flow::Continue;
                     }
                     Err(InboundReserveError::CapacityExhausted) => {
+                        self.trace.request_completed(
+                            method.as_ref(),
+                            &id,
+                            Instant::now(),
+                            Direction::Inbound,
+                            Completion::Rejected,
+                        );
                         enqueue_error(
                             &self.out_tx,
                             id,
@@ -920,7 +1110,7 @@ where
                         Lifecycle::Running(_) | Lifecycle::ShuttingDown
                     ) && let Some(hook) = self.on_exit.take()
                     {
-                        let span = info_span!("notification", method = "exit");
+                        let span = self.trace.notification_span("exit");
                         let ctx = Context::for_notification(
                             span,
                             self.client.clone(),
@@ -975,7 +1165,7 @@ where
                     let Some(hook) = self.on_initialized.take() else {
                         return Flow::Continue;
                     };
-                    let span = info_span!("notification", method = "initialized");
+                    let span = self.trace.notification_span("initialized");
                     let ctx = Context::for_notification(
                         span,
                         self.client.clone(),
@@ -1070,7 +1260,7 @@ where
         method: &str,
         params: serde_json::Value,
     ) {
-        let span = info_span!("notification", method = %method);
+        let span = self.trace.notification_span(method);
         let ctx =
             Context::for_notification(span, self.client.clone(), self.established_workspace());
         let result = service
@@ -1410,13 +1600,21 @@ where
         let client = self.client.clone();
         let inbound = self.inbound.clone();
         let permit = Arc::clone(&reservation._permit);
+        let trace = self.trace;
         self.tasks.spawn(
             async move {
                 let id = reservation.id.clone();
+                let trace_id = id.clone();
+                let trace_method = method.clone();
                 let cancellation_for_handler = cancellation.clone();
                 let ctx = Context::for_request(id.clone(), span, client, workspace)
                     .with_cancellation(cancellation_for_handler);
-                let handler_timeout = HandlerTimeout::new(default_timeout);
+                let handler_timeout = HandlerTimeout::new(
+                    default_timeout,
+                    trace,
+                    trace_method.clone(),
+                    trace_id.clone(),
+                );
                 let call =
                     IncomingCall::request(method, id, params, ctx, state, handler_timeout.clone());
                 let handler = service.call(call);
@@ -1443,6 +1641,7 @@ where
                                 cooperatively_cancelled_result(handler)
                             }
                             Either::Right(((), completion)) => {
+                                handler_timeout.finish(DeadlineAction::Expired);
                                 cancellation.cancel();
                                 // Match peer cancellation's cooperative final poll: code
                                 // awaiting the token observes expiry before its future is
@@ -1457,6 +1656,15 @@ where
                         }
                     }
                 };
+                handler_timeout.finish(match &result {
+                    ServiceResult::Error(LspError::RequestCancelled) => DeadlineAction::Cancelled,
+                    ServiceResult::Error(LspError::ServerError { message, .. })
+                        if message == HANDLER_DEADLINE_EXPIRED =>
+                    {
+                        DeadlineAction::Expired
+                    }
+                    _ => DeadlineAction::Completed,
+                });
                 let result = match result {
                     ServiceResult::Response(value) => encode_body(&value),
                     ServiceResult::Error(error) => Err(error),
@@ -1568,6 +1776,17 @@ fn enqueue_encoded(
     let _ = out_tx.send_required(response);
 }
 
+fn completion_kind(result: &std::result::Result<Bytes, LspError>) -> Completion {
+    match result {
+        Ok(_) => Completion::Success,
+        Err(LspError::RequestCancelled) => Completion::Cancelled,
+        Err(LspError::ServerError { message, .. }) if message == HANDLER_DEADLINE_EXPIRED => {
+            Completion::DeadlineExpired
+        }
+        Err(_) => Completion::Error,
+    }
+}
+
 fn error_response(id: RequestId, err: &LspError) -> RawMessage {
     RawMessage::Response {
         id,
@@ -1607,6 +1826,7 @@ mod tests {
         registry: &ProgressRegistry,
         raw_params: &'static [u8],
     ) -> (BuiltInGate, crate::test_util::EventCapture) {
+        let _capture = crate::test_util::tracing_capture_lock();
         let events = crate::test_util::EventCapture::new();
         let subscriber = tracing_subscriber::registry().with(events.clone());
         let gate = tracing::subscriber::with_default(subscriber, || {

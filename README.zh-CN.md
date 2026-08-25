@@ -304,6 +304,35 @@ VS Code 没有内置的通用 LSP 客户端，因此需要安装轻量的通用�
 当前 span。启动 VS Code 前设置 `LSPF_LOG_FORMAT=text` 可改用紧凑文本。run 与 test
 task 不会修改这两个变量。
 
+使用 `lspf=trace` 时，框架会输出五种稳定 event shape。入站与出站流量使用相同的
+field 名称：
+
+| `message` | Field |
+| --- | --- |
+| `rpc message` | `connection_id`、`direction`、`kind`，以及存在时的 `method` 与 `request_id` |
+| `resource budget changed` | `connection_id`、`resource`、`resource_action`、`resource_current`；有上限的资源还包括 `resource_limit`，字节预算还包括 `resource_bytes` 与 `resource_bytes_limit`，`pending_requests` 还包括 `direction`、`kind`、`method`、`request_id` 和可选 `deadline_ms` |
+| `deadline changed` | `connection_id`、`direction`、`kind`、`method`、`request_id`、`deadline`、`deadline_action`、`deadline_ms`、`deadline_elapsed_ms` |
+| `request completed` | `connection_id`、`direction`、`kind`、`method`、`request_id`、`latency_ms`、`completion` |
+| `connection closed` | `connection_id`、`close_cause` |
+
+`direction` 的值为 `inbound` 或 `outbound`。资源名为 `inbound_requests`、
+`outbound_queue`、`documents` 与 `pending_requests`。deadline 名为 `handler` 与
+`outbound_request`。resource action 的值为 `admit`、`release`、`update`、`reject`
+与 `rollback`。deadline action 的值为 `armed`、`completed`、`cancelled` 与
+`expired`。completion 的值为 `success`、`error`、`cancelled`、
+`deadline_expired`、`rejected` 与 `connection_closed`；close cause 的值为 `exit`、
+`reader_eof`、`reader_failed`、`writer_failed` 与 `initialize_failed`。可选 field
+不存在时会直接省略，不会写入哨兵值。
+
+request 与 notification span 使用相同的 `connection_id`、`direction`、`kind`、
+`method` 和可选 `request_id` field。request span 还会保留原有的 debug-formatted
+`id` field，以兼容现有 consumer。因此，handler 写入的 event 会通过当前 span 继承
+connection 与 call identity。
+
+默认 event 不会记录 request parameter、response result、Document text 或序列化后的
+wire envelope。应用可以在 handler 内添加自己的 event，但也应把这些 payload 视为
+敏感数据。
+
 服务器初始化后，`vscode-languageclient` 会自动注册 `executeCommandProvider` 宣告的
 四个 Command。扩展 manifest 在 Command Palette 的 `lspf hello` 分类下提供标题。
 middleware 会为 `Read Active File` 和 `Run Outgoing Helper Journey` 加入当前编辑器的

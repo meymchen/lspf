@@ -347,6 +347,37 @@ line is one JSON event with its event fields and current span. Set
 `LSPF_LOG_FORMAT=text` before launching VS Code to use compact plain text.
 Run and test tasks leave both variables unchanged.
 
+At `lspf=trace`, the framework emits five stable event shapes. Field names do
+not change between inbound and outbound traffic:
+
+| `message` | Fields |
+| --- | --- |
+| `rpc message` | `connection_id`, `direction`, `kind`, and, when present, `method` and `request_id` |
+| `resource budget changed` | `connection_id`, `resource`, `resource_action`, `resource_current`; bounded resources also include `resource_limit`, byte budgets include `resource_bytes` and `resource_bytes_limit`, and `pending_requests` includes `direction`, `kind`, `method`, `request_id`, and optional `deadline_ms` |
+| `deadline changed` | `connection_id`, `direction`, `kind`, `method`, `request_id`, `deadline`, `deadline_action`, `deadline_ms`, `deadline_elapsed_ms` |
+| `request completed` | `connection_id`, `direction`, `kind`, `method`, `request_id`, `latency_ms`, `completion` |
+| `connection closed` | `connection_id`, `close_cause` |
+
+`direction` is `inbound` or `outbound`. Resource names are
+`inbound_requests`, `outbound_queue`, `documents`, and `pending_requests`.
+Resource actions are `admit`, `release`, `update`, `reject`, and `rollback`.
+Deadline names are `handler` and `outbound_request`; deadline actions are
+`armed`, `completed`, `cancelled`, and `expired`. Completion values are
+`success`, `error`, `cancelled`, `deadline_expired`, `rejected`, and
+`connection_closed`; close causes are `exit`, `reader_eof`, `reader_failed`,
+`writer_failed`, and `initialize_failed`. Optional fields are absent rather
+than set to a sentinel value.
+
+Request and notification spans carry the same `connection_id`, `direction`,
+`kind`, `method`, and optional `request_id` fields. Request spans also retain
+the older debug-formatted `id` field for compatibility. Events emitted by a
+handler therefore inherit the connection and call identity through their
+current span.
+
+The default events never record request parameters, response results,
+Document text, or a serialized wire envelope. Applications may add their own
+events inside handlers, but should treat those payloads as sensitive too.
+
 After the server initializes, `vscode-languageclient` automatically registers
 the four Commands advertised through `executeCommandProvider`. The extension
 manifest supplies their titles under the `lspf hello` category in the Command
