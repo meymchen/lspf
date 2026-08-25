@@ -677,7 +677,7 @@ where
         let max_inbound_requests = server.resource_policy.max_inbound_requests;
         Self {
             state: server.state,
-            documents: Documents::new(),
+            documents: Documents::with_resource_policy(server.resource_policy),
             workspace: None,
             // Document notifications are processed only after initialize has
             // replaced this with the validated effective configuration.
@@ -1092,7 +1092,7 @@ where
         match built_in {
             ProtocolNotification::Open => {
                 let params: DidOpenTextDocumentParams = decode_params(raw_params)?;
-                self.documents.open(params.text_document);
+                self.documents.open(params.text_document)?;
             }
             ProtocolNotification::Change => {
                 let params: DidChangeTextDocumentParams = decode_params(raw_params)?;
@@ -1461,6 +1461,11 @@ where
         // cannot touch another connection.
         self.client.progress_registry().clear();
         self.tasks.abort_and_join().await;
+        // A DocumentsView may outlive its Context when user code retains the
+        // cloneable handle. Empty the shared store explicitly so connection
+        // shutdown releases every snapshot and its count/byte accounting even
+        // while such a view remains alive.
+        self.documents.clear();
         // Closing the queue is the writer's stop signal: it drains what is
         // already enqueued, shuts the writer half down, and ends. Joining it
         // rather than aborting it is what lets those last responses reach the

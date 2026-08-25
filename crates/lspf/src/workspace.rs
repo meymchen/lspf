@@ -488,12 +488,14 @@ mod tests {
         let workspace = Workspace::from_params(&InitializeParams::default(), documents.clone());
         let clone = workspace.clone();
 
-        documents.open(TextDocumentItem {
-            uri: uri("file:///shared.rs"),
-            language_id: "rust".to_string(),
-            version: 1,
-            text: "fn main() {}".to_string(),
-        });
+        documents
+            .open(TextDocumentItem {
+                uri: uri("file:///shared.rs"),
+                language_id: "rust".to_string(),
+                version: 1,
+                text: "fn main() {}".to_string(),
+            })
+            .expect("the default policy accepts the test document");
 
         for observer in [&workspace, &clone] {
             let doc = observer
@@ -549,12 +551,14 @@ mod tests {
         let provider = MemoryFileProvider::new();
         let requested = uri("file:///workspace/main.rs");
         provider.insert(requested.clone(), "provider");
-        documents.open(TextDocumentItem {
-            uri: requested.clone(),
-            language_id: "rust".to_string(),
-            version: 7,
-            text: "editor".to_string(),
-        });
+        documents
+            .open(TextDocumentItem {
+                uri: requested.clone(),
+                language_id: "rust".to_string(),
+                version: 7,
+                text: "editor".to_string(),
+            })
+            .expect("the default policy accepts the test document");
         let workspace = Workspace::from_params_with_provider(
             &InitializeParams::default(),
             documents,

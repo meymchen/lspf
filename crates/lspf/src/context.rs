@@ -135,12 +135,14 @@ mod tests {
         let clone = ctx.clone();
 
         let uri = Uri::from_str("file:///shared.rs").unwrap();
-        documents.open(TextDocumentItem {
-            uri: uri.clone(),
-            language_id: "rust".to_string(),
-            version: 1,
-            text: "fn main() {}".to_string(),
-        });
+        documents
+            .open(TextDocumentItem {
+                uri: uri.clone(),
+                language_id: "rust".to_string(),
+                version: 1,
+                text: "fn main() {}".to_string(),
+            })
+            .expect("the default policy accepts the test document");
 
         let doc = clone
             .documents()

@@ -57,6 +57,11 @@ impl fmt::Display for ResourcePolicyField {
 /// when either budget is full. Responses, protocol errors, and
 /// `$/cancelRequest` use the engine's failure-close path if they cannot fit;
 /// connection close admits nothing new and drains the already-accounted queue.
+/// Document opens and changes that exceed either Document budget are rejected
+/// before mutation with the stable messages `document count capacity exhausted`
+/// and `document text capacity exhausted`, respectively. Rejection skips the
+/// notification hook and preserves the prior snapshot; `didClose` and
+/// connection shutdown release the corresponding accounting.
 /// Setting `outbound_request_timeout` to `None` explicitly disables that
 /// deadline. All numeric budgets and enabled deadlines must be greater than
 /// zero; invalid policies are rejected by [`ServerBuilder::build`](crate::ServerBuilder::build).
