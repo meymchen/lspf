@@ -737,7 +737,7 @@ where
                 Ok(msg) => match self.dispatch(msg).await {
                     Flow::Continue => {}
                     Flow::Close(cause) => {
-                        request_dispatch_close(&self.close, &self.out_tx, cause);
+                        self.close.request(cause);
                         break;
                     }
                 },
@@ -754,10 +754,7 @@ where
         }
 
         self.close().await;
-        self.close
-            .take_cause()
-            .expect("every path out of the read-loop records its close cause")
-            .into_result()
+        final_close_cause(&self.close, &self.out_tx).into_result()
     }
 
     async fn dispatch(&mut self, msg: RawMessage) -> Flow {
@@ -1497,11 +1494,14 @@ enum Flow {
     Close(CloseCause),
 }
 
-fn request_dispatch_close(close: &CloseSignal, out_tx: &OutboundQueue, cause: CloseCause) {
+fn final_close_cause(close: &CloseSignal, out_tx: &OutboundQueue) -> CloseCause {
+    let recorded = close
+        .take_cause()
+        .expect("every path out of the read-loop records its close cause");
     if out_tx.failure().is_cancelled() {
-        close.request(CloseCause::WriterFailed);
+        CloseCause::WriterFailed
     } else {
-        close.request(cause);
+        recorded
     }
 }
 
@@ -1696,19 +1696,22 @@ mod tests {
     }
 
     #[test]
-    fn a_required_enqueue_failure_precedes_a_dispatch_close_cause() {
+    fn a_late_required_enqueue_failure_overrides_an_earlier_close_cause() {
         let message = RawMessage::Notification {
             method: "test/required".into(),
             params: Bytes::new(),
         };
         let (queue, _rx) = OutboundQueue::bounded(1, usize::MAX);
         queue.send(message.clone()).unwrap();
-        assert!(queue.send_required(message).is_err());
         let close = CloseSignal::new();
+        close.request(CloseCause::InitializeFailed);
 
-        request_dispatch_close(&close, &queue, CloseCause::InitializeFailed);
+        assert!(queue.send_required(message).is_err());
 
-        assert!(matches!(close.take_cause(), Some(CloseCause::WriterFailed)));
+        assert!(matches!(
+            final_close_cause(&close, &queue),
+            CloseCause::WriterFailed
+        ));
     }
 
     #[test]
