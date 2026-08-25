@@ -1429,12 +1429,7 @@ where
                 {
                     Either::Left((Either::Left((result, _)), _)) => result,
                     Either::Left((Either::Right(((), handler)), _)) => {
-                        // CancellationToken wakes every waiter, but an executor
-                        // yield does not guarantee this handler is polled before a
-                        // separate abort. Poll it here, in its own task, then end
-                        // the task without relying on scheduler fairness.
-                        let _ = handler.now_or_never();
-                        ServiceResult::Error(LspError::RequestCancelled)
+                        cooperatively_cancelled_result(handler)
                     }
                     Either::Right(((), completion)) => {
                         match select(
@@ -1445,12 +1440,7 @@ where
                         {
                             Either::Left((Either::Left((result, _)), _)) => result,
                             Either::Left((Either::Right(((), handler)), _)) => {
-                                // CancellationToken wakes every waiter, but an executor
-                                // yield does not guarantee this handler is polled before a
-                                // separate abort. Poll it here, in its own task, then end
-                                // the task without relying on scheduler fairness.
-                                let _ = handler.now_or_never();
-                                ServiceResult::Error(LspError::RequestCancelled)
+                                cooperatively_cancelled_result(handler)
                             }
                             Either::Right(((), completion)) => {
                                 cancellation.cancel();
@@ -1591,6 +1581,17 @@ fn error_response(id: RequestId, err: &LspError) -> RawMessage {
 
 fn enqueue_error(out_tx: &OutboundQueue, id: RequestId, err: LspError) {
     let _ = out_tx.send_required(error_response(id, &err));
+}
+
+fn cooperatively_cancelled_result<F>(handler: F) -> ServiceResult
+where
+    F: Future<Output = ServiceResult>,
+{
+    // CancellationToken wakes every waiter, but an executor yield does not
+    // guarantee this handler is polled before a separate abort. Poll it here,
+    // in its own task, then finish without relying on scheduler fairness.
+    let _ = handler.now_or_never();
+    ServiceResult::Error(LspError::RequestCancelled)
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
