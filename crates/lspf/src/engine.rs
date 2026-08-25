@@ -1419,15 +1419,24 @@ where
                 let handler_timeout = HandlerTimeout::new(default_timeout);
                 let call =
                     IncomingCall::request(method, id, params, ctx, state, handler_timeout.clone());
-                let mut handler = service.call(call);
-                // Enter the fixed Service stack once before selecting the
-                // timeout. This reaches synchronous Layer configuration while
-                // preserving an immediately-ready result.
-                let result = match handler.as_mut().now_or_never() {
-                    Some(result) => result,
-                    None => {
-                        let completion =
-                            select(Box::pin(handler), Box::pin(cancellation.cancelled()));
+                let handler = service.call(call);
+                let completion = select(Box::pin(handler), Box::pin(cancellation.cancelled()));
+                let result = match select(
+                    Box::pin(completion),
+                    Box::pin(handler_timeout.wait_until_armed()),
+                )
+                .await
+                {
+                    Either::Left((Either::Left((result, _)), _)) => result,
+                    Either::Left((Either::Right(((), handler)), _)) => {
+                        // CancellationToken wakes every waiter, but an executor
+                        // yield does not guarantee this handler is polled before a
+                        // separate abort. Poll it here, in its own task, then end
+                        // the task without relying on scheduler fairness.
+                        let _ = handler.now_or_never();
+                        ServiceResult::Error(LspError::RequestCancelled)
+                    }
+                    Either::Right(((), completion)) => {
                         match select(
                             Box::pin(completion),
                             Box::pin(crate::runtime::sleep(handler_timeout.get())),

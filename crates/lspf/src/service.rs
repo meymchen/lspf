@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use futures_util::FutureExt;
 use serde_json::Value;
+use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, error, info_span};
 
 use crate::builder::Router;
@@ -41,19 +42,33 @@ pub struct IncomingCall<S> {
 }
 
 #[derive(Clone)]
-pub(crate) struct HandlerTimeout(Arc<Mutex<Duration>>);
+pub(crate) struct HandlerTimeout {
+    duration: Arc<Mutex<Duration>>,
+    armed: CancellationToken,
+}
 
 impl HandlerTimeout {
     pub(crate) fn new(timeout: Duration) -> Self {
-        Self(Arc::new(Mutex::new(timeout)))
+        Self {
+            duration: Arc::new(Mutex::new(timeout)),
+            armed: CancellationToken::new(),
+        }
     }
 
     pub(crate) fn get(&self) -> Duration {
-        *self.0.lock().unwrap()
+        *self.duration.lock().unwrap()
     }
 
     fn set(&self, timeout: Duration) {
-        *self.0.lock().unwrap() = timeout;
+        *self.duration.lock().unwrap() = timeout;
+    }
+
+    fn arm(&self) {
+        self.armed.cancel();
+    }
+
+    pub(crate) async fn wait_until_armed(&self) {
+        self.armed.cancelled().await;
     }
 }
 
@@ -322,13 +337,18 @@ impl<S: Send + Sync + 'static> Service<S> for ConcurrencyLimitService<S> {
     fn call(&self, call: IncomingCall<S>) -> ServiceFuture {
         let inner = Arc::clone(&self.inner);
         let permits = Arc::clone(&self.permits);
+        let handler_timeout = call.handler_timeout.clone();
         Box::pin(async move {
             let _permit = permits
                 .clone()
                 .acquire_owned()
                 .instrument(info_span!("handler.acquire_permit"))
                 .await;
-            inner.call(call).await
+            let handler = inner.call(call);
+            if let Some(handler_timeout) = handler_timeout {
+                handler_timeout.arm();
+            }
+            handler.await
         })
     }
 }

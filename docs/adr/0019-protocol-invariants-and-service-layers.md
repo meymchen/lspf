@@ -89,8 +89,9 @@ constructing an `IncomingCall`. Each field has one meaning:
   current connection's `ProtocolEngine`.
 - `handler_timeout` is the connection resource policy's finite default for a
   request and is absent for a notification. A Layer may replace the duration
-  synchronously before forwarding the call; the engine reads the final value
-  after first entering the Service future.
+  synchronously before forwarding the call. After concurrency admission, the
+  framework enters the user Layer chain, reads the final value, and arms the
+  engine-owned deadline.
 
 `Service<State>` consumes one `IncomingCall` and asynchronously returns
 exactly one `ServiceResult`. `RouterService` resolves `method` in the frozen
