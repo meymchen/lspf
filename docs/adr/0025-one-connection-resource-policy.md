@@ -24,6 +24,6 @@ Enforcement lands at the owning seams: admission before handler task creation,
 outbound queue accounting at encode/enqueue, Document accounting at protocol
 mutation, outbound expiry in the pending-request broker, and handler expiry at
 the completion gate. Those changes are staged in issues #164 through #168;
-until each lands, existing concurrency and queue-observation mechanisms are
-transitional implementation details, not permission to restore an unbounded
-architectural default.
+ADR 0026 fixes the outbound admission and failure-close rules implemented by
+issue #165. The remaining enforcement work stays staged in issues #166 through
+#168.

@@ -1052,8 +1052,8 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
     ///
     /// This compatibility shorthand updates
     /// [`ResourcePolicy::max_outbound_messages`](crate::ResourcePolicy::max_outbound_messages).
-    /// Until bounded queue admission is implemented, the same value is the
-    /// queue-depth warning threshold. Zero is rejected by [`build`](Self::build).
+    /// The historical method name is retained for source compatibility; the
+    /// value is now a hard queue budget. Zero is rejected by [`build`](Self::build).
     pub fn outbound_warning_threshold(mut self, threshold: usize) -> Self {
         if threshold == 0 {
             self.record(BuildError::InvalidOutboundWarningThreshold);

@@ -41,6 +41,10 @@ pub enum ClientError {
     #[error("client outbound queue is closed")]
     OutboundClosed,
 
+    /// The connection's outbound message-count or encoded-byte budget is full.
+    #[error("client outbound queue capacity is exhausted")]
+    OutboundOverloaded,
+
     /// The session was cancelled before the peer answered the request.
     #[error("client request was cancelled")]
     Cancelled,

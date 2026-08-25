@@ -119,7 +119,7 @@ mod tests {
     use crate::documents::Documents;
 
     fn context() -> (Context, Documents) {
-        let (out_tx, _out_rx) = OutboundQueue::new(crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD);
+        let (out_tx, _out_rx) = OutboundQueue::bounded(usize::MAX, usize::MAX);
         let documents = Documents::new();
         let workspace = Workspace::from_params(&InitializeParams::default(), documents.clone());
         let client = Client::new(out_tx, OutboundRegistry::default());

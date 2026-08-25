@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- [**breaking**] Bound outbound queues by message count and encoded bytes,
+  returning `ClientError::OutboundOverloaded` when ordinary sends exceed a
+  connection budget.
+
 ## [0.6.0](https://github.com/meymchen/lspf/compare/v0.5.3...v0.6.0) - 2026-08-24
 
 ### Other

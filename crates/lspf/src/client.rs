@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
@@ -117,11 +117,11 @@ impl Drop for PendingGuard {
         // it and, if it reached the wire, cancel it with the peer. Errors are
         // ignored: the connection may already be closing.
         if self.client.outbound.remove(self.id).is_some() && self.enqueued {
-            let _ =
-                self.client
-                    .notify::<lsp_types::notification::Cancel>(lsp_types::CancelParams {
-                        id: lsp_types::NumberOrString::Number(self.id as i32),
-                    });
+            let _ = self
+                .client
+                .notify_required::<lsp_types::notification::Cancel>(lsp_types::CancelParams {
+                    id: lsp_types::NumberOrString::Number(self.id as i32),
+                });
         }
     }
 }
@@ -211,47 +211,98 @@ impl OutboundRegistry {
     }
 }
 
-/// The engine-owned outbound queue for one connection: the unbounded channel
-/// feeding the writer's send-loop plus the depth counter that observes it.
-///
-/// The counter is observability only. Enqueue stays synchronous and the queue
-/// stays unbounded, so no message is ever dropped, reordered, or delayed by
-/// the accounting. Every successful [`send`](Self::send) increments the
-/// depth; the send-loop calls [`record_done`](Self::record_done) after each
-/// transport send, whether it succeeded or failed.
+/// The engine-owned outbound queue for one connection. Admission bounds both
+/// retained message count and exact encoded JSON-RPC envelope bytes while an
+/// unbounded channel remains the runtime-neutral wake-up primitive. Every
+/// successful [`send`](Self::send) charges both budgets; the send-loop calls
+/// [`record_done`](Self::record_done) after each transport attempt.
 #[derive(Clone)]
 pub(crate) struct OutboundQueue {
     tx: UnboundedSender<RawMessage>,
-    inner: Arc<OutboundDepth>,
+    inner: Arc<OutboundAdmission>,
 }
 
-struct OutboundDepth {
+struct OutboundAdmission {
     threshold: usize,
+    limits: OutboundLimits,
+    failure: CancellationToken,
     /// Depth and warn-state move together under one lock, so a concurrent
     /// enqueue can never observe a stale warn-state for a depth that has
     /// already dropped back below the threshold (and vice versa).
-    state: Mutex<DepthState>,
+    state: Mutex<AdmissionState>,
 }
 
-struct DepthState {
+#[derive(Clone, Copy)]
+struct OutboundLimits {
+    max_messages: usize,
+    max_bytes: usize,
+}
+
+struct AdmissionState {
     depth: usize,
+    encoded_bytes: usize,
+    encoded_sizes: VecDeque<usize>,
     /// Set once depth reaches the threshold and cleared once it drops back
     /// below it, so one sustained crossing produces exactly one warning.
     warned: bool,
 }
 
+#[derive(Debug)]
+pub(crate) enum OutboundSendError {
+    Overloaded,
+    Closed,
+    Serialize(serde_json::Error),
+}
+
+#[derive(Clone, Copy)]
+enum DeliveryRequirement {
+    Ordinary,
+    Required,
+}
+
 impl OutboundQueue {
     /// Create the queue with its receiving half. `threshold` is the depth at
     /// which one warning is emitted per upward crossing.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(crate) fn new(threshold: usize) -> (Self, UnboundedReceiver<RawMessage>) {
+        Self::with_limits(
+            threshold,
+            OutboundLimits {
+                max_messages: usize::MAX,
+                max_bytes: usize::MAX,
+            },
+        )
+    }
+
+    pub(crate) fn bounded(
+        max_messages: usize,
+        max_bytes: usize,
+    ) -> (Self, UnboundedReceiver<RawMessage>) {
+        Self::with_limits(
+            max_messages,
+            OutboundLimits {
+                max_messages,
+                max_bytes,
+            },
+        )
+    }
+
+    fn with_limits(
+        threshold: usize,
+        limits: OutboundLimits,
+    ) -> (Self, UnboundedReceiver<RawMessage>) {
         let (tx, rx) = mpsc::unbounded();
         (
             Self {
                 tx,
-                inner: Arc::new(OutboundDepth {
+                inner: Arc::new(OutboundAdmission {
                     threshold,
-                    state: Mutex::new(DepthState {
+                    limits,
+                    failure: CancellationToken::new(),
+                    state: Mutex::new(AdmissionState {
                         depth: 0,
+                        encoded_bytes: 0,
+                        encoded_sizes: VecDeque::new(),
                         warned: false,
                     }),
                 }),
@@ -263,11 +314,47 @@ impl OutboundQueue {
     /// Enqueue one message. The depth is counted before the send so the
     /// writer can never decrement a message that is not yet counted; a failed
     /// send means the writer half is gone, so the message is uncounted again.
-    pub(crate) fn send(&self, message: RawMessage) -> Result<(), mpsc::TrySendError<RawMessage>> {
-        self.record_enqueue();
-        self.tx
-            .unbounded_send(message)
-            .inspect_err(|_| self.record_done())
+    pub(crate) fn send(&self, message: RawMessage) -> Result<(), OutboundSendError> {
+        let encoded_bytes = crate::transport::envelope::serialize(&message)
+            .map_err(|error| match error {
+                crate::TransportError::Serde(error) => OutboundSendError::Serialize(error),
+                other => unreachable!("envelope serialization cannot produce {other}"),
+            })?
+            .len();
+        let mut state = self.inner.state.lock().unwrap();
+        if state.depth >= self.inner.limits.max_messages
+            || state
+                .encoded_bytes
+                .checked_add(encoded_bytes)
+                .is_none_or(|bytes| bytes > self.inner.limits.max_bytes)
+        {
+            warn!(
+                outbound.queue_depth = state.depth,
+                outbound.queue_bytes = state.encoded_bytes,
+                max_messages = self.inner.limits.max_messages,
+                max_bytes = self.inner.limits.max_bytes,
+                "outbound queue capacity is exhausted"
+            );
+            return Err(OutboundSendError::Overloaded);
+        }
+        self.record_enqueue(&mut state, encoded_bytes);
+        if self.tx.unbounded_send(message).is_err() {
+            self.record_failed_enqueue(&mut state);
+            return Err(OutboundSendError::Closed);
+        }
+        Ok(())
+    }
+
+    /// Enqueue protocol traffic that must not be silently lost. If it cannot
+    /// be retained within the same finite budgets as ordinary traffic, signal
+    /// the engine's single failure-close path.
+    pub(crate) fn send_required(&self, message: RawMessage) -> Result<(), OutboundSendError> {
+        self.send(message)
+            .inspect_err(|_| self.inner.failure.cancel())
+    }
+
+    pub(crate) fn failure(&self) -> CancellationToken {
+        self.inner.failure.clone()
     }
 
     pub(crate) fn is_closed(&self) -> bool {
@@ -280,15 +367,21 @@ impl OutboundQueue {
         self.inner.state.lock().unwrap().depth
     }
 
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) fn encoded_bytes(&self) -> usize {
+        self.inner.state.lock().unwrap().encoded_bytes
+    }
+
     /// Count one enqueued request, response, or notification, warning once
     /// when the depth crosses from below the threshold to at least it.
     ///
     /// Tracing stays silent below the threshold: a healthy queue produces no
     /// per-message events, so helpers like `log_message` never echo into the
     /// server's local tracing stream.
-    fn record_enqueue(&self) {
-        let mut state = self.inner.state.lock().unwrap();
+    fn record_enqueue(&self, state: &mut AdmissionState, encoded_bytes: usize) {
         state.depth += 1;
+        state.encoded_bytes += encoded_bytes;
+        state.encoded_sizes.push_back(encoded_bytes);
         let depth = state.depth;
         if depth >= self.inner.threshold {
             trace!(outbound.queue_depth = depth, "outbound message enqueued");
@@ -309,13 +402,38 @@ impl OutboundQueue {
     /// below the threshold rearms one warning for the next crossing.
     pub(crate) fn record_done(&self) {
         let mut state = self.inner.state.lock().unwrap();
+        let encoded_bytes = state
+            .encoded_sizes
+            .pop_front()
+            .expect("only an accounted outbound message can finish");
         state.depth -= 1;
+        state.encoded_bytes -= encoded_bytes;
         let depth = state.depth;
         if depth >= self.inner.threshold {
             trace!(outbound.queue_depth = depth, "outbound message written");
         } else {
             state.warned = false;
         }
+    }
+
+    fn record_failed_enqueue(&self, state: &mut AdmissionState) {
+        let encoded_bytes = state
+            .encoded_sizes
+            .pop_back()
+            .expect("the failed channel send was accounted first");
+        state.depth -= 1;
+        state.encoded_bytes -= encoded_bytes;
+        if state.depth < self.inner.threshold {
+            state.warned = false;
+        }
+    }
+
+    pub(crate) fn discard_all(&self) {
+        let mut state = self.inner.state.lock().unwrap();
+        state.depth = 0;
+        state.encoded_bytes = 0;
+        state.encoded_sizes.clear();
+        state.warned = false;
     }
 }
 
@@ -407,8 +525,28 @@ impl Client {
     /// Encode and enqueue one typed server-to-client notification.
     ///
     /// Notifications are fire-and-forget: this method returns synchronously,
-    /// allocates no request ID, and creates no pending request entry.
+    /// allocates no request ID, and creates no pending request entry. If the
+    /// outbound message or byte budget is full, it returns
+    /// [`ClientError::OutboundOverloaded`] without retaining the notification.
     pub fn notify<N>(&self, params: N::Params) -> Result<(), ClientError>
+    where
+        N: Notification,
+    {
+        self.notify_with_requirement::<N>(params, DeliveryRequirement::Ordinary)
+    }
+
+    fn notify_required<N>(&self, params: N::Params) -> Result<(), ClientError>
+    where
+        N: Notification,
+    {
+        self.notify_with_requirement::<N>(params, DeliveryRequirement::Required)
+    }
+
+    fn notify_with_requirement<N>(
+        &self,
+        params: N::Params,
+        requirement: DeliveryRequirement,
+    ) -> Result<(), ClientError>
     where
         N: Notification,
     {
@@ -425,10 +563,23 @@ impl Client {
 
         let mut phase = self.state.phase.lock().unwrap();
         self.ensure_open(&mut phase)?;
-        if self.outgoing.send(message).is_err() {
-            *phase = Phase::OutboundClosed;
-            self.state.outbound_closing.cancel();
-            return Err(ClientError::OutboundClosed);
+        let sent = match requirement {
+            DeliveryRequirement::Ordinary => self.outgoing.send(message),
+            DeliveryRequirement::Required => self.outgoing.send_required(message),
+        };
+        match sent {
+            Ok(()) => {}
+            Err(OutboundSendError::Overloaded) => {
+                return Err(ClientError::OutboundOverloaded);
+            }
+            Err(OutboundSendError::Closed) => {
+                *phase = Phase::OutboundClosed;
+                self.state.outbound_closing.cancel();
+                return Err(ClientError::OutboundClosed);
+            }
+            Err(OutboundSendError::Serialize(error)) => {
+                return Err(ClientError::Serialize(error));
+            }
         }
         Ok(())
     }
@@ -515,6 +666,9 @@ impl Client {
     ///   if the session is already closing, or if the engine's close operation
     ///   has already drained the outbound registry (e.g. this request started
     ///   after the connection began closing).
+    /// - [`ClientError::OutboundOverloaded`] if the request would exceed the
+    ///   connection's queued-message or encoded-byte budget. Its pending
+    ///   registry entry is removed before this error is returned.
     /// - [`ClientError::IdExhausted`] if the outbound ID space is exhausted.
     /// - [`ClientError::Serialize`] if the params cannot be encoded.
     /// - [`ClientError::Cancelled`] if the session closes before the peer
@@ -567,15 +721,22 @@ impl Client {
                     drop(self.outbound.remove(id));
                     return Err(e);
                 }
-                Ok(()) => {
-                    if self.outgoing.send(message).is_err() {
+                Ok(()) => match self.outgoing.send(message) {
+                    Ok(()) => true,
+                    Err(OutboundSendError::Overloaded) => {
+                        drop(self.outbound.remove(id));
+                        return Err(ClientError::OutboundOverloaded);
+                    }
+                    Err(OutboundSendError::Closed) => {
                         *phase = Phase::OutboundClosed;
                         self.state.outbound_closing.cancel();
                         false
-                    } else {
-                        true
                     }
-                }
+                    Err(OutboundSendError::Serialize(error)) => {
+                        drop(self.outbound.remove(id));
+                        return Err(ClientError::Serialize(error));
+                    }
+                },
             }
         };
 
@@ -607,8 +768,8 @@ impl Client {
     /// # Errors
     ///
     /// Behaves exactly as [`Client::request`]: [`ClientError::Serialize`],
-    /// [`ClientError::ConnectionClosed`], [`ClientError::OutboundClosed`], or
-    /// [`ClientError::IdExhausted`] if the request never reaches the wire;
+    /// [`ClientError::ConnectionClosed`], [`ClientError::OutboundClosed`], [`ClientError::OutboundOverloaded`],
+    /// or [`ClientError::IdExhausted`] if the request never reaches the wire;
     /// [`ClientError::Remote`] if the client answers with a JSON-RPC error;
     /// [`ClientError::Deserialize`] if the success result cannot be decoded;
     /// [`ClientError::Cancelled`] if the session closes before the client
@@ -632,8 +793,8 @@ impl Client {
     /// # Errors
     ///
     /// Behaves exactly as [`Client::request`]: [`ClientError::Serialize`],
-    /// [`ClientError::ConnectionClosed`], [`ClientError::OutboundClosed`], or
-    /// [`ClientError::IdExhausted`] if the request never reaches the wire;
+    /// [`ClientError::ConnectionClosed`], [`ClientError::OutboundClosed`], [`ClientError::OutboundOverloaded`],
+    /// or [`ClientError::IdExhausted`] if the request never reaches the wire;
     /// [`ClientError::Remote`] if the client answers with a JSON-RPC error;
     /// [`ClientError::Deserialize`] if the success result cannot be decoded;
     /// [`ClientError::Cancelled`] if the session closes before the client
@@ -658,8 +819,8 @@ impl Client {
     /// # Errors
     ///
     /// Behaves exactly as [`Client::request`]: [`ClientError::Serialize`],
-    /// [`ClientError::ConnectionClosed`], [`ClientError::OutboundClosed`], or
-    /// [`ClientError::IdExhausted`] if the request never reaches the wire;
+    /// [`ClientError::ConnectionClosed`], [`ClientError::OutboundClosed`], [`ClientError::OutboundOverloaded`],
+    /// or [`ClientError::IdExhausted`] if the request never reaches the wire;
     /// [`ClientError::Remote`] if the client answers with a JSON-RPC error;
     /// [`ClientError::Deserialize`] if the success result cannot be decoded;
     /// [`ClientError::Cancelled`] if the session closes before the client
@@ -686,8 +847,8 @@ impl Client {
     /// # Errors
     ///
     /// Behaves exactly as [`Client::request`]: [`ClientError::Serialize`],
-    /// [`ClientError::ConnectionClosed`], [`ClientError::OutboundClosed`], or
-    /// [`ClientError::IdExhausted`] if the request never reaches the wire;
+    /// [`ClientError::ConnectionClosed`], [`ClientError::OutboundClosed`], [`ClientError::OutboundOverloaded`],
+    /// or [`ClientError::IdExhausted`] if the request never reaches the wire;
     /// [`ClientError::Remote`] if the client answers with a JSON-RPC error;
     /// [`ClientError::Deserialize`] if the success result cannot be decoded;
     /// [`ClientError::Cancelled`] if the session closes before the client
@@ -713,7 +874,7 @@ impl Client {
     /// # Errors
     ///
     /// Behaves exactly as [`Client::request`]: [`ClientError::ConnectionClosed`],
-    /// [`ClientError::OutboundClosed`], or [`ClientError::IdExhausted`] if the
+    /// [`ClientError::OutboundClosed`], [`ClientError::OutboundOverloaded`], or [`ClientError::IdExhausted`] if the
     /// request never reaches the wire; [`ClientError::Remote`] if the client
     /// answers with a JSON-RPC error; [`ClientError::Deserialize`] if the
     /// success result cannot be decoded; [`ClientError::Cancelled`] if the
@@ -739,8 +900,8 @@ impl Client {
     /// # Errors
     ///
     /// Behaves exactly as [`Client::request`]: [`ClientError::Serialize`],
-    /// [`ClientError::ConnectionClosed`], [`ClientError::OutboundClosed`], or
-    /// [`ClientError::IdExhausted`] if the request never reaches the wire;
+    /// [`ClientError::ConnectionClosed`], [`ClientError::OutboundClosed`], [`ClientError::OutboundOverloaded`],
+    /// or [`ClientError::IdExhausted`] if the request never reaches the wire;
     /// [`ClientError::Remote`] if the client answers with a JSON-RPC error;
     /// [`ClientError::Deserialize`] if the success result cannot be decoded;
     /// [`ClientError::Cancelled`] if the session closes before the client
@@ -767,8 +928,8 @@ impl Client {
     /// # Errors
     ///
     /// Behaves exactly as [`Client::request`]: [`ClientError::Serialize`],
-    /// [`ClientError::ConnectionClosed`], [`ClientError::OutboundClosed`], or
-    /// [`ClientError::IdExhausted`] if the request never reaches the wire;
+    /// [`ClientError::ConnectionClosed`], [`ClientError::OutboundClosed`], [`ClientError::OutboundOverloaded`],
+    /// or [`ClientError::IdExhausted`] if the request never reaches the wire;
     /// [`ClientError::Remote`] if the client answers with a JSON-RPC error;
     /// [`ClientError::Deserialize`] if the success result cannot be decoded;
     /// [`ClientError::Cancelled`] if the session closes before the client
@@ -792,7 +953,7 @@ impl Client {
     /// # Errors
     ///
     /// Behaves exactly as [`Client::request`]: [`ClientError::ConnectionClosed`],
-    /// [`ClientError::OutboundClosed`], or [`ClientError::IdExhausted`] if the
+    /// [`ClientError::OutboundClosed`], [`ClientError::OutboundOverloaded`], or [`ClientError::IdExhausted`] if the
     /// request never reaches the wire; [`ClientError::Remote`] if the client
     /// answers with a JSON-RPC error; [`ClientError::Deserialize`] if the
     /// success result cannot be decoded; [`ClientError::Cancelled`] if the
@@ -814,7 +975,7 @@ impl Client {
     /// # Errors
     ///
     /// Behaves exactly as [`Client::request`]: [`ClientError::ConnectionClosed`],
-    /// [`ClientError::OutboundClosed`], or [`ClientError::IdExhausted`] if the
+    /// [`ClientError::OutboundClosed`], [`ClientError::OutboundOverloaded`], or [`ClientError::IdExhausted`] if the
     /// request never reaches the wire; [`ClientError::Remote`] if the client
     /// answers with a JSON-RPC error; [`ClientError::Deserialize`] if the
     /// success result cannot be decoded; [`ClientError::Cancelled`] if the
@@ -835,7 +996,7 @@ impl Client {
     /// # Errors
     ///
     /// Behaves exactly as [`Client::request`]: [`ClientError::ConnectionClosed`],
-    /// [`ClientError::OutboundClosed`], or [`ClientError::IdExhausted`] if the
+    /// [`ClientError::OutboundClosed`], [`ClientError::OutboundOverloaded`], or [`ClientError::IdExhausted`] if the
     /// request never reaches the wire; [`ClientError::Remote`] if the client
     /// answers with a JSON-RPC error; [`ClientError::Deserialize`] if the
     /// success result cannot be decoded; [`ClientError::Cancelled`] if the
@@ -856,7 +1017,7 @@ impl Client {
     /// # Errors
     ///
     /// Behaves exactly as [`Client::request`]: [`ClientError::ConnectionClosed`],
-    /// [`ClientError::OutboundClosed`], or [`ClientError::IdExhausted`] if the
+    /// [`ClientError::OutboundClosed`], [`ClientError::OutboundOverloaded`], or [`ClientError::IdExhausted`] if the
     /// request never reaches the wire; [`ClientError::Remote`] if the client
     /// answers with a JSON-RPC error; [`ClientError::Deserialize`] if the
     /// success result cannot be decoded; [`ClientError::Cancelled`] if the
@@ -877,7 +1038,7 @@ impl Client {
     /// # Errors
     ///
     /// Behaves exactly as [`Client::request`]: [`ClientError::ConnectionClosed`],
-    /// [`ClientError::OutboundClosed`], or [`ClientError::IdExhausted`] if the
+    /// [`ClientError::OutboundClosed`], [`ClientError::OutboundOverloaded`], or [`ClientError::IdExhausted`] if the
     /// request never reaches the wire; [`ClientError::Remote`] if the client
     /// answers with a JSON-RPC error; [`ClientError::Deserialize`] if the
     /// success result cannot be decoded; [`ClientError::Cancelled`] if the
@@ -903,7 +1064,7 @@ impl Client {
     /// # Errors
     ///
     /// Behaves exactly as [`Client::request`]: [`ClientError::ConnectionClosed`],
-    /// [`ClientError::OutboundClosed`], or [`ClientError::IdExhausted`] if the
+    /// [`ClientError::OutboundClosed`], [`ClientError::OutboundOverloaded`], or [`ClientError::IdExhausted`] if the
     /// request never reaches the wire; [`ClientError::Remote`] if the client
     /// answers with a JSON-RPC error; [`ClientError::Deserialize`] if the
     /// success result cannot be decoded; [`ClientError::Cancelled`] if the
@@ -932,7 +1093,7 @@ impl Client {
     /// # Errors
     ///
     /// Behaves exactly as [`Client::request`]: [`ClientError::ConnectionClosed`],
-    /// [`ClientError::OutboundClosed`], or [`ClientError::IdExhausted`] if the
+    /// [`ClientError::OutboundClosed`], [`ClientError::OutboundOverloaded`], or [`ClientError::IdExhausted`] if the
     /// request never reaches the wire; [`ClientError::Remote`] if the client
     /// answers with a JSON-RPC error; [`ClientError::Deserialize`] if the
     /// success result cannot be decoded; [`ClientError::Cancelled`] if the
@@ -983,6 +1144,10 @@ impl Client {
         self.outgoing.record_done();
     }
 
+    pub(crate) fn discard_outbound(&self) {
+        self.outgoing.discard_all();
+    }
+
     /// Engine-private accessor to the shared outbound registry.
     pub(crate) fn outbound_registry(&self) -> &OutboundRegistry {
         &self.outbound
@@ -1016,6 +1181,14 @@ mod tests {
     impl Notification for TestNotification {
         type Params = serde_json::Value;
         const METHOD: &'static str = "test/notification";
+    }
+
+    enum TestRequest {}
+
+    impl Request for TestRequest {
+        type Params = serde_json::Value;
+        type Result = String;
+        const METHOD: &'static str = "test/request";
     }
 
     #[derive(Debug)]
@@ -1664,6 +1837,91 @@ mod tests {
             queue.depth(),
             0,
             "a message that never entered the queue is not counted"
+        );
+    }
+
+    #[test]
+    fn ordinary_sends_fail_explicitly_when_the_message_budget_is_full() {
+        let (queue, _rx) = OutboundQueue::bounded(1, usize::MAX);
+        let client = Client::new(queue.clone(), OutboundRegistry::default());
+
+        client
+            .notify::<TestNotification>(json!({ "value": 1 }))
+            .unwrap();
+        let error = client
+            .notify::<TestNotification>(json!({ "value": 2 }))
+            .unwrap_err();
+
+        assert!(matches!(error, ClientError::OutboundOverloaded));
+        assert_eq!(queue.depth(), 1, "the rejected message consumes no slot");
+    }
+
+    #[test]
+    fn every_queued_message_accounts_for_its_encoded_bytes() {
+        let message = queue_test_message();
+        let encoded_bytes = crate::transport::envelope::serialize(&message)
+            .expect("the test message encodes")
+            .len();
+        let (queue, _rx) = OutboundQueue::bounded(2, encoded_bytes);
+
+        queue.send(message).unwrap();
+        assert_eq!(queue.encoded_bytes(), encoded_bytes);
+        assert!(matches!(
+            queue.send(queue_test_message()),
+            Err(OutboundSendError::Overloaded)
+        ));
+        assert_eq!(queue.depth(), 1, "the rejected message consumes no slot");
+        assert_eq!(
+            queue.encoded_bytes(),
+            encoded_bytes,
+            "the rejected message consumes no bytes"
+        );
+    }
+
+    #[test]
+    fn a_required_send_that_cannot_fit_requests_the_failure_close_path() {
+        let (queue, _rx) = OutboundQueue::bounded(1, usize::MAX);
+        queue.send(queue_test_message()).unwrap();
+
+        assert!(matches!(
+            queue.send_required(queue_test_message()),
+            Err(OutboundSendError::Overloaded)
+        ));
+        assert!(
+            queue.failure().is_cancelled(),
+            "a response or cancellation that cannot be queued must close the connection"
+        );
+        assert_eq!(queue.depth(), 1, "the failed required send is not retained");
+    }
+
+    #[tokio::test]
+    async fn an_overloaded_request_fails_explicitly_without_leaking_its_registry_entry() {
+        let (queue, _rx) = OutboundQueue::bounded(1, usize::MAX);
+        let client = Client::new(queue, OutboundRegistry::default());
+        client
+            .notify::<TestNotification>(json!({ "value": 1 }))
+            .unwrap();
+
+        let result = client.request::<TestRequest>(json!({})).await;
+
+        assert!(matches!(result, Err(ClientError::OutboundOverloaded)));
+        assert_eq!(client.outbound_registry().pending_len(), 0);
+    }
+
+    #[tokio::test]
+    async fn cancellation_that_cannot_fit_requests_the_failure_close_path() {
+        let (queue, _rx) = OutboundQueue::bounded(1, usize::MAX);
+        let client = Client::new(queue.clone(), OutboundRegistry::default());
+        {
+            let pending = client.request::<TestRequest>(json!({}));
+            futures_util::pin_mut!(pending);
+            assert!(futures_util::poll!(pending.as_mut()).is_pending());
+        }
+
+        assert_eq!(client.outbound_registry().pending_len(), 0);
+        assert!(
+            queue.failure().is_cancelled(),
+            "a required $/cancelRequest that cannot fit must close the connection"
         );
     }
 }

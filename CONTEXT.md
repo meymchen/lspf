@@ -54,6 +54,12 @@ replaces the admitted request. Completion, peer cancellation, and connection
 close release registry ownership immediately; the admission permit remains
 attached to admitted handler tasks until completion or abort and is released
 when the engine reaps the finished task handle.
+Outbound admission charges one message and its exact encoded JSON-RPC envelope
+bytes until the transport attempt finishes. Ordinary `Client` sends fail with
+`ClientError::OutboundOverloaded` when either budget is full. Required
+responses, protocol errors, and `$/cancelRequest` use the connection's single
+failure-close path if admission fails; normal close stops admission and drains
+the already-accounted queue.
 _Avoid_: Concurrency limit (only one budget), resource options (does not express
 the enforced contract).
 
@@ -172,7 +178,9 @@ so a handle that outlives the connection observes an unknown token.
 `Client` is only a handle — the outbound queue, ID allocator, and pending
 registry are owned by the connection's protocol engine and covered by the
 connection's [[Resource policy]]. `Client` itself neither owns nor configures
-those resources.
+those resources. An ordinary send that would exceed the policy returns
+`ClientError::OutboundOverloaded` without retaining the message or leaking a
+pending request entry.
 _Avoid_: Connection (that is the transport level), sender.
 
 **Command**:
@@ -210,11 +218,14 @@ _Avoid_: Connection (overloaded with TCP-specific meaning), socket
 How one connection ended, returned by `Server::serve` over a [[Transport]]
 (ADR 0018). Reader EOF, a writer failure, `exit`, and a fatal initialize
 failure all converge on the protocol engine's single close operation; the
-first cause to arrive becomes the reported `Outcome`, which also carries the
-LSP exit code (0 only after a successful `shutdown`). Serving returns the
-`Outcome` rather than terminating the process — mapping it to a process
-disposition belongs to the server binary, and `lspf::stdio(server).serve()`
-reports the same `Outcome` as `Server::serve` over any other [[Transport]].
+first ordinary cause to arrive becomes the reported `Outcome`. Required
+outbound admission failure is the exception: if it occurs before close
+quiesces, the result is `WriterFailed` even when another cause arrived first
+(ADR 0026). The outcome also carries the LSP exit code (0 only after a
+successful `shutdown`). Serving returns the `Outcome` rather than terminating
+the process — mapping it to a process disposition belongs to the server binary,
+and `lspf::stdio(server).serve()` reports the same `Outcome` as
+`Server::serve` over any other [[Transport]].
 _Avoid_: Exit code (only one part of it), close reason, status.
 
 **Runtime**:
