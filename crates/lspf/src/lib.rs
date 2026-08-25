@@ -61,6 +61,7 @@ mod resource_policy;
 mod runtime;
 mod service;
 mod sync;
+mod telemetry;
 mod transport;
 mod uri_key;
 mod workspace;

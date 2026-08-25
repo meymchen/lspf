@@ -45,6 +45,9 @@ wasm-bindgen-futures = { workspace = true, optional = true }
 # target. Keeping this target-specific also lets the public-API gate inspect
 # WASM cfg branches with host rustdoc without compiling WASM-only internals.
 gloo-timers = { version = "0.3", optional = true, features = ["futures"] }
+# `std::time::Instant::now()` panics on `wasm32-unknown-unknown`; web-time is
+# API-compatible and uses the Worker-global Performance clock instead.
+web-time = "1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # The Tokio runtime behind every native Transport (ADR 0013): optional, pulled
@@ -248,6 +251,10 @@ required-features = ["runtime-tokio"]
 
 [[test]]
 name = "session_close"
+required-features = ["runtime-tokio"]
+
+[[test]]
+name = "tracing_schema"
 required-features = ["runtime-tokio"]
 
 [[test]]
