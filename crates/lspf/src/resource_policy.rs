@@ -62,9 +62,13 @@ impl fmt::Display for ResourcePolicyField {
 /// and `document text capacity exhausted`, respectively. Rejection skips the
 /// notification hook and preserves the prior snapshot; `didClose` and
 /// connection shutdown release the corresponding accounting.
-/// Setting `outbound_request_timeout` to `None` explicitly disables that
-/// deadline. All numeric budgets and enabled deadlines must be greater than
-/// zero; invalid policies are rejected by [`ServerBuilder::build`](crate::ServerBuilder::build).
+/// When an outbound request reaches its deadline, its pending entry is removed,
+/// the caller receives [`ClientError::Timeout`](crate::ClientError::Timeout),
+/// and one `$/cancelRequest` is attempted if the request was enqueued. Late
+/// responses are ignored and request IDs are never reused. Setting
+/// `outbound_request_timeout` to `None` explicitly disables the deadline. All
+/// numeric budgets and enabled deadlines must be greater than zero; invalid
+/// policies are rejected by [`ServerBuilder::build`](crate::ServerBuilder::build).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ResourcePolicy {
     /// Maximum admitted inbound requests for the connection.

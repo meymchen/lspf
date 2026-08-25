@@ -159,10 +159,11 @@ check_surface() {
     if [[ $target != native ]]; then
         target_name=$target
         # cargo-semver-checks cannot currently obtain wasm32 crate filenames
-        # from rustc. Build rustdoc on the host while selecting the crate's
-        # wasm32 cfg branches; the normal wasm jobs compile the real target.
+        # from rustc. Let host rustdoc select the crate's wasm32 cfg branches,
+        # but do not inject the synthetic cfg through RUSTFLAGS: Cargo would
+        # then also compile dependencies as if the host were wasm32. The normal
+        # wasm jobs compile the real target.
         environment+=(
-            'RUSTFLAGS=--cfg target_arch="wasm32" -Aexplicit_builtin_cfgs_in_flags'
             'RUSTDOCFLAGS=--cfg target_arch="wasm32" -Aexplicit_builtin_cfgs_in_flags'
         )
     fi

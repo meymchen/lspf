@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use bytes::Bytes;
 use futures_channel::{
@@ -109,6 +110,26 @@ impl PendingGuard {
             enqueued: false,
         }
     }
+
+    /// Claim an unanswered request and notify the peer that it was cancelled.
+    ///
+    /// The registry removal is the completion race: if it succeeds, this
+    /// guard owns expiry or abandonment; if it fails, a response or connection
+    /// close already owns completion and the receiver must be awaited.
+    fn cancel_if_pending(&mut self) -> bool {
+        if self.client.outbound.remove(self.id).is_none() {
+            return false;
+        }
+        if self.enqueued {
+            let _ = self
+                .client
+                .notify_required::<lsp_types::notification::Cancel>(lsp_types::CancelParams {
+                    id: lsp_types::NumberOrString::Number(self.id as i32),
+                });
+        }
+        self.enqueued = false;
+        true
+    }
 }
 
 impl Drop for PendingGuard {
@@ -116,13 +137,27 @@ impl Drop for PendingGuard {
         // Only a still-present entry means the request never completed. Remove
         // it and, if it reached the wire, cancel it with the peer. Errors are
         // ignored: the connection may already be closing.
-        if self.client.outbound.remove(self.id).is_some() && self.enqueued {
-            let _ = self
-                .client
-                .notify_required::<lsp_types::notification::Cancel>(lsp_types::CancelParams {
-                    id: lsp_types::NumberOrString::Number(self.id as i32),
-                });
-        }
+        self.cancel_if_pending();
+    }
+}
+
+#[cfg(any(
+    all(not(target_arch = "wasm32"), feature = "runtime-tokio"),
+    target_arch = "wasm32",
+))]
+async fn wait_for_response_until(
+    receiver: &mut oneshot::Receiver<PendingOutcome>,
+    timeout: Duration,
+) -> Option<Result<PendingOutcome, oneshot::Canceled>> {
+    use futures_util::{FutureExt, pin_mut, select_biased};
+
+    let response = receiver.fuse();
+    let deadline = crate::runtime::sleep(timeout).fuse();
+    pin_mut!(response, deadline);
+
+    select_biased! {
+        outcome = response => Some(outcome),
+        () = deadline => None,
     }
 }
 
@@ -497,6 +532,7 @@ impl Notification for TelemetryEvent {
 pub struct Client {
     outgoing: OutboundQueue,
     outbound: OutboundRegistry,
+    outbound_request_timeout: Option<Duration>,
     progress: ProgressRegistry,
     state: Arc<ClientState>,
     trace: SharedTrace,
@@ -509,10 +545,15 @@ impl fmt::Debug for Client {
 }
 
 impl Client {
-    pub(crate) fn new(outgoing: OutboundQueue, outbound: OutboundRegistry) -> Self {
+    pub(crate) fn new(
+        outgoing: OutboundQueue,
+        outbound: OutboundRegistry,
+        outbound_request_timeout: Option<Duration>,
+    ) -> Self {
         Self {
             outgoing,
             outbound,
+            outbound_request_timeout,
             progress: ProgressRegistry::default(),
             state: Arc::new(ClientState {
                 phase: Mutex::new(Phase::Open),
@@ -673,6 +714,8 @@ impl Client {
     /// - [`ClientError::Serialize`] if the params cannot be encoded.
     /// - [`ClientError::Cancelled`] if the session closes before the peer
     ///   answers.
+    /// - [`ClientError::Timeout`] if the configured outbound-request deadline
+    ///   expires before the peer answers.
     /// - [`ClientError::Remote`] if the peer replies with a JSON-RPC error.
     /// - [`ClientError::Deserialize`] if the success result cannot be decoded.
     pub async fn request<R>(&self, params: R::Params) -> Result<R::Result, ClientError>
@@ -747,8 +790,32 @@ impl Client {
         }
         guard.enqueued = true;
 
-        // 5. Await the response.
-        match rx.await.map_err(|_| ClientError::OutboundClosed)? {
+        // 5. Await the response, bounded by the connection policy unless the
+        //    deadline was explicitly disabled. Expiry atomically removes the
+        //    registry entry before reporting Timeout; if response completion
+        //    won that race, await and return that already-owned outcome.
+        #[cfg(any(
+            all(not(target_arch = "wasm32"), feature = "runtime-tokio"),
+            target_arch = "wasm32",
+        ))]
+        let mut rx = rx;
+        let outcome = match self.outbound_request_timeout {
+            #[cfg(any(
+                all(not(target_arch = "wasm32"), feature = "runtime-tokio"),
+                target_arch = "wasm32",
+            ))]
+            Some(timeout) => match wait_for_response_until(&mut rx, timeout).await {
+                Some(outcome) => outcome,
+                None if guard.cancel_if_pending() => return Err(ClientError::Timeout),
+                None => rx.await,
+            },
+            #[cfg(all(not(target_arch = "wasm32"), not(feature = "runtime-tokio")))]
+            Some(_) => rx.await,
+            None => rx.await,
+        }
+        .map_err(|_| ClientError::OutboundClosed)?;
+
+        match outcome {
             PendingOutcome::Response(Ok(bytes)) => {
                 serde_json::from_slice::<R::Result>(&bytes).map_err(ClientError::Deserialize)
             }
@@ -773,7 +840,7 @@ impl Client {
     /// [`ClientError::Remote`] if the client answers with a JSON-RPC error;
     /// [`ClientError::Deserialize`] if the success result cannot be decoded;
     /// [`ClientError::Cancelled`] if the session closes before the client
-    /// answers.
+    /// answers; [`ClientError::Timeout`] if the configured deadline expires.
     pub async fn show_document(
         &self,
         params: ShowDocumentParams,
@@ -798,7 +865,7 @@ impl Client {
     /// [`ClientError::Remote`] if the client answers with a JSON-RPC error;
     /// [`ClientError::Deserialize`] if the success result cannot be decoded;
     /// [`ClientError::Cancelled`] if the session closes before the client
-    /// answers.
+    /// answers; [`ClientError::Timeout`] if the configured deadline expires.
     pub async fn show_message_request(
         &self,
         params: ShowMessageRequestParams,
@@ -824,7 +891,7 @@ impl Client {
     /// [`ClientError::Remote`] if the client answers with a JSON-RPC error;
     /// [`ClientError::Deserialize`] if the success result cannot be decoded;
     /// [`ClientError::Cancelled`] if the session closes before the client
-    /// answers.
+    /// answers; [`ClientError::Timeout`] if the configured deadline expires.
     pub async fn apply_edit(
         &self,
         params: ApplyWorkspaceEditParams,
@@ -852,7 +919,7 @@ impl Client {
     /// [`ClientError::Remote`] if the client answers with a JSON-RPC error;
     /// [`ClientError::Deserialize`] if the success result cannot be decoded;
     /// [`ClientError::Cancelled`] if the session closes before the client
-    /// answers.
+    /// answers; [`ClientError::Timeout`] if the configured deadline expires.
     pub async fn configuration(
         &self,
         params: ConfigurationParams,
@@ -878,7 +945,8 @@ impl Client {
     /// request never reaches the wire; [`ClientError::Remote`] if the client
     /// answers with a JSON-RPC error; [`ClientError::Deserialize`] if the
     /// success result cannot be decoded; [`ClientError::Cancelled`] if the
-    /// session closes before the client answers.
+    /// session closes before the client answers; [`ClientError::Timeout`] if
+    /// the configured deadline expires.
     pub async fn workspace_folders(&self) -> Result<Option<Vec<WorkspaceFolder>>, ClientError> {
         self.request::<WorkspaceFoldersRequest>(()).await
     }
@@ -905,7 +973,7 @@ impl Client {
     /// [`ClientError::Remote`] if the client answers with a JSON-RPC error;
     /// [`ClientError::Deserialize`] if the success result cannot be decoded;
     /// [`ClientError::Cancelled`] if the session closes before the client
-    /// answers.
+    /// answers; [`ClientError::Timeout`] if the configured deadline expires.
     pub async fn register_capability(&self, params: RegistrationParams) -> Result<(), ClientError> {
         self.request::<RegisterCapability>(params).await
     }
@@ -933,7 +1001,7 @@ impl Client {
     /// [`ClientError::Remote`] if the client answers with a JSON-RPC error;
     /// [`ClientError::Deserialize`] if the success result cannot be decoded;
     /// [`ClientError::Cancelled`] if the session closes before the client
-    /// answers.
+    /// answers; [`ClientError::Timeout`] if the configured deadline expires.
     pub async fn unregister_capability(
         &self,
         params: UnregistrationParams,
@@ -957,7 +1025,8 @@ impl Client {
     /// request never reaches the wire; [`ClientError::Remote`] if the client
     /// answers with a JSON-RPC error; [`ClientError::Deserialize`] if the
     /// success result cannot be decoded; [`ClientError::Cancelled`] if the
-    /// session closes before the client answers.
+    /// session closes before the client answers; [`ClientError::Timeout`] if
+    /// the configured deadline expires.
     pub async fn code_lens_refresh(&self) -> Result<(), ClientError> {
         self.request::<CodeLensRefresh>(()).await
     }
@@ -979,7 +1048,8 @@ impl Client {
     /// request never reaches the wire; [`ClientError::Remote`] if the client
     /// answers with a JSON-RPC error; [`ClientError::Deserialize`] if the
     /// success result cannot be decoded; [`ClientError::Cancelled`] if the
-    /// session closes before the client answers.
+    /// session closes before the client answers; [`ClientError::Timeout`] if
+    /// the configured deadline expires.
     pub async fn diagnostic_refresh(&self) -> Result<(), ClientError> {
         self.request::<WorkspaceDiagnosticRefresh>(()).await
     }
@@ -1000,7 +1070,8 @@ impl Client {
     /// request never reaches the wire; [`ClientError::Remote`] if the client
     /// answers with a JSON-RPC error; [`ClientError::Deserialize`] if the
     /// success result cannot be decoded; [`ClientError::Cancelled`] if the
-    /// session closes before the client answers.
+    /// session closes before the client answers; [`ClientError::Timeout`] if
+    /// the configured deadline expires.
     pub async fn inlay_hint_refresh(&self) -> Result<(), ClientError> {
         self.request::<InlayHintRefreshRequest>(()).await
     }
@@ -1021,7 +1092,8 @@ impl Client {
     /// request never reaches the wire; [`ClientError::Remote`] if the client
     /// answers with a JSON-RPC error; [`ClientError::Deserialize`] if the
     /// success result cannot be decoded; [`ClientError::Cancelled`] if the
-    /// session closes before the client answers.
+    /// session closes before the client answers; [`ClientError::Timeout`] if
+    /// the configured deadline expires.
     pub async fn inline_value_refresh(&self) -> Result<(), ClientError> {
         self.request::<InlineValueRefreshRequest>(()).await
     }
@@ -1042,7 +1114,8 @@ impl Client {
     /// request never reaches the wire; [`ClientError::Remote`] if the client
     /// answers with a JSON-RPC error; [`ClientError::Deserialize`] if the
     /// success result cannot be decoded; [`ClientError::Cancelled`] if the
-    /// session closes before the client answers.
+    /// session closes before the client answers; [`ClientError::Timeout`] if
+    /// the configured deadline expires.
     pub async fn semantic_tokens_refresh(&self) -> Result<(), ClientError> {
         self.request::<SemanticTokensRefresh>(()).await
     }
@@ -1068,7 +1141,8 @@ impl Client {
     /// request never reaches the wire; [`ClientError::Remote`] if the client
     /// answers with a JSON-RPC error; [`ClientError::Deserialize`] if the
     /// success result cannot be decoded; [`ClientError::Cancelled`] if the
-    /// session closes before the client answers.
+    /// session closes before the client answers; [`ClientError::Timeout`] if
+    /// the configured deadline expires.
     #[cfg(feature = "proposed")]
     pub async fn refresh_folding_ranges(&self) -> Result<(), ClientError> {
         self.request::<crate::proposed::FoldingRangeRefresh>(())
@@ -1097,7 +1171,8 @@ impl Client {
     /// request never reaches the wire; [`ClientError::Remote`] if the client
     /// answers with a JSON-RPC error; [`ClientError::Deserialize`] if the
     /// success result cannot be decoded; [`ClientError::Cancelled`] if the
-    /// session closes before the client answers.
+    /// session closes before the client answers; [`ClientError::Timeout`] if
+    /// the configured deadline expires.
     #[cfg(feature = "proposed")]
     pub async fn refresh_text_document_content(
         &self,
@@ -1223,7 +1298,7 @@ mod tests {
 
     fn make_client() -> (Client, UnboundedReceiver<RawMessage>) {
         let (outgoing, receiver) = OutboundQueue::new(crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD);
-        let client = Client::new(outgoing, OutboundRegistry::default());
+        let client = Client::new(outgoing, OutboundRegistry::default(), None);
         (client, receiver)
     }
 
@@ -1231,7 +1306,7 @@ mod tests {
     fn serialization_failure_is_reported_without_enqueuing() {
         let (outgoing, mut receiver) =
             OutboundQueue::new(crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD);
-        let client = Client::new(outgoing, OutboundRegistry::default());
+        let client = Client::new(outgoing, OutboundRegistry::default(), None);
 
         assert!(matches!(
             client.notify::<FailingNotification>(FailsToSerialize),
@@ -1244,7 +1319,7 @@ mod tests {
     fn closed_connection_is_reported_before_enqueue() {
         let (outgoing, mut receiver) =
             OutboundQueue::new(crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD);
-        let client = Client::new(outgoing, OutboundRegistry::default());
+        let client = Client::new(outgoing, OutboundRegistry::default(), None);
         client.close_connection();
 
         assert!(matches!(
@@ -1258,7 +1333,7 @@ mod tests {
     fn outbound_closure_rejects_every_new_notification() {
         let (outgoing, mut receiver) =
             OutboundQueue::new(crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD);
-        let client = Client::new(outgoing, OutboundRegistry::default());
+        let client = Client::new(outgoing, OutboundRegistry::default(), None);
         client.close_connection();
         client.close_outbound();
 
@@ -1681,7 +1756,7 @@ mod tests {
         // A client whose outbound queue is closed (receiver dropped, so all
         // sends fail).
         let (outgoing, receiver) = OutboundQueue::new(crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD);
-        let client = Client::new(outgoing, OutboundRegistry::default());
+        let client = Client::new(outgoing, OutboundRegistry::default(), None);
         drop(receiver);
         let client2 = client.clone();
 
@@ -1843,7 +1918,7 @@ mod tests {
     #[test]
     fn ordinary_sends_fail_explicitly_when_the_message_budget_is_full() {
         let (queue, _rx) = OutboundQueue::bounded(1, usize::MAX);
-        let client = Client::new(queue.clone(), OutboundRegistry::default());
+        let client = Client::new(queue.clone(), OutboundRegistry::default(), None);
 
         client
             .notify::<TestNotification>(json!({ "value": 1 }))
@@ -1897,7 +1972,7 @@ mod tests {
     #[tokio::test]
     async fn an_overloaded_request_fails_explicitly_without_leaking_its_registry_entry() {
         let (queue, _rx) = OutboundQueue::bounded(1, usize::MAX);
-        let client = Client::new(queue, OutboundRegistry::default());
+        let client = Client::new(queue, OutboundRegistry::default(), None);
         client
             .notify::<TestNotification>(json!({ "value": 1 }))
             .unwrap();
@@ -1911,7 +1986,7 @@ mod tests {
     #[tokio::test]
     async fn cancellation_that_cannot_fit_requests_the_failure_close_path() {
         let (queue, _rx) = OutboundQueue::bounded(1, usize::MAX);
-        let client = Client::new(queue.clone(), OutboundRegistry::default());
+        let client = Client::new(queue.clone(), OutboundRegistry::default(), None);
         {
             let pending = client.request::<TestRequest>(json!({}));
             futures_util::pin_mut!(pending);

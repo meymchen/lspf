@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - [**breaking**] Bound outbound queues by message count and encoded bytes,
   returning `ClientError::OutboundOverloaded` when ordinary sends exceed a
   connection budget.
+- [**breaking**] Apply the configured outbound-request deadline and return
+  `ClientError::Timeout` after cancelling an expired request. Set
+  `ResourcePolicy::outbound_request_timeout` to `None` to disable the deadline.
 
 ## [0.6.0](https://github.com/meymchen/lspf/compare/v0.5.3...v0.6.0) - 2026-08-24
 
