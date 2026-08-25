@@ -9,6 +9,13 @@ use ropey::Rope;
 
 use crate::uri_key::UriKey;
 
+const DOCUMENT_COUNT_CAPACITY_EXHAUSTED: &str = "document count capacity exhausted";
+const DOCUMENT_TEXT_CAPACITY_EXHAUSTED: &str = "document text capacity exhausted";
+
+fn document_text_capacity_exhausted() -> crate::LspError {
+    crate::LspError::invalid_request(DOCUMENT_TEXT_CAPACITY_EXHAUSTED)
+}
+
 /// Negotiated meaning of `Position.character` (ADR 0016).
 ///
 /// LSP defaults to UTF-16; lspf prefers UTF-8 when the client offers it.
@@ -161,8 +168,12 @@ impl Document {
         &mut self,
         encoding: PositionEncoding,
         change: TextDocumentContentChangeEvent,
+        max_bytes: usize,
     ) -> std::result::Result<(), crate::LspError> {
         let Some(range) = change.range else {
+            if change.text.len() > max_bytes {
+                return Err(document_text_capacity_exhausted());
+            }
             self.text = Rope::from_str(&change.text);
             return Ok(());
         };
@@ -180,6 +191,13 @@ impl Document {
                 "range end precedes range start",
             ));
         }
+        let retained_bytes = self.text.len_bytes() - (end_offset - start_offset);
+        if retained_bytes
+            .checked_add(change.text.len())
+            .is_none_or(|bytes| bytes > max_bytes)
+        {
+            return Err(document_text_capacity_exhausted());
+        }
         let start_char = self.text.byte_to_char(start_offset);
         let end_char = self.text.byte_to_char(end_offset);
         self.text.remove(start_char..end_char);
@@ -188,13 +206,28 @@ impl Document {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct DocumentsInner {
     /// Identity is the normalized [`UriKey`], so equivalent spellings of one
     /// URI address one document; each [`Document`] still carries the original
     /// URI the client opened it with.
     by_uri: HashMap<UriKey, Document>,
     encoding: PositionEncoding,
+    max_documents: usize,
+    max_document_bytes: usize,
+    document_bytes: usize,
+}
+
+impl Default for DocumentsInner {
+    fn default() -> Self {
+        Self {
+            by_uri: HashMap::new(),
+            encoding: PositionEncoding::default(),
+            max_documents: crate::ResourcePolicy::default().max_documents,
+            max_document_bytes: crate::ResourcePolicy::default().max_document_bytes,
+            document_bytes: 0,
+        }
+    }
 }
 
 /// Concurrency-safe handle to every tracked [`Document`], owned by the
@@ -213,15 +246,46 @@ pub(crate) struct Documents {
 }
 
 impl Documents {
+    #[cfg(test)]
     pub(crate) fn new() -> Self {
         Self::default()
     }
 
+    pub(crate) fn with_resource_policy(policy: crate::ResourcePolicy) -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(DocumentsInner {
+                max_documents: policy.max_documents,
+                max_document_bytes: policy.max_document_bytes,
+                ..DocumentsInner::default()
+            })),
+        }
+    }
+
     /// Open or replace a document in the store.
-    pub(crate) fn open(&self, item: TextDocumentItem) {
+    pub(crate) fn open(&self, item: TextDocumentItem) -> std::result::Result<(), crate::LspError> {
         let mut inner = self.inner.write().unwrap();
+        let key = UriKey::new(&item.uri);
+        if !inner.by_uri.contains_key(&key) && inner.by_uri.len() >= inner.max_documents {
+            return Err(crate::LspError::invalid_request(
+                DOCUMENT_COUNT_CAPACITY_EXHAUSTED,
+            ));
+        }
+
+        let replaced_bytes = inner
+            .by_uri
+            .get(&key)
+            .map(|document| document.text.len_bytes())
+            .unwrap_or(0);
+        let retained_bytes = inner.document_bytes - replaced_bytes;
+        let Some(document_bytes) = retained_bytes.checked_add(item.text.len()) else {
+            return Err(document_text_capacity_exhausted());
+        };
+        if document_bytes > inner.max_document_bytes {
+            return Err(document_text_capacity_exhausted());
+        }
+
         inner.by_uri.insert(
-            UriKey::new(&item.uri),
+            key,
             Document {
                 uri: item.uri,
                 language_id: item.language_id,
@@ -229,6 +293,8 @@ impl Documents {
                 text: Rope::from_str(&item.text),
             },
         );
+        inner.document_bytes = document_bytes;
+        Ok(())
     }
 
     /// Read a snapshot of a document by URI.
@@ -240,7 +306,18 @@ impl Documents {
     /// Remove a document from the store. Returns the removed document, if any.
     pub(crate) fn close(&self, uri: &Uri) -> Option<Document> {
         let mut inner = self.inner.write().unwrap();
-        inner.by_uri.remove(&UriKey::new(uri))
+        let removed = inner.by_uri.remove(&UriKey::new(uri));
+        if let Some(document) = &removed {
+            inner.document_bytes -= document.text.len_bytes();
+        }
+        removed
+    }
+
+    /// Release every connection-owned document and its byte accounting.
+    pub(crate) fn clear(&self) {
+        let mut inner = self.inner.write().unwrap();
+        inner.by_uri = HashMap::new();
+        inner.document_bytes = 0;
     }
 
     /// Apply one `didChange` notification's content changes in order,
@@ -259,19 +336,24 @@ impl Documents {
     ) -> std::result::Result<(), crate::LspError> {
         let mut inner = self.inner.write().unwrap();
         let encoding = inner.encoding;
-        let doc = inner
+        let key = UriKey::new(uri);
+        let document = inner
             .by_uri
-            .get_mut(&UriKey::new(uri))
+            .get(&key)
+            .cloned()
             .ok_or_else(|| crate::LspError::invalid_request("document not found"))?;
+        let retained_bytes = inner.document_bytes - document.text.len_bytes();
+        let available_document_bytes = inner.max_document_bytes - retained_bytes;
 
         // `Rope` clones share their nodes, so the working copy costs little
         // more than the edits it actually makes.
-        let mut updated = doc.clone();
+        let mut updated = document;
         for change in changes {
-            updated.apply_change(encoding, change)?;
+            updated.apply_change(encoding, change, available_document_bytes)?;
         }
         updated.version = Some(version);
-        *doc = updated;
+        inner.document_bytes = retained_bytes + updated.text.len_bytes();
+        inner.by_uri.insert(key, updated);
         Ok(())
     }
 
@@ -422,7 +504,8 @@ mod tests {
     fn opened(name: &str, text: &str) -> (Documents, Uri) {
         let docs = Documents::new();
         let u = uri(name);
-        docs.open(text_item(u.clone(), text));
+        docs.open(text_item(u.clone(), text))
+            .expect("the default policy accepts the test document");
         (docs, u)
     }
 
@@ -487,7 +570,8 @@ mod tests {
     fn equivalent_uri_spellings_resolve_to_one_document() {
         let docs = Documents::new();
         let original = uri("file:///C%3A/Users/Me/a.rs");
-        docs.open(text_item(original.clone(), "fn main() {}"));
+        docs.open(text_item(original.clone(), "fn main() {}"))
+            .expect("the default policy accepts the test document");
 
         for spelling in [
             "file:///c:/Users/Me/a.rs",
@@ -510,7 +594,8 @@ mod tests {
     #[test]
     fn path_case_still_distinguishes_documents() {
         let docs = Documents::new();
-        docs.open(text_item(uri("file:///home/Foo.rs"), "a"));
+        docs.open(text_item(uri("file:///home/Foo.rs"), "a"))
+            .expect("the default policy accepts the test document");
         assert!(
             docs.get(&uri("file:///home/foo.rs")).is_none(),
             "ordinary path case is not normalized"
@@ -520,7 +605,8 @@ mod tests {
     #[test]
     fn change_and_close_resolve_through_the_same_normalized_key() {
         let docs = Documents::new();
-        docs.open(text_item(uri("file:///C%3A/w/a.rs"), "hello"));
+        docs.open(text_item(uri("file:///C%3A/w/a.rs"), "hello"))
+            .expect("the default policy accepts the test document");
 
         docs.apply_changes(&uri("file:///c:/w/a.rs"), 2, [change(None, "goodbye")])
             .expect("the change names the same document by another spelling");
@@ -541,7 +627,8 @@ mod tests {
         let docs = Documents::new();
         let docs2 = docs.clone();
         let u = uri("file:///shared.txt");
-        docs.open(text_item(u.clone(), "shared"));
+        docs.open(text_item(u.clone(), "shared"))
+            .expect("the default policy accepts the test document");
 
         assert_eq!(docs2.get(&u).unwrap().text(), "shared");
     }
@@ -553,8 +640,12 @@ mod tests {
         let first = Documents::new();
         let second = Documents::new();
         let u = uri("file:///shared.txt");
-        first.open(text_item(u.clone(), "first editor"));
-        second.open(text_item(u.clone(), "second editor"));
+        first
+            .open(text_item(u.clone(), "first editor"))
+            .expect("the default policy accepts the first test document");
+        second
+            .open(text_item(u.clone(), "second editor"))
+            .expect("the default policy accepts the second test document");
 
         first
             .apply_changes(&u, 2, [change(None, "first editor changed")])
@@ -750,7 +841,8 @@ mod tests {
             language_id: "plaintext".to_string(),
             version: 25,
             text: "contents".to_string(),
-        });
+        })
+        .expect("the default policy accepts the test document");
 
         docs.apply_changes(&u, 27, [change(None, "contents")])
             .expect("a no-op replacement still records its version");

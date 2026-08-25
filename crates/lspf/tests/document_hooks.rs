@@ -32,8 +32,8 @@ use lspf::types::{
     WillSaveTextDocumentParams,
 };
 use lspf::{
-    BuildError, CancellationToken, Context, LspError, RawMessage, RequestId, Server, Transport,
-    TransportError, TransportReader, TransportWriter,
+    BuildError, CancellationToken, Context, LspError, RawMessage, RequestId, ResourcePolicy,
+    Server, Transport, TransportError, TransportReader, TransportWriter,
 };
 
 // --- What each hook observed -------------------------------------------------
@@ -333,6 +333,10 @@ fn probe_request(id: i32, uri: &str) -> RawMessage {
 /// Every document hook plus the probe request, so one server can observe all
 /// four notifications.
 fn observing_server(seen: &Log) -> Server<AppState> {
+    observing_server_with_policy(seen, ResourcePolicy::default())
+}
+
+fn observing_server_with_policy(seen: &Log, policy: ResourcePolicy) -> Server<AppState> {
     Server::builder(AppState {
         seen: Arc::clone(seen),
     })
@@ -341,6 +345,7 @@ fn observing_server(seen: &Log) -> Server<AppState> {
     .notification::<DidCloseTextDocument, _, _>(on_did_close)
     .notification::<DidSaveTextDocument, _, _>(on_did_save)
     .request::<Probe, _, _>(probe)
+    .resource_policy(policy)
     .build()
     .expect("one hook per built-in notification is a valid registration set")
 }
@@ -438,6 +443,220 @@ async fn each_document_hook_observes_the_post_mutation_documents() {
             },
         ],
         "every hook runs once, in receipt order, observing post-mutation state"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn document_count_policy_rejects_excess_opens_until_close_releases_the_slot() {
+    let seen: Log = Arc::default();
+    let server = observing_server_with_policy(
+        &seen,
+        ResourcePolicy {
+            max_documents: 1,
+            ..ResourcePolicy::default()
+        },
+    );
+
+    let outbox = drive(
+        server,
+        vec![
+            initialize_request(1),
+            did_open("file:///first.txt", "first snapshot"),
+            did_open("file:///second.txt", "rejected snapshot"),
+            probe_request(2, "file:///first.txt"),
+            probe_request(3, "file:///second.txt"),
+            did_close("file:///first.txt"),
+            did_open("file:///second.txt", "accepted after close"),
+            probe_request(4, "file:///second.txt"),
+        ],
+    )
+    .await;
+
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec![
+            Seen::Open {
+                text: Some("first snapshot".to_string()),
+                version: Some(1),
+            },
+            Seen::Close {
+                still_present: false,
+            },
+            Seen::Open {
+                text: Some("accepted after close".to_string()),
+                version: Some(1),
+            },
+        ],
+        "an over-count open is rejected before its hook and close frees the slot",
+    );
+    assert_eq!(probed(&outbox, 2).text.as_deref(), Some("first snapshot"));
+    assert_eq!(probed(&outbox, 3).text, None);
+    assert_eq!(
+        probed(&outbox, 4).text.as_deref(),
+        Some("accepted after close")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn document_byte_policy_rejects_opens_atomically_until_close_releases_the_bytes() {
+    let seen: Log = Arc::default();
+    let server = observing_server_with_policy(
+        &seen,
+        ResourcePolicy {
+            max_document_bytes: 10,
+            ..ResourcePolicy::default()
+        },
+    );
+
+    let outbox = drive(
+        server,
+        vec![
+            initialize_request(1),
+            did_open("file:///first.txt", "12345"),
+            did_open("file:///second.txt", "abcde"),
+            did_open("file:///third.txt", "x"),
+            did_open("file:///first.txt", "123456"),
+            probe_request(2, "file:///first.txt"),
+            probe_request(3, "file:///third.txt"),
+            did_close("file:///second.txt"),
+            did_open("file:///first.txt", "1234567890"),
+            probe_request(4, "file:///first.txt"),
+        ],
+    )
+    .await;
+
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec![
+            Seen::Open {
+                text: Some("12345".to_string()),
+                version: Some(1),
+            },
+            Seen::Open {
+                text: Some("abcde".to_string()),
+                version: Some(1),
+            },
+            Seen::Close {
+                still_present: false,
+            },
+            Seen::Open {
+                text: Some("1234567890".to_string()),
+                version: Some(1),
+            },
+        ],
+        "over-byte opens are rejected before their hooks and close releases bytes",
+    );
+    assert_eq!(
+        probed(&outbox, 2).text.as_deref(),
+        Some("12345"),
+        "a rejected replacement preserves the prior snapshot",
+    );
+    assert_eq!(probed(&outbox, 3).text, None);
+    assert_eq!(probed(&outbox, 4).text.as_deref(), Some("1234567890"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn document_byte_policy_rejects_oversized_changes_without_replacing_the_snapshot() {
+    let seen: Log = Arc::default();
+    let server = observing_server_with_policy(
+        &seen,
+        ResourcePolicy {
+            max_document_bytes: 10,
+            ..ResourcePolicy::default()
+        },
+    );
+
+    let outbox = drive(
+        server,
+        vec![
+            initialize_request(1),
+            did_open("file:///first.txt", "12345"),
+            did_open("file:///second.txt", "abcde"),
+            did_change_full("file:///first.txt", 2, "123456"),
+            probe_request(2, "file:///first.txt"),
+            did_close("file:///second.txt"),
+            notification(
+                "textDocument/didChange",
+                json!({
+                    "textDocument": { "uri": "file:///first.txt", "version": 3 },
+                    "contentChanges": [
+                        { "text": "12345678901" },
+                        { "text": "ok" }
+                    ]
+                }),
+            ),
+            probe_request(3, "file:///first.txt"),
+            did_change_full("file:///first.txt", 4, "1234567890"),
+            probe_request(4, "file:///first.txt"),
+        ],
+    )
+    .await;
+
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec![
+            Seen::Open {
+                text: Some("12345".to_string()),
+                version: Some(1),
+            },
+            Seen::Open {
+                text: Some("abcde".to_string()),
+                version: Some(1),
+            },
+            Seen::Close {
+                still_present: false,
+            },
+            Seen::Change {
+                text: Some("1234567890".to_string()),
+                version: Some(4),
+            },
+        ],
+        "over-byte changes are rejected before their hooks",
+    );
+    for id in [2, 3] {
+        let snapshot = probed(&outbox, id);
+        assert_eq!(snapshot.text.as_deref(), Some("12345"));
+        assert_eq!(snapshot.version, Some(1));
+    }
+    let accepted = probed(&outbox, 4);
+    assert_eq!(accepted.text.as_deref(), Some("1234567890"));
+    assert_eq!(accepted.version, Some(4));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connection_shutdown_clears_documents_from_a_retained_view() {
+    let retained = Arc::new(Mutex::new(None));
+    let hook_retained = Arc::clone(&retained);
+    let server = Server::builder(AppState {
+        seen: Arc::default(),
+    })
+    .on_exit(move |_state, ctx| {
+        let retained = Arc::clone(&hook_retained);
+        async move {
+            *retained.lock().unwrap() = Some(ctx.documents());
+        }
+    })
+    .build()
+    .expect("an exit hook retaining a read-only document view builds");
+
+    drive(
+        server,
+        vec![
+            initialize_request(1),
+            did_open("file:///retained.txt", "released on shutdown"),
+            notification("exit", json!(null)),
+        ],
+    )
+    .await;
+
+    let documents = retained
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("the exit hook retained the connection's view");
+    assert!(
+        documents.get(&uri("file:///retained.txt")).is_none(),
+        "session shutdown releases every tracked document and its accounting"
     );
 }
 
