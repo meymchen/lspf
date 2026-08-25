@@ -66,9 +66,15 @@ impl fmt::Display for ResourcePolicyField {
 /// the caller receives [`ClientError::Timeout`](crate::ClientError::Timeout),
 /// and one `$/cancelRequest` is attempted if the request was enqueued. Late
 /// responses are ignored and request IDs are never reused. Setting
-/// `outbound_request_timeout` to `None` explicitly disables the deadline. All
-/// numeric budgets and enabled deadlines must be greater than zero; invalid
-/// policies are rejected by [`ServerBuilder::build`](crate::ServerBuilder::build).
+/// `outbound_request_timeout` to `None` explicitly disables the deadline.
+/// Inbound user requests use `handler_timeout` unless a Layer overrides that
+/// request's [`IncomingCall`](crate::IncomingCall) timeout. Expiry cancels the
+/// handler's [`CancellationToken`](crate::CancellationToken) and completes
+/// through the same gate as success, peer cancellation, and panic recovery,
+/// returning LSP `ServerCancelled` (`-32802`) with the stable message
+/// `handler deadline expired`. All numeric budgets and enabled deadlines must
+/// be greater than zero; invalid policies are rejected by
+/// [`ServerBuilder::build`](crate::ServerBuilder::build).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ResourcePolicy {
     /// Maximum admitted inbound requests for the connection.

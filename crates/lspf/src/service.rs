@@ -2,10 +2,12 @@
 
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use futures_util::FutureExt;
 use serde_json::Value;
+use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, error, info_span};
 
 use crate::builder::Router;
@@ -36,6 +38,38 @@ pub struct IncomingCall<S> {
     params: Value,
     context: Context,
     state: Arc<S>,
+    handler_timeout: Option<HandlerTimeout>,
+}
+
+#[derive(Clone)]
+pub(crate) struct HandlerTimeout {
+    duration: Arc<Mutex<Duration>>,
+    armed: CancellationToken,
+}
+
+impl HandlerTimeout {
+    pub(crate) fn new(timeout: Duration) -> Self {
+        Self {
+            duration: Arc::new(Mutex::new(timeout)),
+            armed: CancellationToken::new(),
+        }
+    }
+
+    pub(crate) fn get(&self) -> Duration {
+        *self.duration.lock().unwrap()
+    }
+
+    fn set(&self, timeout: Duration) {
+        *self.duration.lock().unwrap() = timeout;
+    }
+
+    fn arm(&self) {
+        self.armed.cancel();
+    }
+
+    pub(crate) async fn wait_until_armed(&self) {
+        self.armed.cancelled().await;
+    }
 }
 
 impl<S> IncomingCall<S> {
@@ -45,6 +79,7 @@ impl<S> IncomingCall<S> {
         params: Value,
         context: Context,
         state: Arc<S>,
+        handler_timeout: HandlerTimeout,
     ) -> Self {
         Self {
             kind: CallKind::Request,
@@ -53,6 +88,7 @@ impl<S> IncomingCall<S> {
             params,
             context,
             state,
+            handler_timeout: Some(handler_timeout),
         }
     }
 
@@ -69,6 +105,7 @@ impl<S> IncomingCall<S> {
             params,
             context,
             state,
+            handler_timeout: None,
         }
     }
 
@@ -105,6 +142,28 @@ impl<S> IncomingCall<S> {
     /// The connection's shared application state.
     pub fn state(&self) -> &Arc<S> {
         &self.state
+    }
+
+    /// The configured timeout for this request, or `None` for a notification.
+    ///
+    /// Requests begin with the connection's
+    /// [`ResourcePolicy::handler_timeout`](crate::ResourcePolicy::handler_timeout).
+    /// A Layer may replace it with [`set_handler_timeout`](Self::set_handler_timeout)
+    /// before forwarding the call.
+    pub fn handler_timeout(&self) -> Option<Duration> {
+        self.handler_timeout.as_ref().map(HandlerTimeout::get)
+    }
+
+    /// Override the timeout applied to this request handler.
+    ///
+    /// Call this synchronously before forwarding the call through [`Next`].
+    /// A zero timeout expires the request as soon as dispatch is first polled.
+    /// Notifications have no response deadline, so calling this for a
+    /// notification has no effect.
+    pub fn set_handler_timeout(&mut self, timeout: Duration) {
+        if let Some(handler_timeout) = &self.handler_timeout {
+            handler_timeout.set(timeout);
+        }
     }
 }
 
@@ -278,13 +337,18 @@ impl<S: Send + Sync + 'static> Service<S> for ConcurrencyLimitService<S> {
     fn call(&self, call: IncomingCall<S>) -> ServiceFuture {
         let inner = Arc::clone(&self.inner);
         let permits = Arc::clone(&self.permits);
+        let handler_timeout = call.handler_timeout.clone();
         Box::pin(async move {
             let _permit = permits
                 .clone()
                 .acquire_owned()
                 .instrument(info_span!("handler.acquire_permit"))
                 .await;
-            inner.call(call).await
+            let handler = inner.call(call);
+            if let Some(handler_timeout) = handler_timeout {
+                handler_timeout.arm();
+            }
+            handler.await
         })
     }
 }
