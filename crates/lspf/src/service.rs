@@ -2,7 +2,8 @@
 
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use futures_util::FutureExt;
 use serde_json::Value;
@@ -36,6 +37,24 @@ pub struct IncomingCall<S> {
     params: Value,
     context: Context,
     state: Arc<S>,
+    handler_timeout: Option<HandlerTimeout>,
+}
+
+#[derive(Clone)]
+pub(crate) struct HandlerTimeout(Arc<Mutex<Duration>>);
+
+impl HandlerTimeout {
+    pub(crate) fn new(timeout: Duration) -> Self {
+        Self(Arc::new(Mutex::new(timeout)))
+    }
+
+    pub(crate) fn get(&self) -> Duration {
+        *self.0.lock().unwrap()
+    }
+
+    fn set(&self, timeout: Duration) {
+        *self.0.lock().unwrap() = timeout;
+    }
 }
 
 impl<S> IncomingCall<S> {
@@ -45,6 +64,7 @@ impl<S> IncomingCall<S> {
         params: Value,
         context: Context,
         state: Arc<S>,
+        handler_timeout: HandlerTimeout,
     ) -> Self {
         Self {
             kind: CallKind::Request,
@@ -53,6 +73,7 @@ impl<S> IncomingCall<S> {
             params,
             context,
             state,
+            handler_timeout: Some(handler_timeout),
         }
     }
 
@@ -69,6 +90,7 @@ impl<S> IncomingCall<S> {
             params,
             context,
             state,
+            handler_timeout: None,
         }
     }
 
@@ -105,6 +127,28 @@ impl<S> IncomingCall<S> {
     /// The connection's shared application state.
     pub fn state(&self) -> &Arc<S> {
         &self.state
+    }
+
+    /// The configured timeout for this request, or `None` for a notification.
+    ///
+    /// Requests begin with the connection's
+    /// [`ResourcePolicy::handler_timeout`](crate::ResourcePolicy::handler_timeout).
+    /// A Layer may replace it with [`set_handler_timeout`](Self::set_handler_timeout)
+    /// before forwarding the call.
+    pub fn handler_timeout(&self) -> Option<Duration> {
+        self.handler_timeout.as_ref().map(HandlerTimeout::get)
+    }
+
+    /// Override the timeout applied to this request handler.
+    ///
+    /// Call this synchronously before forwarding the call through [`Next`].
+    /// A zero timeout expires the request as soon as dispatch is first polled.
+    /// Notifications have no response deadline, so calling this for a
+    /// notification has no effect.
+    pub fn set_handler_timeout(&mut self, timeout: Duration) {
+        if let Some(handler_timeout) = &self.handler_timeout {
+            handler_timeout.set(timeout);
+        }
     }
 }
 

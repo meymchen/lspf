@@ -60,6 +60,8 @@ bytes until the transport attempt finishes. Ordinary `Client` sends fail with
 responses, protocol errors, and `$/cancelRequest` use the connection's single
 failure-close path if admission fails; normal close stops admission and drains
 the already-accounted queue.
+A Layer may replace the policy's finite handler timeout for one inbound
+request before forwarding it.
 _Avoid_: Concurrency limit (only one budget), resource options (does not express
 the enforced contract).
 
@@ -248,9 +250,10 @@ behavior to user dispatch (rate limits, audit logging, …). User Layers
 are registered with `.layer(...)` and wrap only the user Service — the
 last registered is outermost — while panic isolation, tracing, and
 concurrency limiting are fixed framework-owned Layers outside them
-(ADR 0019). Layers see decoded `IncomingCall` / `ServiceResult` values,
-never transport bytes, and cannot intercept lifecycle, cancellation, or
-document mutation, which are protocol built-ins. This is lspf's own
+(ADR 0019). Layers see decoded `IncomingCall` / `ServiceResult` values and may
+override an inbound request's finite handler timeout before forwarding it.
+They never see transport bytes and cannot intercept lifecycle, cancellation,
+or document mutation, which are protocol built-ins. This is lspf's own
 trait — narrower than `tower::Layer` and intentionally not interoperable
 with it.
 _Avoid_: Middleware (less precise; "layer" is the trait name and the

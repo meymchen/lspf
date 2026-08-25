@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - [**breaking**] Apply the configured outbound-request deadline and return
   `ClientError::Timeout` after cancelling an expired request. Set
   `ResourcePolicy::outbound_request_timeout` to `None` to disable the deadline.
+- Enforce the finite inbound handler deadline through the request completion
+  gate. Layers can override a request's timeout through `IncomingCall`, and
+  expiry cooperatively cancels the handler before returning `ServerCancelled`.
 
 ## [0.6.0](https://github.com/meymchen/lspf/compare/v0.5.3...v0.6.0) - 2026-08-24
 

@@ -32,7 +32,7 @@ is the terminal `Service<State>` adapter over the frozen `Router<State>`.
 shapes are:
 
 ```text
-IncomingCall { kind, method, request_id, params, context }
+IncomingCall { kind, method, request_id, params, context, handler_timeout }
 
 ServiceResult::Response(raw_result)
 ServiceResult::Error(LspError)
@@ -87,6 +87,10 @@ constructing an `IncomingCall`. Each field has one meaning:
   serialized JSON string.
 - `context` is the request- or notification-scoped `Context` backed by the
   current connection's `ProtocolEngine`.
+- `handler_timeout` is the connection resource policy's finite default for a
+  request and is absent for a notification. A Layer may replace the duration
+  synchronously before forwarding the call; the engine reads the final value
+  after constructing the Service future.
 
 `Service<State>` consumes one `IncomingCall` and asynchronously returns
 exactly one `ServiceResult`. `RouterService` resolves `method` in the frozen
@@ -106,6 +110,13 @@ notification with `NoResponse`. It cannot produce a response for a
 notification, change a call's `kind`, or add, remove, or replace its
 `request_id`. `ProtocolEngine` owns the completion gate and converts the
 final `ServiceResult` into the one permitted protocol outcome.
+
+For requests, `ProtocolEngine` races that Service future against peer
+cancellation and the selected handler timeout. Expiry cancels the same
+request-scoped `CancellationToken`, polls cooperative handler code once more,
+and submits `ServerCancelled` (`-32802`, `handler deadline expired`) through
+the completion gate. Success, panic recovery, peer cancellation, and expiry
+therefore cannot emit competing responses.
 
 ### Composition and panic isolation
 

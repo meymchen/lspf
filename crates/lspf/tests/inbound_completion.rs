@@ -11,8 +11,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use bytes::Bytes;
 use lspf::types::request::Request;
 use lspf::{
-    Context, RawMessage, RequestId, ResourcePolicy, Server, Transport, TransportError,
-    TransportReader, TransportWriter,
+    Context, IncomingCall, Layer, Next, RawMessage, RequestId, ResourcePolicy, Server,
+    ServiceFuture, Transport, TransportError, TransportReader, TransportWriter,
 };
 use serde_json::json;
 use tokio::sync::{Mutex, Notify, mpsc, oneshot};
@@ -33,11 +33,28 @@ impl Request for ReturnsAfterCancellation {
     const METHOD: &'static str = "test/returns-after-cancellation";
 }
 
+enum PanicsAfterCancellation {}
+
+impl Request for PanicsAfterCancellation {
+    type Params = ();
+    type Result = ();
+    const METHOD: &'static str = "test/panics-after-cancellation";
+}
+
 struct AppState {
     calls: Arc<AtomicUsize>,
     started: Mutex<Option<oneshot::Sender<()>>>,
     cancellation_observed: Mutex<Option<oneshot::Sender<()>>>,
     release: Arc<Notify>,
+}
+
+struct HandlerTimeout(std::time::Duration);
+
+impl Layer<AppState> for HandlerTimeout {
+    fn call(&self, mut call: IncomingCall<AppState>, next: Next<AppState>) -> ServiceFuture {
+        call.set_handler_timeout(self.0);
+        next.call(call)
+    }
 }
 
 async fn controlled(
@@ -86,6 +103,22 @@ async fn returns_after_cancellation(
         let _ = observed.send(());
     }
     Ok("too late".to_string())
+}
+
+async fn panics_after_cancellation(
+    state: Arc<AppState>,
+    _ctx: Context,
+    (): (),
+    ct: lspf::CancellationToken,
+) -> Result<(), lspf::LspError> {
+    if let Some(started) = state.started.lock().await.take() {
+        let _ = started.send(());
+    }
+    ct.cancelled().await;
+    if let Some(observed) = state.cancellation_observed.lock().await.take() {
+        let _ = observed.send(());
+    }
+    panic!("panic racing handler expiry");
 }
 
 struct ChannelTransport {
@@ -164,6 +197,21 @@ fn one_slot_policy() -> ResourcePolicy {
         max_inbound_requests: 1,
         ..ResourcePolicy::default()
     }
+}
+
+fn cancellation_observed_state() -> (AppState, oneshot::Receiver<()>, oneshot::Receiver<()>) {
+    let (started_tx, started_rx) = oneshot::channel();
+    let (observed_tx, observed_rx) = oneshot::channel();
+    (
+        AppState {
+            calls: Arc::new(AtomicUsize::new(0)),
+            started: Mutex::new(Some(started_tx)),
+            cancellation_observed: Mutex::new(Some(observed_tx)),
+            release: Arc::new(Notify::new()),
+        },
+        started_rx,
+        observed_rx,
+    )
 }
 
 async fn start_initialized(
@@ -434,6 +482,176 @@ async fn cancellation_reaches_handler_token_and_completes_unfinished_request_onc
         );
     }
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn layer_override_expires_with_one_stable_response_and_cooperative_cancellation() {
+    let (state, started_rx, observed_rx) = cancellation_observed_state();
+    let server = Server::builder(state)
+        .request::<Controlled, _, _>(controlled)
+        .layer(HandlerTimeout(std::time::Duration::from_secs(5)))
+        .build()
+        .expect("server builds");
+    let (incoming_tx, mut outgoing_rx, serve) = start_initialized(server).await;
+    incoming_tx
+        .send(request(2, Controlled::METHOD, json!("unfinished")))
+        .unwrap();
+    started_rx.await.expect("handler started");
+
+    tokio::time::advance(std::time::Duration::from_secs(4)).await;
+    tokio::task::yield_now().await;
+    assert!(outgoing_rx.try_recv().is_err(), "deadline has not elapsed");
+    tokio::time::advance(std::time::Duration::from_secs(1)).await;
+
+    observed_rx
+        .await
+        .expect("handler observed deadline cancellation");
+    assert!(matches!(
+        receive_for(&mut outgoing_rx, 2).await,
+        RawMessage::Response {
+            result: Err(ref error),
+            ..
+        } if error.code == -32802 && error.message == "handler deadline expired"
+    ));
+
+    incoming_tx.send(notification("exit", json!(null))).unwrap();
+    serve
+        .await
+        .expect("serve task did not panic")
+        .expect("serve ended cleanly");
+    while let Ok(message) = outgoing_rx.try_recv() {
+        assert_ne!(
+            message.id(),
+            Some(&RequestId::Number(2)),
+            "the expired request emitted more than one response"
+        );
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn default_handler_timeout_is_finite_and_enforced() {
+    let (state, started_rx, observed_rx) = cancellation_observed_state();
+    let server = Server::builder(state)
+        .request::<Controlled, _, _>(controlled)
+        .build()
+        .expect("server builds");
+    let (incoming_tx, mut outgoing_rx, serve) = start_initialized(server).await;
+    incoming_tx
+        .send(request(2, Controlled::METHOD, json!("unfinished")))
+        .unwrap();
+    started_rx.await.expect("handler started");
+
+    tokio::time::advance(std::time::Duration::from_secs(29)).await;
+    tokio::task::yield_now().await;
+    assert!(outgoing_rx.try_recv().is_err(), "default deadline is 30s");
+    tokio::time::advance(std::time::Duration::from_secs(1)).await;
+
+    observed_rx
+        .await
+        .expect("handler observed default deadline cancellation");
+    assert!(matches!(
+        receive_for(&mut outgoing_rx, 2).await,
+        RawMessage::Response {
+            result: Err(ref error),
+            ..
+        } if error.code == -32802 && error.message == "handler deadline expired"
+    ));
+
+    incoming_tx.send(notification("exit", json!(null))).unwrap();
+    serve
+        .await
+        .expect("serve task did not panic")
+        .expect("serve ended cleanly");
+}
+
+#[tokio::test(start_paused = true)]
+async fn timeout_wins_when_cooperative_handler_returns_success_and_releases_the_id() {
+    let (state, started_rx, observed_rx) = cancellation_observed_state();
+    let server = Server::builder(state)
+        .request::<ReturnsAfterCancellation, _, _>(returns_after_cancellation)
+        .layer(HandlerTimeout(std::time::Duration::from_secs(5)))
+        .build()
+        .expect("server builds");
+    let (incoming_tx, mut outgoing_rx, serve) = start_initialized(server).await;
+    incoming_tx
+        .send(request(2, ReturnsAfterCancellation::METHOD, json!(null)))
+        .unwrap();
+    started_rx.await.expect("handler started");
+    tokio::time::advance(std::time::Duration::from_secs(5)).await;
+    observed_rx.await.expect("handler observed timeout");
+
+    assert!(matches!(
+        receive_for(&mut outgoing_rx, 2).await,
+        RawMessage::Response {
+            result: Err(ref error),
+            ..
+        } if error.code == -32802 && error.message == "handler deadline expired"
+    ));
+
+    incoming_tx
+        .send(request(2, ReturnsAfterCancellation::METHOD, json!(null)))
+        .unwrap();
+    incoming_tx
+        .send(notification("$/cancelRequest", json!({ "id": 2 })))
+        .unwrap();
+    assert!(matches!(
+        receive_for(&mut outgoing_rx, 2).await,
+        RawMessage::Response {
+            result: Err(ref error),
+            ..
+        } if error.code == -32800
+    ));
+
+    incoming_tx.send(notification("exit", json!(null))).unwrap();
+    serve
+        .await
+        .expect("serve task did not panic")
+        .expect("serve ended cleanly");
+    while let Ok(message) = outgoing_rx.try_recv() {
+        assert_ne!(
+            message.id(),
+            Some(&RequestId::Number(2)),
+            "a timeout race emitted an additional response"
+        );
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn timeout_and_panic_race_emits_only_the_timeout_response() {
+    let (state, started_rx, observed_rx) = cancellation_observed_state();
+    let server = Server::builder(state)
+        .request::<PanicsAfterCancellation, _, _>(panics_after_cancellation)
+        .layer(HandlerTimeout(std::time::Duration::from_secs(5)))
+        .build()
+        .expect("server builds");
+    let (incoming_tx, mut outgoing_rx, serve) = start_initialized(server).await;
+    incoming_tx
+        .send(request(2, PanicsAfterCancellation::METHOD, json!(null)))
+        .unwrap();
+    started_rx.await.expect("handler started");
+    tokio::time::advance(std::time::Duration::from_secs(5)).await;
+    observed_rx.await.expect("handler observed timeout");
+
+    assert!(matches!(
+        receive_for(&mut outgoing_rx, 2).await,
+        RawMessage::Response {
+            result: Err(ref error),
+            ..
+        } if error.code == -32802 && error.message == "handler deadline expired"
+    ));
+
+    incoming_tx.send(notification("exit", json!(null))).unwrap();
+    serve
+        .await
+        .expect("serve task did not panic")
+        .expect("serve ended cleanly");
+    while let Ok(message) = outgoing_rx.try_recv() {
+        assert_ne!(
+            message.id(),
+            Some(&RequestId::Number(2)),
+            "the panic race emitted an additional response"
+        );
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

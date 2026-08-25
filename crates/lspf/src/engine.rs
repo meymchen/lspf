@@ -26,6 +26,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use bytes::Bytes;
 use futures_channel::mpsc::UnboundedReceiver;
@@ -58,7 +59,9 @@ use crate::file_provider::SharedFileProvider;
 use crate::progress::{ProgressCancel, ProgressRegistry};
 use crate::raw::{JsonRpcError, RawMessage, RequestId};
 use crate::runtime::{Runtime, TaskHandle, TaskSend, default_runtime, ensure_runtime_available};
-use crate::service::{IncomingCall, ServiceResult, UserLayer, UserService, build_service_stack};
+use crate::service::{
+    HandlerTimeout, IncomingCall, ServiceResult, UserLayer, UserService, build_service_stack,
+};
 use crate::sync::{OwnedPermit, Semaphore};
 use crate::transport::{Transport, TransportError, TransportReader, TransportWriter};
 use crate::workspace::Workspace;
@@ -369,6 +372,7 @@ enum InboundReserveError {
 }
 
 const INBOUND_CAPACITY_EXHAUSTED: &str = "inbound request capacity exhausted";
+const HANDLER_DEADLINE_EXPIRED: &str = "handler deadline expired";
 
 struct ReservedRequest {
     reservation: Reservation,
@@ -652,6 +656,7 @@ struct ProtocolEngine<S, R> {
     /// received earlier closes without a Workspace to hand it.
     on_exit: Option<OnExit<S>>,
     inbound: InboundRegistry,
+    handler_timeout: Duration,
     tasks: TaskGroup<R>,
     out_tx: OutboundQueue,
     client: Client,
@@ -679,6 +684,7 @@ where
         send_task: TaskHandle,
     ) -> Self {
         let max_inbound_requests = server.resource_policy.max_inbound_requests;
+        let handler_timeout = server.resource_policy.handler_timeout;
         Self {
             state: server.state,
             documents: Documents::with_resource_policy(server.resource_policy),
@@ -701,6 +707,7 @@ where
             on_shutdown: None,
             on_exit: None,
             inbound: InboundRegistry::new(max_inbound_requests),
+            handler_timeout,
             tasks: TaskGroup::new(runtime),
             out_tx,
             client,
@@ -894,6 +901,7 @@ where
                             method.into_owned(),
                             params,
                             cancellation.expect("non-initialize requests are cancellable"),
+                            self.handler_timeout,
                         );
                     }
                 }
@@ -1394,6 +1402,7 @@ where
         method: String,
         params: serde_json::Value,
         cancellation: CancellationToken,
+        default_timeout: Duration,
     ) {
         let state = Arc::clone(&self.state);
         let workspace = self.established_workspace();
@@ -1407,21 +1416,37 @@ where
                 let cancellation_for_handler = cancellation.clone();
                 let ctx = Context::for_request(id.clone(), span, client, workspace)
                     .with_cancellation(cancellation_for_handler);
-                let call = IncomingCall::request(method, id, params, ctx, state);
+                let handler_timeout = HandlerTimeout::new(default_timeout);
+                let call =
+                    IncomingCall::request(method, id, params, ctx, state, handler_timeout.clone());
+                let handler = service.call(call);
+                let completion = select(Box::pin(handler), Box::pin(cancellation.cancelled()));
                 let result = match select(
-                    Box::pin(service.call(call)),
-                    Box::pin(cancellation.cancelled()),
+                    Box::pin(completion),
+                    Box::pin(crate::runtime::sleep(handler_timeout.get())),
                 )
                 .await
                 {
-                    Either::Left((result, _)) => result,
-                    Either::Right(((), handler)) => {
+                    Either::Left((Either::Left((result, _)), _)) => result,
+                    Either::Left((Either::Right(((), handler)), _)) => {
                         // CancellationToken wakes every waiter, but an executor
                         // yield does not guarantee this handler is polled before a
                         // separate abort. Poll it here, in its own task, then end
                         // the task without relying on scheduler fairness.
                         let _ = handler.now_or_never();
                         ServiceResult::Error(LspError::RequestCancelled)
+                    }
+                    Either::Right(((), completion)) => {
+                        cancellation.cancel();
+                        // Match peer cancellation's cooperative final poll: code
+                        // awaiting the token observes expiry before its future is
+                        // dropped, while the timeout remains the selected result.
+                        let _ = completion.now_or_never();
+                        ServiceResult::Error(LspError::ServerError {
+                            code: SERVER_CANCELLED as i32,
+                            message: HANDLER_DEADLINE_EXPIRED.to_string(),
+                            data: None,
+                        })
                     }
                 };
                 let result = match result {
