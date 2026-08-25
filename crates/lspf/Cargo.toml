@@ -251,6 +251,10 @@ name = "session_close"
 required-features = ["runtime-tokio"]
 
 [[test]]
+name = "tracing_schema"
+required-features = ["runtime-tokio"]
+
+[[test]]
 name = "workspace_hooks"
 required-features = ["runtime-tokio"]
 

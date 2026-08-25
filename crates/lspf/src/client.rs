@@ -31,6 +31,7 @@ use tracing::{trace, warn};
 use crate::error::ClientError;
 use crate::progress::ProgressRegistry;
 use crate::raw::{JsonRpcError, RawMessage, RequestId};
+use crate::telemetry::{Completion, Deadline, DeadlineAction, Direction, Resource, ResourceAction};
 use crate::workspace::SharedTrace;
 
 /// A response completion value: either raw success bytes or a JSON-RPC error.
@@ -56,7 +57,7 @@ pub(crate) struct OutboundRegistry {
 
 struct OutboundInner {
     /// Pending requests keyed by their outbound ID.
-    pending: HashMap<u32, oneshot::Sender<PendingOutcome>>,
+    pending: HashMap<u32, PendingEntry>,
     /// Monotonically increasing counter; the next ID to try allocating.
     next_id: u32,
     /// Set by `close_all()`. Once set, `insert()` refuses to create new
@@ -64,6 +65,20 @@ struct OutboundInner {
     /// the registry has been drained fails fast instead of enqueuing an entry
     /// that would never be completed.
     closed: bool,
+}
+
+struct PendingEntry {
+    tx: oneshot::Sender<PendingOutcome>,
+    telemetry: Option<PendingTelemetry>,
+    deadline_started: Option<std::time::Instant>,
+}
+
+#[derive(Clone, Copy)]
+struct PendingTelemetry {
+    trace: crate::telemetry::ConnectionTrace,
+    method: &'static str,
+    timeout: Option<Duration>,
+    started: std::time::Instant,
 }
 
 impl Default for OutboundInner {
@@ -116,8 +131,17 @@ impl PendingGuard {
     /// The registry removal is the completion race: if it succeeds, this
     /// guard owns expiry or abandonment; if it fails, a response or connection
     /// close already owns completion and the receiver must be awaited.
-    fn cancel_if_pending(&mut self) -> bool {
-        if self.client.outbound.remove(self.id).is_none() {
+    fn cancel_if_pending(
+        &mut self,
+        completion: Completion,
+        deadline_action: DeadlineAction,
+    ) -> bool {
+        if self
+            .client
+            .outbound
+            .remove_with_completion(self.id, completion, deadline_action)
+            .is_none()
+        {
             return false;
         }
         if self.enqueued {
@@ -137,7 +161,7 @@ impl Drop for PendingGuard {
         // Only a still-present entry means the request never completed. Remove
         // it and, if it reached the wire, cancel it with the peer. Errors are
         // ignored: the connection may already be closing.
-        self.cancel_if_pending();
+        self.cancel_if_pending(Completion::Cancelled, DeadlineAction::Cancelled);
     }
 }
 
@@ -175,7 +199,28 @@ impl OutboundRegistry {
     /// after the registry has been drained.
     ///
     /// Returns the allocated ID and the receiver the caller should await.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(crate) fn insert(&self) -> InsertOutcome {
+        self.insert_inner(None)
+    }
+
+    fn insert_traced(
+        &self,
+        trace: crate::telemetry::ConnectionTrace,
+        method: &'static str,
+        timeout: Option<Duration>,
+    ) -> InsertOutcome {
+        self.insert_inner(Some((trace, method, timeout)))
+    }
+
+    fn insert_inner(
+        &self,
+        telemetry: Option<(
+            crate::telemetry::ConnectionTrace,
+            &'static str,
+            Option<Duration>,
+        )>,
+    ) -> InsertOutcome {
         let mut inner = self.inner.lock().unwrap();
         if inner.closed {
             return InsertOutcome::Closed;
@@ -186,8 +231,53 @@ impl OutboundRegistry {
         }
         inner.next_id = id + 1;
         let (tx, rx) = oneshot::channel();
-        inner.pending.insert(id, tx);
+        let telemetry = telemetry.map(|(trace, method, timeout)| PendingTelemetry {
+            trace,
+            method,
+            timeout,
+            started: std::time::Instant::now(),
+        });
+        inner.pending.insert(
+            id,
+            PendingEntry {
+                tx,
+                telemetry,
+                deadline_started: None,
+            },
+        );
+        if let Some(telemetry) = telemetry {
+            telemetry.trace.pending_request_budget(
+                telemetry.method,
+                ResourceAction::Admit,
+                id,
+                inner.pending.len(),
+                telemetry.timeout,
+            );
+        }
         InsertOutcome::Inserted(id, rx)
+    }
+
+    fn mark_enqueued(&self, id: u32) {
+        let mut inner = self.inner.lock().unwrap();
+        let Some(entry) = inner.pending.get_mut(&id) else {
+            return;
+        };
+        let Some(telemetry) = entry.telemetry else {
+            return;
+        };
+        let started = std::time::Instant::now();
+        entry.deadline_started = Some(started);
+        if let Some(timeout) = telemetry.timeout {
+            telemetry.trace.deadline(
+                Deadline::OutboundRequest,
+                DeadlineAction::Armed,
+                Direction::Outbound,
+                telemetry.method,
+                &RequestId::Number(id as i32),
+                timeout,
+                Duration::ZERO,
+            );
+        }
     }
 
     /// Remove and complete the pending entry for `id` with `result`.
@@ -195,22 +285,69 @@ impl OutboundRegistry {
     /// If no entry exists (unknown, duplicate, or late response), returns
     /// `false` and leaves all other entries intact.
     pub(crate) fn complete(&self, id: u32, result: PendingResult) -> bool {
-        let tx = self.inner.lock().unwrap().pending.remove(&id);
-        if let Some(tx) = tx {
+        let mut inner = self.inner.lock().unwrap();
+        let entry = inner.pending.remove(&id);
+        if let Some(entry) = entry {
+            trace_pending_removal(
+                &entry,
+                id,
+                inner.pending.len(),
+                ResourceAction::Release,
+                if result.is_ok() {
+                    Completion::Success
+                } else {
+                    Completion::Error
+                },
+                DeadlineAction::Completed,
+            );
+            drop(inner);
             // Receiver may be gone if the caller was cancelled; ignore.
-            let _ = tx.send(PendingOutcome::Response(result));
+            let _ = entry.tx.send(PendingOutcome::Response(result));
             true
         } else {
             false
         }
     }
 
-    /// Remove the pending entry for `id` without completing it.
+    /// Roll back the pending entry for `id` and trace its rejected completion.
     ///
     /// Used when encoding or enqueue fails immediately after `insert`, and by
     /// the pending guard on abandonment.
-    pub(crate) fn remove(&self, id: u32) -> Option<oneshot::Sender<PendingOutcome>> {
-        self.inner.lock().unwrap().pending.remove(&id)
+    fn remove(&self, id: u32) -> Option<PendingEntry> {
+        let mut inner = self.inner.lock().unwrap();
+        let entry = inner.pending.remove(&id);
+        if let Some(entry) = &entry {
+            trace_pending_removal(
+                entry,
+                id,
+                inner.pending.len(),
+                ResourceAction::Rollback,
+                Completion::Rejected,
+                DeadlineAction::Cancelled,
+            );
+        }
+        entry
+    }
+
+    fn remove_with_completion(
+        &self,
+        id: u32,
+        completion: Completion,
+        deadline_action: DeadlineAction,
+    ) -> Option<PendingEntry> {
+        let mut inner = self.inner.lock().unwrap();
+        let entry = inner.pending.remove(&id);
+        if let Some(entry) = &entry {
+            trace_pending_removal(
+                entry,
+                id,
+                inner.pending.len(),
+                ResourceAction::Release,
+                completion,
+                deadline_action,
+            );
+        }
+        entry
     }
 
     /// Complete every remaining pending entry with [`PendingOutcome::Cancelled`],
@@ -225,11 +362,22 @@ impl OutboundRegistry {
     pub(crate) fn close_all(&self) {
         let mut inner = self.inner.lock().unwrap();
         inner.closed = true;
-        let entries: HashMap<u32, oneshot::Sender<PendingOutcome>> =
-            std::mem::take(&mut inner.pending);
+        let entries: HashMap<u32, PendingEntry> = std::mem::take(&mut inner.pending);
+        let mut remaining = entries.len();
+        for (id, entry) in &entries {
+            remaining -= 1;
+            trace_pending_removal(
+                entry,
+                *id,
+                remaining,
+                ResourceAction::Release,
+                Completion::ConnectionClosed,
+                DeadlineAction::Cancelled,
+            );
+        }
         drop(inner);
-        for tx in entries.into_values() {
-            let _ = tx.send(PendingOutcome::Cancelled);
+        for entry in entries.into_values() {
+            let _ = entry.tx.send(PendingOutcome::Cancelled);
         }
     }
 
@@ -239,10 +387,53 @@ impl OutboundRegistry {
         self.inner.lock().unwrap().next_id = id;
     }
 
-    /// Number of entries currently pending (test-only, for leak assertions).
+    /// Number of entries currently pending.
     #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(crate) fn pending_len(&self) -> usize {
         self.inner.lock().unwrap().pending.len()
+    }
+}
+
+fn trace_pending_removal(
+    entry: &PendingEntry,
+    id: u32,
+    current: usize,
+    action: ResourceAction,
+    completion: Completion,
+    deadline_action: DeadlineAction,
+) {
+    let Some(telemetry) = entry.telemetry else {
+        return;
+    };
+    telemetry.trace.pending_request_budget(
+        telemetry.method,
+        action,
+        id,
+        current,
+        telemetry.timeout,
+    );
+    let request_id = RequestId::Number(id as i32);
+    telemetry.trace.request_completed(
+        telemetry.method,
+        &request_id,
+        telemetry.started,
+        Direction::Outbound,
+        completion,
+    );
+    if let (Some(timeout), Some(started)) = (telemetry.timeout, entry.deadline_started) {
+        telemetry.trace.deadline(
+            Deadline::OutboundRequest,
+            deadline_action,
+            Direction::Outbound,
+            telemetry.method,
+            &request_id,
+            timeout,
+            if matches!(deadline_action, DeadlineAction::Expired) {
+                timeout
+            } else {
+                started.elapsed()
+            },
+        );
     }
 }
 
@@ -261,6 +452,7 @@ struct OutboundAdmission {
     threshold: usize,
     limits: OutboundLimits,
     failure: CancellationToken,
+    trace: crate::telemetry::ConnectionTrace,
     /// Depth and warn-state move together under one lock, so a concurrent
     /// enqueue can never observe a stale warn-state for a depth that has
     /// already dropped back below the threshold (and vice versa).
@@ -306,12 +498,26 @@ impl OutboundQueue {
                 max_messages: usize::MAX,
                 max_bytes: usize::MAX,
             },
+            crate::telemetry::ConnectionTrace::new(),
         )
     }
 
+    #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(crate) fn bounded(
         max_messages: usize,
         max_bytes: usize,
+    ) -> (Self, UnboundedReceiver<RawMessage>) {
+        Self::bounded_with_trace(
+            max_messages,
+            max_bytes,
+            crate::telemetry::ConnectionTrace::new(),
+        )
+    }
+
+    pub(crate) fn bounded_with_trace(
+        max_messages: usize,
+        max_bytes: usize,
+        trace: crate::telemetry::ConnectionTrace,
     ) -> (Self, UnboundedReceiver<RawMessage>) {
         Self::with_limits(
             max_messages,
@@ -319,12 +525,14 @@ impl OutboundQueue {
                 max_messages,
                 max_bytes,
             },
+            trace,
         )
     }
 
     fn with_limits(
         threshold: usize,
         limits: OutboundLimits,
+        trace: crate::telemetry::ConnectionTrace,
     ) -> (Self, UnboundedReceiver<RawMessage>) {
         let (tx, rx) = mpsc::unbounded();
         (
@@ -334,6 +542,7 @@ impl OutboundQueue {
                     threshold,
                     limits,
                     failure: CancellationToken::new(),
+                    trace,
                     state: Mutex::new(AdmissionState {
                         depth: 0,
                         encoded_bytes: 0,
@@ -350,6 +559,14 @@ impl OutboundQueue {
     /// writer can never decrement a message that is not yet counted; a failed
     /// send means the writer half is gone, so the message is uncounted again.
     pub(crate) fn send(&self, message: RawMessage) -> Result<(), OutboundSendError> {
+        self.send_with_admission(message, || {})
+    }
+
+    fn send_with_admission(
+        &self,
+        message: RawMessage,
+        on_admitted: impl FnOnce(),
+    ) -> Result<(), OutboundSendError> {
         let encoded_bytes = crate::transport::envelope::serialize(&message)
             .map_err(|error| match error {
                 crate::TransportError::Serde(error) => OutboundSendError::Serialize(error),
@@ -363,6 +580,13 @@ impl OutboundQueue {
                 .checked_add(encoded_bytes)
                 .is_none_or(|bytes| bytes > self.inner.limits.max_bytes)
         {
+            self.inner.trace.resource_budget(
+                Resource::OutboundQueue,
+                ResourceAction::Reject,
+                state.depth,
+                self.inner.limits.max_messages,
+                Some((state.encoded_bytes, self.inner.limits.max_bytes)),
+            );
             warn!(
                 outbound.queue_depth = state.depth,
                 outbound.queue_bytes = state.encoded_bytes,
@@ -373,6 +597,7 @@ impl OutboundQueue {
             return Err(OutboundSendError::Overloaded);
         }
         self.record_enqueue(&mut state, encoded_bytes);
+        on_admitted();
         if self.tx.unbounded_send(message).is_err() {
             self.record_failed_enqueue(&mut state);
             return Err(OutboundSendError::Closed);
@@ -396,6 +621,10 @@ impl OutboundQueue {
         self.tx.is_closed()
     }
 
+    pub(crate) fn connection_trace(&self) -> crate::telemetry::ConnectionTrace {
+        self.inner.trace
+    }
+
     /// The current queue depth.
     #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(crate) fn depth(&self) -> usize {
@@ -410,14 +639,20 @@ impl OutboundQueue {
     /// Count one enqueued request, response, or notification, warning once
     /// when the depth crosses from below the threshold to at least it.
     ///
-    /// Tracing stays silent below the threshold: a healthy queue produces no
-    /// per-message events, so helpers like `log_message` never echo into the
-    /// server's local tracing stream.
+    /// Stable resource events record every accounting transition without
+    /// including the queued envelope or its parameters.
     fn record_enqueue(&self, state: &mut AdmissionState, encoded_bytes: usize) {
         state.depth += 1;
         state.encoded_bytes += encoded_bytes;
         state.encoded_sizes.push_back(encoded_bytes);
         let depth = state.depth;
+        self.inner.trace.resource_budget(
+            Resource::OutboundQueue,
+            ResourceAction::Admit,
+            depth,
+            self.inner.limits.max_messages,
+            Some((state.encoded_bytes, self.inner.limits.max_bytes)),
+        );
         if depth >= self.inner.threshold {
             trace!(outbound.queue_depth = depth, "outbound message enqueued");
             if !state.warned {
@@ -444,6 +679,13 @@ impl OutboundQueue {
         state.depth -= 1;
         state.encoded_bytes -= encoded_bytes;
         let depth = state.depth;
+        self.inner.trace.resource_budget(
+            Resource::OutboundQueue,
+            ResourceAction::Release,
+            depth,
+            self.inner.limits.max_messages,
+            Some((state.encoded_bytes, self.inner.limits.max_bytes)),
+        );
         if depth >= self.inner.threshold {
             trace!(outbound.queue_depth = depth, "outbound message written");
         } else {
@@ -458,6 +700,13 @@ impl OutboundQueue {
             .expect("the failed channel send was accounted first");
         state.depth -= 1;
         state.encoded_bytes -= encoded_bytes;
+        self.inner.trace.resource_budget(
+            Resource::OutboundQueue,
+            ResourceAction::Rollback,
+            state.depth,
+            self.inner.limits.max_messages,
+            Some((state.encoded_bytes, self.inner.limits.max_bytes)),
+        );
         if state.depth < self.inner.threshold {
             state.warned = false;
         }
@@ -469,6 +718,13 @@ impl OutboundQueue {
         state.encoded_bytes = 0;
         state.encoded_sizes.clear();
         state.warned = false;
+        self.inner.trace.resource_budget(
+            Resource::OutboundQueue,
+            ResourceAction::Release,
+            0,
+            self.inner.limits.max_messages,
+            Some((0, self.inner.limits.max_bytes)),
+        );
     }
 }
 
@@ -536,6 +792,7 @@ pub struct Client {
     progress: ProgressRegistry,
     state: Arc<ClientState>,
     trace: SharedTrace,
+    telemetry: crate::telemetry::ConnectionTrace,
 }
 
 impl fmt::Debug for Client {
@@ -550,6 +807,7 @@ impl Client {
         outbound: OutboundRegistry,
         outbound_request_timeout: Option<Duration>,
     ) -> Self {
+        let telemetry = outgoing.connection_trace();
         Self {
             outgoing,
             outbound,
@@ -560,6 +818,7 @@ impl Client {
                 outbound_closing: CancellationToken::new(),
             }),
             trace: SharedTrace::default(),
+            telemetry,
         }
     }
 
@@ -737,7 +996,11 @@ impl Client {
         //    prior in-flight handler is still draining while a new one
         //    starts), fail fast instead of enqueuing a request that would
         //    never receive a response.
-        let (id, rx) = match self.outbound.insert() {
+        let (id, rx) = match self.outbound.insert_traced(
+            self.telemetry,
+            R::METHOD,
+            self.outbound_request_timeout,
+        ) {
             InsertOutcome::Inserted(id, rx) => (id, rx),
             InsertOutcome::Closed => return Err(ClientError::ConnectionClosed),
             InsertOutcome::Exhausted => return Err(ClientError::IdExhausted),
@@ -764,7 +1027,10 @@ impl Client {
                     drop(self.outbound.remove(id));
                     return Err(e);
                 }
-                Ok(()) => match self.outgoing.send(message) {
+                Ok(()) => match self
+                    .outgoing
+                    .send_with_admission(message, || self.outbound.mark_enqueued(id))
+                {
                     Ok(()) => true,
                     Err(OutboundSendError::Overloaded) => {
                         drop(self.outbound.remove(id));
@@ -806,7 +1072,11 @@ impl Client {
             ))]
             Some(timeout) => match wait_for_response_until(&mut rx, timeout).await {
                 Some(outcome) => outcome,
-                None if guard.cancel_if_pending() => return Err(ClientError::Timeout),
+                None if guard
+                    .cancel_if_pending(Completion::DeadlineExpired, DeadlineAction::Expired) =>
+                {
+                    return Err(ClientError::Timeout);
+                }
                 None => rx.await,
             },
             #[cfg(all(not(target_arch = "wasm32"), not(feature = "runtime-tokio")))]
@@ -1779,6 +2049,7 @@ mod tests {
     /// Run `f` with an [`EventCapture`] subscriber, returning its result and
     /// every tracing event emitted on this thread.
     fn capture<T>(f: impl FnOnce() -> T) -> (T, crate::test_util::EventCapture) {
+        let _capture = crate::test_util::tracing_capture_lock();
         let events = crate::test_util::EventCapture::new();
         let subscriber = tracing_subscriber::registry().with(events.clone());
         let result = tracing::subscriber::with_default(subscriber, f);
@@ -1981,6 +2252,41 @@ mod tests {
 
         assert!(matches!(result, Err(ClientError::OutboundOverloaded)));
         assert_eq!(client.outbound_registry().pending_len(), 0);
+    }
+
+    #[test]
+    fn an_overloaded_request_traces_rejected_completion_after_registry_rollback() {
+        let (_, events) = capture(|| {
+            let (queue, _rx) = OutboundQueue::bounded(1, usize::MAX);
+            let client = Client::new(queue, OutboundRegistry::default(), None);
+            client
+                .notify::<TestNotification>(json!({ "value": 1 }))
+                .unwrap();
+
+            let request = client.request::<TestRequest>(json!({}));
+            futures_util::pin_mut!(request);
+            let mut context =
+                std::task::Context::from_waker(futures_util::task::noop_waker_ref());
+            assert!(matches!(
+                std::future::Future::poll(request.as_mut(), &mut context),
+                std::task::Poll::Ready(Err(ClientError::OutboundOverloaded))
+            ));
+        });
+
+        let messages = events.messages();
+        assert!(messages.iter().any(|event| {
+            event.contains("message=resource budget changed")
+                && event.contains("resource=\"pending_requests\"")
+                && event.contains("resource_action=\"rollback\"")
+                && event.contains("resource_current=0")
+        }), "{messages:?}");
+        assert!(messages.iter().any(|event| {
+            event.contains("message=request completed")
+                && event.contains("direction=\"outbound\"")
+                && event.contains("method=\"test/request\"")
+                && event.contains("latency_ms=")
+                && event.contains("completion=\"rejected\"")
+        }));
     }
 
     #[tokio::test]

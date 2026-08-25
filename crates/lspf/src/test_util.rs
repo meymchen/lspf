@@ -8,6 +8,14 @@ use std::sync::{Arc, Mutex};
 
 use lsp_types::Uri;
 
+static TRACING_CAPTURE_LOCK: Mutex<()> = Mutex::new(());
+
+/// Serialize scoped subscribers because `tracing` rebuilds one process-wide
+/// callsite interest cache whenever a default subscriber changes.
+pub(crate) fn tracing_capture_lock() -> std::sync::MutexGuard<'static, ()> {
+    TRACING_CAPTURE_LOCK.lock().unwrap()
+}
+
 /// An absolute `file:` URI for `path`, percent-encoding every byte that is
 /// not legal in a URI path.
 pub(crate) fn file_uri(path: &Path) -> Uri {
