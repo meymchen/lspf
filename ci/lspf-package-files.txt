@@ -54,6 +54,7 @@ src/resource_policy.rs
 src/runtime.rs
 src/service.rs
 src/sync.rs
+src/telemetry.rs
 src/test_util.rs
 src/transport/conformance.rs
 src/transport/envelope.rs
@@ -128,6 +129,7 @@ tests/resource_policy.rs
 tests/runtime_boundary.rs
 tests/service_stack.rs
 tests/session_close.rs
+tests/tracing_schema.rs
 tests/worker_channel.rs
 tests/workspace_hooks.rs
 tests/workspace_queries.rs

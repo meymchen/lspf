@@ -7,7 +7,7 @@
 use std::borrow::Cow;
 use std::fmt;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use bytes::Bytes;
 use lspf::types::notification::{DidCloseTextDocument, DidOpenTextDocument};
@@ -527,6 +527,15 @@ struct EventCapture {
     events: Arc<Mutex<Vec<(tracing::Level, String)>>>,
 }
 
+static TRACING_INTEREST: OnceLock<tracing::Dispatch> = OnceLock::new();
+
+fn keep_tracing_interest() {
+    // Callsite interest is cached process-wide, while scoped subscribers are
+    // thread-local. Keep one dispatch alive for this test binary so parallel
+    // tests cannot leave the queue callsites permanently disabled.
+    TRACING_INTEREST.get_or_init(|| tracing::Dispatch::new(tracing_subscriber::registry()));
+}
+
 struct FieldVisitor(String);
 
 impl tracing::field::Visit for FieldVisitor {
@@ -560,6 +569,7 @@ where
 async fn helper_failures_emit_a_tracing_event_without_suppressing_the_error() {
     use tracing_subscriber::layer::SubscriberExt;
 
+    keep_tracing_interest();
     let (mut session, captured) = initialized_session().await;
     let client = take_client(&captured);
     let capture = EventCapture::default();

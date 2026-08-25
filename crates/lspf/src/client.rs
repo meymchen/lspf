@@ -70,7 +70,7 @@ struct OutboundInner {
 struct PendingEntry {
     tx: oneshot::Sender<PendingOutcome>,
     telemetry: Option<PendingTelemetry>,
-    deadline_started: Option<std::time::Instant>,
+    deadline_started: Option<crate::telemetry::Instant>,
 }
 
 #[derive(Clone, Copy)]
@@ -78,7 +78,7 @@ struct PendingTelemetry {
     trace: crate::telemetry::ConnectionTrace,
     method: &'static str,
     timeout: Option<Duration>,
-    started: std::time::Instant,
+    started: crate::telemetry::Instant,
 }
 
 impl Default for OutboundInner {
@@ -235,7 +235,7 @@ impl OutboundRegistry {
             trace,
             method,
             timeout,
-            started: std::time::Instant::now(),
+            started: crate::telemetry::Instant::now(),
         });
         inner.pending.insert(
             id,
@@ -265,7 +265,7 @@ impl OutboundRegistry {
         let Some(telemetry) = entry.telemetry else {
             return;
         };
-        let started = std::time::Instant::now();
+        let started = crate::telemetry::Instant::now();
         entry.deadline_started = Some(started);
         if let Some(timeout) = telemetry.timeout {
             telemetry.trace.deadline(
@@ -502,7 +502,7 @@ impl OutboundQueue {
         )
     }
 
-    #[cfg(all(test, not(target_arch = "wasm32")))]
+    #[cfg(test)]
     pub(crate) fn bounded(
         max_messages: usize,
         max_bytes: usize,
@@ -2252,41 +2252,6 @@ mod tests {
 
         assert!(matches!(result, Err(ClientError::OutboundOverloaded)));
         assert_eq!(client.outbound_registry().pending_len(), 0);
-    }
-
-    #[test]
-    fn an_overloaded_request_traces_rejected_completion_after_registry_rollback() {
-        let (_, events) = capture(|| {
-            let (queue, _rx) = OutboundQueue::bounded(1, usize::MAX);
-            let client = Client::new(queue, OutboundRegistry::default(), None);
-            client
-                .notify::<TestNotification>(json!({ "value": 1 }))
-                .unwrap();
-
-            let request = client.request::<TestRequest>(json!({}));
-            futures_util::pin_mut!(request);
-            let mut context =
-                std::task::Context::from_waker(futures_util::task::noop_waker_ref());
-            assert!(matches!(
-                std::future::Future::poll(request.as_mut(), &mut context),
-                std::task::Poll::Ready(Err(ClientError::OutboundOverloaded))
-            ));
-        });
-
-        let messages = events.messages();
-        assert!(messages.iter().any(|event| {
-            event.contains("message=resource budget changed")
-                && event.contains("resource=\"pending_requests\"")
-                && event.contains("resource_action=\"rollback\"")
-                && event.contains("resource_current=0")
-        }), "{messages:?}");
-        assert!(messages.iter().any(|event| {
-            event.contains("message=request completed")
-                && event.contains("direction=\"outbound\"")
-                && event.contains("method=\"test/request\"")
-                && event.contains("latency_ms=")
-                && event.contains("completion=\"rejected\"")
-        }));
     }
 
     #[tokio::test]

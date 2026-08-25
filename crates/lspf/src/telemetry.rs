@@ -1,6 +1,11 @@
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use std::time::Instant;
+#[cfg(target_arch = "wasm32")]
+pub(crate) use web_time::Instant;
 
 use tracing::{Span, info_span, trace};
 

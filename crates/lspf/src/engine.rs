@@ -27,7 +27,6 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use std::time::Instant;
 
 use bytes::Bytes;
 use futures_channel::mpsc::UnboundedReceiver;
@@ -65,7 +64,7 @@ use crate::service::{
 };
 use crate::sync::{OwnedPermit, Semaphore};
 use crate::telemetry::{
-    Completion, ConnectionTrace, DeadlineAction, Direction, Resource, ResourceAction,
+    Completion, ConnectionTrace, DeadlineAction, Direction, Instant, Resource, ResourceAction,
 };
 use crate::transport::{Transport, TransportError, TransportReader, TransportWriter};
 use crate::workspace::Workspace;

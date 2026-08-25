@@ -5,7 +5,6 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use std::time::Instant;
 
 use futures_util::FutureExt;
 use serde_json::Value;
@@ -14,7 +13,7 @@ use tracing::{Instrument, error, info_span};
 
 use crate::builder::Router;
 use crate::sync::Semaphore;
-use crate::telemetry::{Deadline, DeadlineAction, Direction};
+use crate::telemetry::{Deadline, DeadlineAction, Direction, Instant};
 use crate::{Context, LspError, RequestId, TaskFuture, TaskSend};
 
 /// Whether a normalized user call came from a request or a notification.

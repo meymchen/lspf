@@ -1,16 +1,18 @@
 use std::borrow::Cow;
 use std::io;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytes::Bytes;
+use lsp_types::{LogMessageParams, MessageType};
 use lspf::types::request::Request;
 use lspf::{
-    Context, RawMessage, RequestId, Server, Transport, TransportError, TransportReader,
-    TransportWriter,
+    ClientError, Context, RawMessage, RequestId, Server, Transport, TransportError,
+    TransportReader, TransportWriter,
 };
 use serde_json::{Value, json};
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 use tracing_subscriber::fmt::MakeWriter;
 
 enum Echo {}
@@ -51,6 +53,20 @@ impl Request for CallsPeerTwice {
     type Params = ();
     type Result = ();
     const METHOD: &'static str = "test/calls-peer-twice";
+}
+
+enum OverloadsPeer {}
+
+impl Request for OverloadsPeer {
+    type Params = ();
+    type Result = ();
+    const METHOD: &'static str = "test/overloads-peer";
+}
+
+#[derive(Clone, Default)]
+struct OverloadState {
+    rejected: Arc<Notify>,
+    resume_handler: Arc<Notify>,
 }
 
 async fn echo(
@@ -100,20 +116,74 @@ async fn calls_peer_twice(
     Ok(())
 }
 
+async fn overloads_peer(
+    state: Arc<OverloadState>,
+    ctx: Context,
+    (): (),
+    _cancellation: lspf::CancellationToken,
+) -> Result<(), lspf::LspError> {
+    ctx.client()
+        .log_message(LogMessageParams {
+            typ: MessageType::INFO,
+            message: "secret-queued-notification".to_string(),
+        })
+        .map_err(lspf::LspError::internal)?;
+    match ctx
+        .client()
+        .request::<PeerEcho>("secret-rejected-request".to_string())
+        .await
+    {
+        Err(ClientError::OutboundOverloaded) => {}
+        outcome => {
+            return Err(lspf::LspError::internal(io::Error::other(format!(
+                "expected outbound overload, got {outcome:?}"
+            ))));
+        }
+    }
+    state.rejected.notify_one();
+    state.resume_handler.notified().await;
+    Ok(())
+}
+
+#[derive(Default)]
+struct WriterPause {
+    pause_next: AtomicBool,
+    entered: Notify,
+    resume: Notify,
+}
+
+impl WriterPause {
+    fn pause_next(&self) {
+        self.pause_next.store(true, Ordering::Release);
+    }
+
+    async fn wait_until_paused(&self) {
+        self.entered.notified().await;
+    }
+
+    fn resume(&self) {
+        self.resume.notify_one();
+    }
+}
+
 struct ChannelTransport {
     incoming: mpsc::UnboundedReceiver<RawMessage>,
     outgoing: mpsc::UnboundedSender<RawMessage>,
+    writer_pause: Arc<WriterPause>,
 }
 
 struct ChannelReader(mpsc::UnboundedReceiver<RawMessage>);
-struct ChannelWriter(mpsc::UnboundedSender<RawMessage>);
+struct ChannelWriter(mpsc::UnboundedSender<RawMessage>, Arc<WriterPause>);
 
 impl Transport for ChannelTransport {
     type Reader = ChannelReader;
     type Writer = ChannelWriter;
 
     fn split(self) -> (Self::Reader, Self::Writer) {
-        (ChannelReader(self.incoming), ChannelWriter(self.outgoing))
+        (
+            ChannelReader(self.incoming),
+            ChannelWriter(self.outgoing, self.writer_pause),
+        )
     }
 }
 
@@ -125,6 +195,10 @@ impl TransportReader for ChannelReader {
 
 impl TransportWriter for ChannelWriter {
     async fn send(&mut self, message: RawMessage) -> Result<(), TransportError> {
+        if self.1.pause_next.swap(false, Ordering::AcqRel) {
+            self.1.entered.notify_one();
+            self.1.resume.notified().await;
+        }
         self.0.send(message).map_err(|_| TransportError::Closed)
     }
 
@@ -212,19 +286,45 @@ async fn receive_method(
     }
 }
 
+async fn receive_notification_method(
+    outgoing: &mut mpsc::UnboundedReceiver<RawMessage>,
+    method: &str,
+) {
+    while outgoing.recv().await.unwrap().method() != Some(method) {}
+}
+
+async fn wait_for_event(logs: &LogBuffer, predicate: impl Fn(&Value) -> bool) {
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if logs.events().iter().any(&predicate) {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the expected trace event is emitted");
+}
+
 struct TestConnection {
     incoming: mpsc::UnboundedSender<RawMessage>,
     outgoing: mpsc::UnboundedReceiver<RawMessage>,
     serving: tokio::task::JoinHandle<lspf::Result<lspf::Outcome>>,
+    writer_pause: Arc<WriterPause>,
 }
 
 impl TestConnection {
-    async fn start(server: Server<()>) -> Self {
+    async fn start<S>(server: Server<S>) -> Self
+    where
+        S: Send + Sync + 'static,
+    {
         let (incoming, incoming_rx) = mpsc::unbounded_channel();
         let (outgoing_tx, outgoing) = mpsc::unbounded_channel();
+        let writer_pause = Arc::new(WriterPause::default());
         let serving = tokio::spawn(server.serve(ChannelTransport {
             incoming: incoming_rx,
             outgoing: outgoing_tx,
+            writer_pause: Arc::clone(&writer_pause),
         }));
         incoming
             .send(request(
@@ -237,6 +337,7 @@ impl TestConnection {
             incoming,
             outgoing,
             serving,
+            writer_pause,
         };
         receive_id(&mut connection.outgoing, 1).await;
         connection
@@ -244,6 +345,10 @@ impl TestConnection {
 
     fn send(&self, message: RawMessage) {
         self.incoming.send(message).unwrap();
+    }
+
+    fn pause_next_write(&self) {
+        self.writer_pause.pause_next();
     }
 
     async fn stop(self) -> lspf::Outcome {
@@ -498,6 +603,62 @@ async fn concurrent_pending_releases_report_each_atomic_depth_transition() {
         .map(|event| event["resource_current"].as_u64().unwrap())
         .collect();
     assert_eq!(release_depths, [1, 0]);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn outbound_queue_rejection_completes_the_rolled_back_request_as_rejected() {
+    let logs = LogBuffer::default();
+    let _guard = capture_traces(&logs);
+    let state = OverloadState::default();
+    let policy = lspf::ResourcePolicy {
+        max_outbound_messages: 1,
+        ..lspf::ResourcePolicy::default()
+    };
+    let server = Server::builder(state.clone())
+        .resource_policy(policy)
+        .request::<OverloadsPeer, _, _>(overloads_peer)
+        .build()
+        .unwrap();
+    let mut connection = TestConnection::start(server).await;
+
+    connection.pause_next_write();
+    connection.send(request(2, OverloadsPeer::METHOD, Value::Null));
+    connection.writer_pause.wait_until_paused().await;
+    state.rejected.notified().await;
+
+    let events = logs.events();
+    assert!(events.iter().any(|event| {
+        event["message"] == "resource budget changed"
+            && event["resource"] == "pending_requests"
+            && event["resource_action"] == "rollback"
+            && event["resource_current"] == 0
+            && event["direction"] == "outbound"
+            && event["method"] == PeerEcho::METHOD
+    }));
+    assert!(events.iter().any(|event| {
+        event["message"] == "request completed"
+            && event["direction"] == "outbound"
+            && event["method"] == PeerEcho::METHOD
+            && event["latency_ms"].is_number()
+            && event["completion"] == "rejected"
+    }));
+
+    connection.writer_pause.resume();
+    receive_notification_method(&mut connection.outgoing, "window/logMessage").await;
+    wait_for_event(&logs, |event| {
+        event["message"] == "resource budget changed"
+            && event["resource"] == "outbound_queue"
+            && event["resource_action"] == "release"
+            && event["resource_current"] == 0
+    })
+    .await;
+    state.resume_handler.notify_one();
+    receive_id(&mut connection.outgoing, 2).await;
+    connection.stop().await;
+
+    let text = logs.text();
+    assert!(!text.contains("secret-queued-notification"));
+    assert!(!text.contains("secret-rejected-request"));
 }
 
 #[tokio::test(flavor = "current_thread")]
