@@ -488,12 +488,8 @@ impl InboundRegistry {
                 None,
             );
             drop(inner);
-            self.failure_reporter.report(
-                ConnectionFailureCategory::Overload,
-                Some(ConnectionDirection::Inbound),
-                Some(method),
-                Some(&id),
-            );
+            self.failure_reporter
+                .report_unvalidated_inbound_method(ConnectionFailureCategory::Overload, Some(&id));
             return Err(InboundReserveError::CapacityExhausted);
         };
         let permit = Arc::new(permit);
@@ -1060,10 +1056,8 @@ where
                 ) {
                     Ok(reserved) => reserved,
                     Err(InboundReserveError::DuplicateId) => {
-                        self.failure_reporter.report(
+                        self.failure_reporter.report_unvalidated_inbound_method(
                             ConnectionFailureCategory::Protocol,
-                            Some(ConnectionDirection::Inbound),
-                            Some(method.as_ref()),
                             Some(&id),
                         );
                         self.trace.request_completed(
@@ -1111,10 +1105,8 @@ where
                         Lifecycle::Uninitialized(_) | Lifecycle::Initializing
                     )
                 {
-                    self.failure_reporter.report(
+                    self.failure_reporter.report_unvalidated_inbound_method(
                         ConnectionFailureCategory::Protocol,
-                        Some(ConnectionDirection::Inbound),
-                        Some(method.as_ref()),
                         Some(&reservation.id),
                     );
                     self.inbound.complete(
@@ -1126,10 +1118,8 @@ where
                 }
                 // After `shutdown`, every request is invalid until `exit`.
                 if matches!(self.lifecycle, Lifecycle::ShuttingDown | Lifecycle::Exited) {
-                    self.failure_reporter.report(
+                    self.failure_reporter.report_unvalidated_inbound_method(
                         ConnectionFailureCategory::Protocol,
-                        Some(ConnectionDirection::Inbound),
-                        Some(method.as_ref()),
                         Some(&reservation.id),
                     );
                     self.inbound.complete(
@@ -1205,10 +1195,8 @@ where
                         let params = match decode_value(&params) {
                             Ok(params) => params,
                             Err(error) => {
-                                self.failure_reporter.report(
+                                self.failure_reporter.report_unvalidated_inbound_method(
                                     ConnectionFailureCategory::Protocol,
-                                    Some(ConnectionDirection::Inbound),
-                                    Some(method.as_ref()),
                                     Some(&reservation.id),
                                 );
                                 self.inbound.complete(&self.out_tx, reservation, Err(error));
@@ -1336,10 +1324,8 @@ where
                     // before `initialize` there is no Router, and after
                     // `shutdown` the connection accepts no further user work.
                     let Lifecycle::Running(service) = &self.lifecycle else {
-                        self.failure_reporter.report(
+                        self.failure_reporter.report_unvalidated_inbound_method(
                             ConnectionFailureCategory::Protocol,
-                            Some(ConnectionDirection::Inbound),
-                            Some(other),
                             None,
                         );
                         debug!(method = other, "notification outside running state ignored");
@@ -1402,10 +1388,8 @@ where
                     let params = match decode_value(&params) {
                         Ok(params) => params,
                         Err(error) => {
-                            self.failure_reporter.report(
+                            self.failure_reporter.report_unvalidated_inbound_method(
                                 ConnectionFailureCategory::Protocol,
-                                Some(ConnectionDirection::Inbound),
-                                Some(other),
                                 None,
                             );
                             debug!(method = other, %error, "notification params ignored");

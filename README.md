@@ -402,10 +402,12 @@ connection ID and, when known, direction, method, and request ID. It never
 contains parameters, results, document text, wire data, panic payloads, or
 underlying error messages. Numeric request IDs retain their value;
 peer-controlled string IDs are exposed only as `ConnectionRequestId::String`,
-with their contents redacted. Each failure is reported at its source. A panic in
-the hook is caught and logged; it cannot suppress a response or interrupt the
-connection's cleanup. The hook observes connection failures outside the user
-Layer chain, which still wraps user dispatch only.
+with their contents redacted. Method names are included only when they are
+framework-owned, registered, or locally declared by a typed outbound request;
+other peer-controlled method names are omitted. Each failure is reported at its
+source. A panic in the hook is caught and logged; it cannot suppress a response
+or interrupt the connection's cleanup. The hook observes connection failures
+outside the user Layer chain, which still wraps user dispatch only.
 
 After the server initializes, `vscode-languageclient` automatically registers
 the four Commands advertised through `executeCommandProvider`. The extension

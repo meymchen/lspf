@@ -355,7 +355,9 @@ let _server = lspf::Server::builder(State)
 overload 与 close failure。context 包含 connection ID，以及已知的 direction、method
 与 request ID；不会包含 parameter、result、Document text、wire data、panic payload
 或底层 error message。numeric request ID 会保留原值；peer-controlled string ID
-只会显示为 `ConnectionRequestId::String`，不会暴露内容。每个 failure 都在来源处
+只会显示为 `ConnectionRequestId::String`，不会暴露内容。method name 只有在它是
+framework-owned、已注册，或由 typed outbound request 在本地声明时才会包含；其他
+peer-controlled method name 会被省略。每个 failure 都在来源处
 报告一次。hook 内的 panic 会被捕获并记录，不能阻止 response 或中断连接清理。
 该 hook 在用户 Layer chain 外观察连接 failure；用户 Layer 仍然只包装用户 dispatch。
 

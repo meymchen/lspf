@@ -28,6 +28,14 @@ impl Notification for Stop {
     const METHOD: &'static str = "test/stop";
 }
 
+enum ClientQuery {}
+
+impl Request for ClientQuery {
+    type Params = ();
+    type Result = String;
+    const METHOD: &'static str = "test/clientQuery";
+}
+
 #[derive(Default)]
 struct TestTransport {
     inbound: VecDeque<Result<RawMessage, TransportError>>,
@@ -56,6 +64,22 @@ struct SlowWriterTransport {
 
 struct SlowWriter;
 
+struct CorrelatedResponseTransport {
+    outbound_request: Arc<tokio::sync::Notify>,
+    handler_response: Arc<tokio::sync::Notify>,
+}
+
+struct CorrelatedResponseReader {
+    stage: u8,
+    outbound_request: Arc<tokio::sync::Notify>,
+    handler_response: Arc<tokio::sync::Notify>,
+}
+
+struct CorrelatedResponseWriter {
+    outbound_request: Arc<tokio::sync::Notify>,
+    handler_response: Arc<tokio::sync::Notify>,
+}
+
 struct CountingLayer(Arc<AtomicUsize>);
 
 impl Layer<()> for CountingLayer {
@@ -77,6 +101,68 @@ impl Transport for SlowWriterTransport {
 impl TransportWriter for SlowWriter {
     async fn send(&mut self, _message: RawMessage) -> Result<(), TransportError> {
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        Ok(())
+    }
+
+    async fn shutdown(self) -> Result<(), TransportError> {
+        Ok(())
+    }
+}
+
+impl Transport for CorrelatedResponseTransport {
+    type Reader = CorrelatedResponseReader;
+    type Writer = CorrelatedResponseWriter;
+
+    fn split(self) -> (Self::Reader, Self::Writer) {
+        (
+            CorrelatedResponseReader {
+                stage: 0,
+                outbound_request: Arc::clone(&self.outbound_request),
+                handler_response: Arc::clone(&self.handler_response),
+            },
+            CorrelatedResponseWriter {
+                outbound_request: self.outbound_request,
+                handler_response: self.handler_response,
+            },
+        )
+    }
+}
+
+impl TransportReader for CorrelatedResponseReader {
+    async fn recv(&mut self) -> Result<RawMessage, TransportError> {
+        let message = match self.stage {
+            0 => initialize(1),
+            1 => request(2, Echo::METHOD, serde_json::json!("trigger")),
+            2 => {
+                self.outbound_request.notified().await;
+                RawMessage::Response {
+                    id: RequestId::Number(1),
+                    result: Ok(Bytes::from_static(b"42")),
+                }
+            }
+            3 => {
+                self.handler_response.notified().await;
+                notification("exit", serde_json::Value::Null)
+            }
+            _ => return Err(TransportError::Closed),
+        };
+        self.stage += 1;
+        Ok(message)
+    }
+}
+
+impl TransportWriter for CorrelatedResponseWriter {
+    async fn send(&mut self, message: RawMessage) -> Result<(), TransportError> {
+        match message {
+            RawMessage::Request { ref method, .. } if method == ClientQuery::METHOD => {
+                self.outbound_request.notify_one();
+            }
+            RawMessage::Response {
+                id: RequestId::Number(2),
+                ..
+            } => self.handler_response.notify_one(),
+            _ => {}
+        }
         Ok(())
     }
 
@@ -214,7 +300,7 @@ async fn peer_controlled_string_request_ids_are_redacted() {
             Ok(initialize(1)),
             Ok(RawMessage::Request {
                 id: RequestId::String("secret-user-id".into()),
-                method: Cow::Borrowed("test/malformed"),
+                method: Cow::Borrowed("secret-method"),
                 params: Bytes::from_static(b"not-json"),
             }),
             Ok(notification("exit", serde_json::Value::Null)),
@@ -229,7 +315,45 @@ async fn peer_controlled_string_request_ids_are_redacted() {
         failures[0].context.request_id,
         Some(ConnectionRequestId::String)
     );
+    assert!(failures[0].context.method.is_none());
     assert!(!format!("{failures:?}").contains("secret-user-id"));
+    assert!(!format!("{failures:?}").contains("secret-method"));
+}
+
+#[tokio::test]
+async fn malformed_correlated_response_reports_protocol_failure_once() {
+    let failures = Arc::new(Mutex::new(Vec::<ConnectionFailure>::new()));
+    let recorded = Arc::clone(&failures);
+    let server = Server::builder(())
+        .request::<Echo, _, _>(|_, ctx: Context, value, _| async move {
+            let result = ctx.client().request::<ClientQuery>(()).await;
+            assert!(matches!(result, Err(lspf::ClientError::Deserialize(_))));
+            Ok(value)
+        })
+        .on_error(move |failure| recorded.lock().unwrap().push(failure))
+        .build()
+        .unwrap();
+    let transport = CorrelatedResponseTransport {
+        outbound_request: Arc::new(tokio::sync::Notify::new()),
+        handler_response: Arc::new(tokio::sync::Notify::new()),
+    };
+
+    server.serve(transport).await.unwrap();
+    let failures = failures.lock().unwrap();
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert_eq!(failures[0].category, ConnectionFailureCategory::Protocol);
+    assert_eq!(
+        failures[0].context.direction,
+        Some(lspf::ConnectionDirection::Inbound)
+    );
+    assert_eq!(
+        failures[0].context.method.as_deref(),
+        Some(ClientQuery::METHOD)
+    );
+    assert_eq!(
+        failures[0].context.request_id,
+        Some(ConnectionRequestId::Number(1))
+    );
 }
 
 #[tokio::test]
@@ -459,7 +583,7 @@ async fn inbound_overload_reports_the_rejected_request_once() {
     let failures = failures.lock().unwrap();
     assert_eq!(failures.len(), 1);
     assert_eq!(failures[0].category, ConnectionFailureCategory::Overload);
-    assert_eq!(failures[0].context.method.as_deref(), Some(Echo::METHOD));
+    assert!(failures[0].context.method.is_none());
     assert_eq!(
         failures[0].context.request_id,
         Some(ConnectionRequestId::Number(3))

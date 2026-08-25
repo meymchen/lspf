@@ -659,6 +659,10 @@ impl OutboundQueue {
         self.inner.trace
     }
 
+    pub(crate) fn failure_reporter(&self) -> crate::failure::FailureReporter {
+        self.inner.failure_reporter.clone()
+    }
+
     /// The current queue depth.
     #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(crate) fn depth(&self) -> usize {
@@ -827,6 +831,7 @@ pub struct Client {
     state: Arc<ClientState>,
     trace: SharedTrace,
     telemetry: crate::telemetry::ConnectionTrace,
+    failure_reporter: crate::failure::FailureReporter,
 }
 
 impl fmt::Debug for Client {
@@ -842,6 +847,7 @@ impl Client {
         outbound_request_timeout: Option<Duration>,
     ) -> Self {
         let telemetry = outgoing.connection_trace();
+        let failure_reporter = outgoing.failure_reporter();
         Self {
             outgoing,
             outbound,
@@ -853,6 +859,7 @@ impl Client {
             }),
             trace: SharedTrace::default(),
             telemetry,
+            failure_reporter,
         }
     }
 
@@ -1120,9 +1127,17 @@ impl Client {
         .map_err(|_| ClientError::OutboundClosed)?;
 
         match outcome {
-            PendingOutcome::Response(Ok(bytes)) => {
-                serde_json::from_slice::<R::Result>(&bytes).map_err(ClientError::Deserialize)
-            }
+            PendingOutcome::Response(Ok(bytes)) => serde_json::from_slice::<R::Result>(&bytes)
+                .map_err(|error| {
+                    let request_id = RequestId::Number(id as i32);
+                    self.failure_reporter.report(
+                        crate::ConnectionFailureCategory::Protocol,
+                        Some(crate::ConnectionDirection::Inbound),
+                        Some(R::METHOD),
+                        Some(&request_id),
+                    );
+                    ClientError::Deserialize(error)
+                }),
             PendingOutcome::Response(Err(e)) => Err(ClientError::Remote(e)),
             PendingOutcome::Cancelled => Err(ClientError::Cancelled),
         }
