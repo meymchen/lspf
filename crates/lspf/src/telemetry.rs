@@ -2,9 +2,11 @@ use std::borrow::Cow;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-#[cfg(not(target_arch = "wasm32"))]
+// The API compatibility gate injects a synthetic wasm32 cfg into host rustdoc,
+// where Cargo intentionally does not enable target-specific dependencies.
+#[cfg(any(not(target_arch = "wasm32"), doc))]
 pub(crate) use std::time::Instant;
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", not(doc)))]
 pub(crate) use web_time::Instant;
 
 use tracing::{Span, info_span, trace};
