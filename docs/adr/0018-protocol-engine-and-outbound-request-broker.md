@@ -3,6 +3,11 @@
 Status note: ADR 0025 supersedes this decision's unbounded outbound-queue
 assumption; its ownership and completion rules remain in force.
 
+Status note: ADR 0026 narrows the first-close-cause rule. Ordinary causes
+remain first-wins, but a required outbound admission failure observed before
+close completes produces `Outcome::WriterFailed` even when another cause was
+recorded first.
+
 Status: Accepted. Extends the ownership boundaries and uses the type names and
 registration model fixed by
 [ADR 0017](0017-typed-router-and-capability-catalog.md). Clarifies ownership
@@ -181,7 +186,9 @@ complete another request.
 Reader EOF, Writer failure, explicit transport closure, and fatal protocol
 termination all request the same idempotent engine close operation. The first
 caller records the close cause and begins closure; later callers observe the
-same operation and do not repeat cleanup.
+same operation and do not repeat cleanup. ADR 0026 adds one outcome-selection
+exception: a required outbound admission failure before close quiesces takes
+precedence as `Outcome::WriterFailed`.
 
 The close operation stops new outbound requests, triggers session
 cancellation, closes the outbound queue, completes every outbound pending

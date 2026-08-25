@@ -9,13 +9,19 @@ mod conformance_support {
 }
 #[cfg(all(test, feature = "runtime-tokio", not(target_arch = "wasm32")))]
 mod conformance;
-#[cfg(any(
-    feature = "stdio",
-    feature = "tcp",
-    feature = "websocket",
-    feature = "worker-channel"
-))]
-mod envelope;
+// Outbound accounting always uses `envelope::serialize`; without a Transport
+// feature the inbound parser is intentionally dormant.
+#[cfg_attr(
+    not(any(
+        test,
+        feature = "stdio",
+        feature = "tcp",
+        feature = "websocket",
+        feature = "worker-channel"
+    )),
+    allow(dead_code)
+)]
+pub(crate) mod envelope;
 // `Content-Length` framing is the wire contract of stdio and TCP only.
 #[cfg(any(feature = "stdio", feature = "tcp"))]
 pub mod framing;

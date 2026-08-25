@@ -18,8 +18,10 @@ end-to-end stdio test beside it.
 ## Notifications
 
 A notification is fire-and-forget: it is encoded and enqueued synchronously,
-allocates no ID, and fails only if the connection is closing or the params
-cannot be encoded. The named helpers cover the stable outgoing surface —
+allocates no ID, and returns `ClientError::OutboundOverloaded` if the
+connection's message-count or encoded-byte budget is full. It can also fail if
+the connection is closing or the params cannot be encoded. The named helpers
+cover the stable outgoing surface —
 [`publish_diagnostics`](lspf::Client::publish_diagnostics),
 [`show_message`](lspf::Client::show_message),
 [`log_message`](lspf::Client::log_message),
@@ -237,7 +239,9 @@ are correlated by ID; abandoning the future before the response arrives
 removes the pending entry and emits one `$/cancelRequest`; session close
 resolves every pending request with `ClientError::Cancelled`; a peer's
 JSON-RPC error surfaces as [`ClientError::Remote`](lspf::ClientError::Remote)
-carrying the full code, message, and data.
+carrying the full code, message, and data. A request rejected by the outbound
+message or byte budget returns `ClientError::OutboundOverloaded` and removes
+the pending entry before returning.
 
 ## Helper reference
 
@@ -286,15 +290,10 @@ implicit behavior:
 - **No dynamic-registration state.** The framework keeps no list of
   capabilities registered with the client; tracking what you registered is
   the application's job.
-- **No default request timeout.** A request future resolves when the peer
-  answers, errors, or the session closes — or when you drop it, which sends
-  `$/cancelRequest`. Any deadline is yours to impose (for example with
-  `tokio::time::timeout`).
-- **No bounded queue.** The outbound queue is unbounded and never drops,
-  reorders, or delays a message. Depth is observed only: past
-  [`DEFAULT_OUTBOUND_WARNING_THRESHOLD`](lspf::DEFAULT_OUTBOUND_WARNING_THRESHOLD)
-  (1024 by default, configurable per server) the engine warns once per upward
-  crossing and records `outbound.queue_depth` in tracing.
+- **No implicit overload recovery.** The resource policy bounds queued message
+  count and encoded bytes. When either budget is full, ordinary sends return
+  `ClientError::OutboundOverloaded`; the application decides whether to retry
+  or skip optional output.
 - **No notebook support.** The helper surface contains no notebook method.
 - **No implicit progress end.** Dropping a [`ProgressHandle`] removes its
   token with a warning but sends nothing; only `end` ends a progress.

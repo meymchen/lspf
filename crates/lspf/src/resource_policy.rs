@@ -50,6 +50,13 @@ impl fmt::Display for ResourcePolicyField {
 /// allocation, or handler-task creation; excess requests receive LSP
 /// `ServerCancelled` (`-32802`) with the stable message
 /// `inbound request capacity exhausted`.
+/// Outbound admission counts one slot and the exact JSON-RPC envelope bytes
+/// for each accepted message until its transport send finishes. Ordinary
+/// [`Client`](crate::Client) operations return
+/// [`ClientError::OutboundOverloaded`](crate::ClientError::OutboundOverloaded)
+/// when either budget is full. Responses, protocol errors, and
+/// `$/cancelRequest` use the engine's failure-close path if they cannot fit;
+/// connection close admits nothing new and drains the already-accounted queue.
 /// Setting `outbound_request_timeout` to `None` explicitly disables that
 /// deadline. All numeric budgets and enabled deadlines must be greater than
 /// zero; invalid policies are rejected by [`ServerBuilder::build`](crate::ServerBuilder::build).
