@@ -120,6 +120,10 @@ pub enum ProgressError {
 #[derive(Debug, Error, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum BuildError {
+    /// More than one connection-level error hook was registered.
+    #[error("connection error hook registered more than once")]
+    DuplicateErrorHook,
+
     /// Two handlers were registered for the same request method.
     #[error("duplicate handler registered for method `{0}`")]
     DuplicateMethod(String),

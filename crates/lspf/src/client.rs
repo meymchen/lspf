@@ -453,6 +453,7 @@ struct OutboundAdmission {
     limits: OutboundLimits,
     failure: CancellationToken,
     trace: crate::telemetry::ConnectionTrace,
+    failure_reporter: crate::failure::FailureReporter,
     /// Depth and warn-state move together under one lock, so a concurrent
     /// enqueue can never observe a stale warn-state for a depth that has
     /// already dropped back below the threshold (and vice versa).
@@ -492,13 +493,15 @@ impl OutboundQueue {
     /// which one warning is emitted per upward crossing.
     #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(crate) fn new(threshold: usize) -> (Self, UnboundedReceiver<RawMessage>) {
+        let trace = crate::telemetry::ConnectionTrace::new();
         Self::with_limits(
             threshold,
             OutboundLimits {
                 max_messages: usize::MAX,
                 max_bytes: usize::MAX,
             },
-            crate::telemetry::ConnectionTrace::new(),
+            trace,
+            crate::failure::FailureReporter::new(None, trace.id()),
         )
     }
 
@@ -514,10 +517,25 @@ impl OutboundQueue {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn bounded_with_trace(
         max_messages: usize,
         max_bytes: usize,
         trace: crate::telemetry::ConnectionTrace,
+    ) -> (Self, UnboundedReceiver<RawMessage>) {
+        Self::bounded_with_reporter(
+            max_messages,
+            max_bytes,
+            trace,
+            crate::failure::FailureReporter::new(None, trace.id()),
+        )
+    }
+
+    pub(crate) fn bounded_with_reporter(
+        max_messages: usize,
+        max_bytes: usize,
+        trace: crate::telemetry::ConnectionTrace,
+        failure_reporter: crate::failure::FailureReporter,
     ) -> (Self, UnboundedReceiver<RawMessage>) {
         Self::with_limits(
             max_messages,
@@ -526,6 +544,7 @@ impl OutboundQueue {
                 max_bytes,
             },
             trace,
+            failure_reporter,
         )
     }
 
@@ -533,6 +552,7 @@ impl OutboundQueue {
         threshold: usize,
         limits: OutboundLimits,
         trace: crate::telemetry::ConnectionTrace,
+        failure_reporter: crate::failure::FailureReporter,
     ) -> (Self, UnboundedReceiver<RawMessage>) {
         let (tx, rx) = mpsc::unbounded();
         (
@@ -543,6 +563,7 @@ impl OutboundQueue {
                     limits,
                     failure: CancellationToken::new(),
                     trace,
+                    failure_reporter,
                     state: Mutex::new(AdmissionState {
                         depth: 0,
                         encoded_bytes: 0,
@@ -580,6 +601,12 @@ impl OutboundQueue {
                 .checked_add(encoded_bytes)
                 .is_none_or(|bytes| bytes > self.inner.limits.max_bytes)
         {
+            let (method, request_id) = match &message {
+                RawMessage::Request { method, id, .. } => (Some(method.as_ref()), Some(id)),
+                RawMessage::Notification { method, .. } => (Some(method.as_ref()), None),
+                RawMessage::Response { id, .. } => (None, Some(id)),
+                RawMessage::ProtocolError { .. } => (None, None),
+            };
             self.inner.trace.resource_budget(
                 Resource::OutboundQueue,
                 ResourceAction::Reject,
@@ -593,6 +620,13 @@ impl OutboundQueue {
                 max_messages = self.inner.limits.max_messages,
                 max_bytes = self.inner.limits.max_bytes,
                 "outbound queue capacity is exhausted"
+            );
+            drop(state);
+            self.inner.failure_reporter.report(
+                crate::ConnectionFailureCategory::Overload,
+                Some(crate::ConnectionDirection::Outbound),
+                method,
+                request_id,
             );
             return Err(OutboundSendError::Overloaded);
         }

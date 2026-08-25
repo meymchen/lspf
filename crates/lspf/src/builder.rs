@@ -19,6 +19,7 @@
 //! [`on_initialized`]: ServerBuilder::on_initialized
 //! [`on_shutdown`]: ServerBuilder::on_shutdown
 //! [`on_exit`]: ServerBuilder::on_exit
+//! [`on_error`]: ServerBuilder::on_error
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -171,6 +172,7 @@ macro_rules! impl_shared_handler {
 }
 
 impl_shared_handler!(A, B);
+impl_shared_handler!(A);
 impl_shared_handler!(A, B, C);
 impl_shared_handler!(A, B, C, D);
 
@@ -263,6 +265,9 @@ pub(crate) type OnShutdown<S> =
 /// `()`, which is what keeps the engine's lifecycle-derived [`Outcome`] beyond
 /// its reach.
 pub(crate) type OnExit<S> = Box<dyn SharedHandler<(Arc<S>, Context), NotificationFuture>>;
+
+/// The synchronous, panic-isolated observer for connection-level failures.
+pub(crate) type ErrorHook = crate::failure::ErrorHook;
 
 /// Wrap a typed request handler in the erased closure the [`Router`] stores.
 /// Shared by [`ServerBuilder::request`] and [`ServerBuilder::feature`], which
@@ -690,6 +695,7 @@ pub struct ServerBuilder<S> {
     on_initialized: Option<OnInitialized<S>>,
     on_shutdown: Option<OnShutdown<S>>,
     on_exit: Option<OnExit<S>>,
+    error_hook: Option<ErrorHook>,
     layers: Vec<UserLayer<S>>,
     resource_policy: crate::ResourcePolicy,
     /// First registration error seen, if any. Reported by `build`.
@@ -707,6 +713,7 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
             on_initialized: None,
             on_shutdown: None,
             on_exit: None,
+            error_hook: None,
             layers: Vec::new(),
             resource_policy: crate::ResourcePolicy::default(),
             error: None,
@@ -1022,6 +1029,24 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
         self
     }
 
+    /// Register the connection-level error hook.
+    ///
+    /// The hook receives stable failure categories and non-sensitive identity
+    /// only. It runs outside the user Layer chain, and any panic from the hook
+    /// is isolated so it cannot change protocol responses or connection
+    /// cleanup. Registering it more than once is reported by [`build`](Self::build).
+    pub fn on_error<H>(mut self, hook: H) -> Self
+    where
+        H: Fn(crate::ConnectionFailure) + SharedHandler<(crate::ConnectionFailure,), ()> + 'static,
+    {
+        if self.error_hook.is_some() {
+            self.record(BuildError::DuplicateErrorHook);
+        } else {
+            self.error_hook = Some(Arc::new(hook));
+        }
+        self
+    }
+
     /// Register a user Layer around normalized user dispatch.
     ///
     /// The last registered Layer is outermost among user Layers. Framework
@@ -1099,6 +1124,7 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
             on_initialized: self.on_initialized,
             on_shutdown: self.on_shutdown,
             on_exit: self.on_exit,
+            error_hook: self.error_hook,
             layers: self.layers,
             resource_policy: self.resource_policy,
         })
@@ -1253,6 +1279,7 @@ pub struct Server<S> {
     pub(crate) on_initialized: Option<OnInitialized<S>>,
     pub(crate) on_shutdown: Option<OnShutdown<S>>,
     pub(crate) on_exit: Option<OnExit<S>>,
+    pub(crate) error_hook: Option<ErrorHook>,
     pub(crate) layers: Vec<UserLayer<S>>,
     pub(crate) resource_policy: crate::ResourcePolicy,
 }

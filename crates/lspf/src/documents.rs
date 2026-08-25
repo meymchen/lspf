@@ -17,6 +17,13 @@ fn document_text_capacity_exhausted() -> crate::LspError {
     crate::LspError::invalid_request(DOCUMENT_TEXT_CAPACITY_EXHAUSTED)
 }
 
+pub(crate) fn is_capacity_error(error: &crate::LspError) -> bool {
+    matches!(
+        error.message().as_str(),
+        DOCUMENT_COUNT_CAPACITY_EXHAUSTED | DOCUMENT_TEXT_CAPACITY_EXHAUSTED
+    )
+}
+
 /// Negotiated meaning of `Position.character` (ADR 0016).
 ///
 /// LSP defaults to UTF-16; lspf prefers UTF-8 when the client offers it.

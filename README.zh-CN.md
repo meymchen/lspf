@@ -333,6 +333,31 @@ connection 与 call identity。
 wire envelope。应用可以在 handler 内添加自己的 event，但也应把这些 payload 视为
 敏感数据。
 
+如果 metrics 或 alerting 不应依赖 tracing 输出，可在 Server 上注册一个连接错误
+hook：
+
+```rust
+struct State;
+
+let _server = lspf::Server::builder(State)
+    .on_error(|failure| {
+        eprintln!(
+            "connection {}: {:?}",
+            failure.context.connection_id,
+            failure.category,
+        );
+    })
+    .build()
+    .expect("server configuration is valid");
+```
+
+`ConnectionFailureCategory` 区分 framing、protocol、Transport、panic-isolation、
+overload 与 close failure。context 包含 connection ID，以及已知的 direction、method
+与 request ID；不会包含 parameter、result、Document text、wire data、panic payload
+或底层 error message。每个 failure 都在来源处报告一次。hook 内的 panic 会被捕获并
+记录，不能阻止 response 或中断连接清理。该 hook 在用户 Layer chain 外观察连接
+failure；用户 Layer 仍然只包装用户 dispatch。
+
 服务器初始化后，`vscode-languageclient` 会自动注册 `executeCommandProvider` 宣告的
 四个 Command。扩展 manifest 在 Command Palette 的 `lspf hello` 分类下提供标题。
 middleware 会为 `Read Active File` 和 `Run Outgoing Helper Journey` 加入当前编辑器的

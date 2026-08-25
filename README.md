@@ -378,6 +378,33 @@ The default events never record request parameters, response results,
 Document text, or a serialized wire envelope. Applications may add their own
 events inside handlers, but should treat those payloads as sensitive too.
 
+For metrics or alerting that should not depend on tracing output, register one
+connection error hook on the server:
+
+```rust
+struct State;
+
+let _server = lspf::Server::builder(State)
+    .on_error(|failure| {
+        eprintln!(
+            "connection {}: {:?}",
+            failure.context.connection_id,
+            failure.category,
+        );
+    })
+    .build()
+    .expect("server configuration is valid");
+```
+
+`ConnectionFailureCategory` distinguishes framing, protocol, Transport,
+panic-isolation, overload, and close failures. The context contains the
+connection ID and, when known, direction, method, and request ID. It never
+contains parameters, results, document text, wire data, panic payloads, or
+underlying error messages. Each failure is reported at its source. A panic in
+the hook is caught and logged; it cannot suppress a response or interrupt the
+connection's cleanup. The hook observes connection failures outside the user
+Layer chain, which still wraps user dispatch only.
+
 After the server initializes, `vscode-languageclient` automatically registers
 the four Commands advertised through `executeCommandProvider`. The extension
 manifest supplies their titles under the `lspf hello` category in the Command

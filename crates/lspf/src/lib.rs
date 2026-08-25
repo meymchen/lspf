@@ -51,6 +51,7 @@ mod documents;
 #[cfg(any(feature = "runtime-tokio", target_arch = "wasm32"))]
 mod engine;
 mod error;
+mod failure;
 pub mod features;
 mod file_provider;
 mod progress;
@@ -114,6 +115,9 @@ pub use documents::{Document, DocumentsView, PositionEncoding};
 #[cfg(any(feature = "runtime-tokio", target_arch = "wasm32"))]
 pub use engine::Outcome;
 pub use error::{BuildError, ClientError, Error, LspError, ProgressError, Result};
+pub use failure::{
+    ConnectionDirection, ConnectionFailure, ConnectionFailureCategory, ConnectionFailureContext,
+};
 pub use features::{FeatureSpec, NotificationFeatureSpec};
 #[cfg(target_arch = "wasm32")]
 pub use file_provider::EmptyFileProvider;
