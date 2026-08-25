@@ -39,6 +39,11 @@ web-sys = { workspace = true, optional = true, features = [
 # The Worker-hosted WASM task spawner behind the `wasm` feature (ADR 0020):
 # optional so the native default tree never carries WASM-only dependencies.
 wasm-bindgen-futures = { workspace = true, optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# Deadline sleeps are implemented by JavaScript timers only on a real WASM
+# target. Keeping this target-specific also lets the public-API gate inspect
+# WASM cfg branches with host rustdoc without compiling WASM-only internals.
 gloo-timers = { version = "0.3", optional = true, features = ["futures"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

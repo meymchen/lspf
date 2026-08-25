@@ -191,17 +191,27 @@ impl Runtime for WasmRuntime {
         let _ = rx.await;
     }
 
-    async fn sleep(&self, mut duration: Duration) {
-        // gloo-timers accepts u32 but casts it to the signed setTimeout
-        // argument internally, so every chunk must fit in i32.
-        let max_millis = i32::MAX as u32;
-        let max_chunk = Duration::from_millis(max_millis as u64);
-        while duration > max_chunk {
-            gloo_timers::future::TimeoutFuture::new(max_millis).await;
-            duration -= max_chunk;
+    async fn sleep(&self, duration: Duration) {
+        #[cfg(target_family = "wasm")]
+        {
+            // gloo-timers accepts u32 but casts it to the signed setTimeout
+            // argument internally, so every chunk must fit in i32.
+            let mut duration = duration;
+            let max_millis = i32::MAX as u32;
+            let max_chunk = Duration::from_millis(max_millis as u64);
+            while duration > max_chunk {
+                gloo_timers::future::TimeoutFuture::new(max_millis).await;
+                duration -= max_chunk;
+            }
+            let millis = duration.as_millis().max(1) as u32;
+            gloo_timers::future::TimeoutFuture::new(millis).await;
         }
-        let millis = duration.as_millis().max(1) as u32;
-        gloo_timers::future::TimeoutFuture::new(millis).await;
+
+        // The public-API gate selects wasm32 cfg branches while rustdoc still
+        // targets the host. That synthetic target cannot execute this private
+        // runtime path, but it must type-check the public WASM surface.
+        #[cfg(not(target_family = "wasm"))]
+        let _ = duration;
     }
 }
 
