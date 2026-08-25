@@ -713,6 +713,10 @@ async fn expired_request_is_cancelled_and_cannot_capture_a_later_response() {
                 }
             },
         )
+        .resource_policy(ResourcePolicy {
+            handler_timeout: Duration::from_secs(120),
+            ..ResourcePolicy::default()
+        })
         .build()
         .expect("server builds");
 
@@ -816,6 +820,7 @@ async fn explicitly_disabled_deadline_waits_for_the_peer_response() {
         )
         .resource_policy(ResourcePolicy {
             outbound_request_timeout: None,
+            handler_timeout: Duration::from_secs(120),
             ..ResourcePolicy::default()
         })
         .build()

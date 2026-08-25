@@ -23,7 +23,9 @@ and gives all endpoint-construction failures one established error path.
 Enforcement lands at the owning seams: admission before handler task creation,
 outbound queue accounting at encode/enqueue, Document accounting at protocol
 mutation, outbound expiry in the pending-request broker, and handler expiry at
-the completion gate. Those changes are staged in issues #164 through #168;
-ADR 0026 fixes the outbound admission and failure-close rules implemented by
-issue #165. The remaining enforcement work stays staged in issues #166 through
-#168.
+the completion gate. A user Layer may override the handler timeout for one
+request through its normalized `IncomingCall`; expiry cooperatively cancels
+the handler and selects the stable `ServerCancelled` (`-32802`,
+`handler deadline expired`) response. Those changes were staged in issues
+#164 through #168; ADR 0026 fixes the outbound admission and failure-close
+rules implemented by issue #165.
