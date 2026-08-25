@@ -90,7 +90,7 @@ constructing an `IncomingCall`. Each field has one meaning:
 - `handler_timeout` is the connection resource policy's finite default for a
   request and is absent for a notification. A Layer may replace the duration
   synchronously before forwarding the call; the engine reads the final value
-  after constructing the Service future.
+  after first entering the Service future.
 
 `Service<State>` consumes one `IncomingCall` and asynchronously returns
 exactly one `ServiceResult`. `RouterService` resolves `method` in the frozen

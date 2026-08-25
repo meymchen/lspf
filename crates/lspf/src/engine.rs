@@ -1419,34 +1419,43 @@ where
                 let handler_timeout = HandlerTimeout::new(default_timeout);
                 let call =
                     IncomingCall::request(method, id, params, ctx, state, handler_timeout.clone());
-                let handler = service.call(call);
-                let completion = select(Box::pin(handler), Box::pin(cancellation.cancelled()));
-                let result = match select(
-                    Box::pin(completion),
-                    Box::pin(crate::runtime::sleep(handler_timeout.get())),
-                )
-                .await
-                {
-                    Either::Left((Either::Left((result, _)), _)) => result,
-                    Either::Left((Either::Right(((), handler)), _)) => {
-                        // CancellationToken wakes every waiter, but an executor
-                        // yield does not guarantee this handler is polled before a
-                        // separate abort. Poll it here, in its own task, then end
-                        // the task without relying on scheduler fairness.
-                        let _ = handler.now_or_never();
-                        ServiceResult::Error(LspError::RequestCancelled)
-                    }
-                    Either::Right(((), completion)) => {
-                        cancellation.cancel();
-                        // Match peer cancellation's cooperative final poll: code
-                        // awaiting the token observes expiry before its future is
-                        // dropped, while the timeout remains the selected result.
-                        let _ = completion.now_or_never();
-                        ServiceResult::Error(LspError::ServerError {
-                            code: SERVER_CANCELLED as i32,
-                            message: HANDLER_DEADLINE_EXPIRED.to_string(),
-                            data: None,
-                        })
+                let mut handler = service.call(call);
+                // Enter the fixed Service stack once before selecting the
+                // timeout. This reaches synchronous Layer configuration while
+                // preserving an immediately-ready result.
+                let result = match handler.as_mut().now_or_never() {
+                    Some(result) => result,
+                    None => {
+                        let completion =
+                            select(Box::pin(handler), Box::pin(cancellation.cancelled()));
+                        match select(
+                            Box::pin(completion),
+                            Box::pin(crate::runtime::sleep(handler_timeout.get())),
+                        )
+                        .await
+                        {
+                            Either::Left((Either::Left((result, _)), _)) => result,
+                            Either::Left((Either::Right(((), handler)), _)) => {
+                                // CancellationToken wakes every waiter, but an executor
+                                // yield does not guarantee this handler is polled before a
+                                // separate abort. Poll it here, in its own task, then end
+                                // the task without relying on scheduler fairness.
+                                let _ = handler.now_or_never();
+                                ServiceResult::Error(LspError::RequestCancelled)
+                            }
+                            Either::Right(((), completion)) => {
+                                cancellation.cancel();
+                                // Match peer cancellation's cooperative final poll: code
+                                // awaiting the token observes expiry before its future is
+                                // dropped, while the timeout remains the selected result.
+                                let _ = completion.now_or_never();
+                                ServiceResult::Error(LspError::ServerError {
+                                    code: SERVER_CANCELLED as i32,
+                                    message: HANDLER_DEADLINE_EXPIRED.to_string(),
+                                    data: None,
+                                })
+                            }
+                        }
                     }
                 };
                 let result = match result {
