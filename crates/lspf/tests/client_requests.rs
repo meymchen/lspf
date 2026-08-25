@@ -6,11 +6,12 @@
 
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use bytes::Bytes;
 use lspf::types::request::Request;
 use lspf::{
-    ClientError, Context, RawMessage, RequestId, Server, Transport, TransportError,
+    ClientError, Context, RawMessage, RequestId, ResourcePolicy, Server, Transport, TransportError,
     TransportReader, TransportWriter,
 };
 use serde::{Deserialize, Serialize};
@@ -109,9 +110,16 @@ fn exit() -> RawMessage {
 }
 
 async fn recv(rx: &mut mpsc::UnboundedReceiver<RawMessage>) -> RawMessage {
-    tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+    recv_within(rx, Duration::from_secs(2)).await
+}
+
+async fn recv_within(
+    rx: &mut mpsc::UnboundedReceiver<RawMessage>,
+    timeout: Duration,
+) -> RawMessage {
+    tokio::time::timeout(timeout, rx.recv())
         .await
-        .expect("message within 2s")
+        .expect("message within watchdog")
         .expect("channel open")
 }
 
@@ -669,4 +677,196 @@ async fn late_response_after_cleanup_cannot_complete_another_request() {
 
     let result_b = captured.lock().unwrap().take().expect("handler captured B");
     assert_eq!(result_b.unwrap(), EchoResult { echoed: 42 });
+}
+
+/// An expired request is removed and cancelled once; its late response cannot
+/// complete the next request, whose monotonically allocated ID is distinct.
+#[tokio::test(start_paused = true)]
+async fn expired_request_is_cancelled_and_cannot_capture_a_later_response() {
+    let (in_tx, in_rx) = mpsc::unbounded_channel();
+    let (out_tx, mut out_rx) = mpsc::unbounded_channel();
+
+    type CapturedResults = (
+        Result<EchoResult, ClientError>,
+        Result<EchoResult, ClientError>,
+    );
+    let captured: Arc<Mutex<Option<CapturedResults>>> = Arc::new(Mutex::new(None));
+    let captured_for_handler = Arc::clone(&captured);
+
+    enum TimeoutRequest {}
+    impl Request for TimeoutRequest {
+        type Params = serde_json::Value;
+        type Result = serde_json::Value;
+        const METHOD: &'static str = "test/timeout";
+    }
+
+    let server = Server::builder(())
+        .request::<TimeoutRequest, _, _>(
+            move |_state: Arc<()>, ctx: Context, _params: serde_json::Value, _ct| {
+                let captured = Arc::clone(&captured_for_handler);
+                async move {
+                    let client = ctx.client();
+                    let first = client.request::<EchoRequest>(json!(null)).await;
+                    let second = client.request::<EchoRequest>(json!(null)).await;
+                    *captured.lock().unwrap() = Some((first, second));
+                    Ok(json!(null))
+                }
+            },
+        )
+        .build()
+        .expect("server builds");
+
+    let serve = tokio::spawn(server.serve(ChannelTransport {
+        incoming: in_rx,
+        outgoing: out_tx,
+    }));
+
+    in_tx
+        .send(inbound_request(
+            1,
+            "initialize",
+            json!({ "processId": null, "rootUri": null, "capabilities": {} }),
+        ))
+        .unwrap();
+    recv(&mut out_rx).await;
+
+    in_tx
+        .send(inbound_request(2, TimeoutRequest::METHOD, json!(null)))
+        .unwrap();
+
+    let first_request = recv(&mut out_rx).await;
+    let first_id = match first_request.id() {
+        Some(RequestId::Number(id)) => *id,
+        _ => panic!("expected the first outbound request"),
+    };
+
+    let cancellation = recv_within(&mut out_rx, Duration::from_secs(31)).await;
+    match cancellation {
+        RawMessage::Notification { method, params } => {
+            assert_eq!(&*method, "$/cancelRequest");
+            let params: serde_json::Value = serde_json::from_slice(&params).unwrap();
+            assert_eq!(params["id"], json!(first_id));
+        }
+        other => panic!("expected one cancellation after expiry, got {other:?}"),
+    }
+
+    let second_request = recv(&mut out_rx).await;
+    let second_id = match second_request.id() {
+        Some(RequestId::Number(id)) => *id,
+        _ => panic!("expected the second outbound request"),
+    };
+    assert!(second_id > first_id, "expired IDs are never reused");
+
+    in_tx
+        .send(inbound_response(first_id, json!({ "echoed": 999 })))
+        .unwrap();
+    assert!(
+        out_rx.try_recv().is_err(),
+        "the late response cannot complete the second request"
+    );
+
+    in_tx
+        .send(inbound_response(second_id, json!({ "echoed": 42 })))
+        .unwrap();
+    let trigger_response = recv(&mut out_rx).await;
+    assert_eq!(trigger_response.id(), Some(&RequestId::Number(2)));
+    assert!(
+        out_rx.try_recv().is_err(),
+        "a completed request emits no cancellation"
+    );
+
+    in_tx.send(exit()).unwrap();
+    serve
+        .await
+        .expect("serve did not panic")
+        .expect("serve ended cleanly");
+
+    let (first, second) = captured.lock().unwrap().take().expect("results captured");
+    assert!(matches!(first, Err(ClientError::Timeout)));
+    assert_eq!(second.unwrap(), EchoResult { echoed: 42 });
+}
+
+/// Explicitly disabling the outbound deadline leaves the request pending past
+/// the finite default until its correlated response arrives.
+#[tokio::test(start_paused = true)]
+async fn explicitly_disabled_deadline_waits_for_the_peer_response() {
+    let (in_tx, in_rx) = mpsc::unbounded_channel();
+    let (out_tx, mut out_rx) = mpsc::unbounded_channel();
+
+    let captured: Arc<Mutex<Option<Result<EchoResult, ClientError>>>> = Arc::new(Mutex::new(None));
+    let captured_for_handler = Arc::clone(&captured);
+
+    enum DisabledTimeoutRequest {}
+    impl Request for DisabledTimeoutRequest {
+        type Params = serde_json::Value;
+        type Result = serde_json::Value;
+        const METHOD: &'static str = "test/disabled-timeout";
+    }
+
+    let server = Server::builder(())
+        .request::<DisabledTimeoutRequest, _, _>(
+            move |_state: Arc<()>, ctx: Context, _params: serde_json::Value, _ct| {
+                let captured = Arc::clone(&captured_for_handler);
+                async move {
+                    let result = ctx.client().request::<EchoRequest>(json!(null)).await;
+                    *captured.lock().unwrap() = Some(result);
+                    Ok(json!(null))
+                }
+            },
+        )
+        .resource_policy(ResourcePolicy {
+            outbound_request_timeout: None,
+            ..ResourcePolicy::default()
+        })
+        .build()
+        .expect("server builds");
+
+    let serve = tokio::spawn(server.serve(ChannelTransport {
+        incoming: in_rx,
+        outgoing: out_tx,
+    }));
+
+    in_tx
+        .send(inbound_request(
+            1,
+            "initialize",
+            json!({ "processId": null, "rootUri": null, "capabilities": {} }),
+        ))
+        .unwrap();
+    recv(&mut out_rx).await;
+
+    in_tx
+        .send(inbound_request(
+            2,
+            DisabledTimeoutRequest::METHOD,
+            json!(null),
+        ))
+        .unwrap();
+    let outbound = recv(&mut out_rx).await;
+    let request_id = match outbound.id() {
+        Some(RequestId::Number(id)) => *id,
+        _ => panic!("expected an outbound request"),
+    };
+
+    assert!(
+        tokio::time::timeout(Duration::from_secs(31), out_rx.recv())
+            .await
+            .is_err(),
+        "no timeout or cancellation is emitted after the default boundary"
+    );
+
+    in_tx
+        .send(inbound_response(request_id, json!({ "echoed": 42 })))
+        .unwrap();
+    let trigger_response = recv(&mut out_rx).await;
+    assert_eq!(trigger_response.id(), Some(&RequestId::Number(2)));
+
+    in_tx.send(exit()).unwrap();
+    serve
+        .await
+        .expect("serve did not panic")
+        .expect("serve ended cleanly");
+
+    let result = captured.lock().unwrap().take().expect("result captured");
+    assert_eq!(result.unwrap(), EchoResult { echoed: 42 });
 }

@@ -112,8 +112,12 @@ The cloneable typed handle for server-to-client requests and notifications,
 exposed through [[Context]] (`ctx.client()`). A typed notification is
 encoded and enqueued without allocating an ID; a typed request reserves a
 connection-local, never-reused ID and awaits its correlated response
-(ADR 0018). Abandoning a pending request emits one `$/cancelRequest` for its
-ID; session close resolves every pending request with `ClientError::Cancelled`.
+(ADR 0018). A finite default deadline bounds each request unless the resource
+policy disables it; expiry returns `ClientError::Timeout`, releases the pending
+request, and attempts one `$/cancelRequest`. Abandonment has the same
+cancellation behavior, late responses are ignored because IDs are never
+reused, and session close resolves every pending request with
+`ClientError::Cancelled`.
 Named helpers cover the stable outgoing notification surface
 (`publish_diagnostics`, `show_message`, `log_message`, `log_trace`,
 `telemetry_event`, `progress`): each sends its LSP-typed params verbatim and
@@ -234,8 +238,8 @@ cancels tasks (ADR 0020). Exactly two implementations exist —
 `TokioRuntime` on native targets and `WasmRuntime` on browser or Node Worker
 WASM —
 selected by compile target, with no runtime-selection API. `Runtime`
-executes spawn, abort, and join but owns no protocol state; it is not
-implementable or nameable by users.
+executes spawn, abort, join, cooperative yield, and deadline sleep but owns no
+protocol state; it is not implementable or nameable by users.
 _Avoid_: Executor, reactor (those are what `Runtime` delegates to).
 
 **Layer**:

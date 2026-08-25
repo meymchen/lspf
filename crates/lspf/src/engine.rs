@@ -251,7 +251,11 @@ where
         server.resource_policy.max_outbound_messages,
         server.resource_policy.max_outbound_bytes,
     );
-    let client = Client::new(out_tx.clone(), OutboundRegistry::default());
+    let client = Client::new(
+        out_tx.clone(),
+        OutboundRegistry::default(),
+        server.resource_policy.outbound_request_timeout,
+    );
     let close = CloseSignal::new();
     let runtime = default_runtime();
     let send_task = runtime.spawn(send_loop(writer, out_rx, client.clone(), close.clone()));
@@ -2052,7 +2056,7 @@ mod tests {
     #[tokio::test]
     async fn requests_responses_and_notifications_share_one_depth_counter() {
         let (queue, _rx) = OutboundQueue::new(crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD);
-        let client = Client::new(queue.clone(), OutboundRegistry::default());
+        let client = Client::new(queue.clone(), OutboundRegistry::default(), None);
 
         client
             .notify::<TestOutboundNotification>(serde_json::json!({}))
@@ -2088,7 +2092,7 @@ mod tests {
     #[tokio::test]
     async fn writer_failure_releases_attempted_and_abandoned_accounting() {
         let (queue, rx) = OutboundQueue::new(16);
-        let client = Client::new(queue.clone(), OutboundRegistry::default());
+        let client = Client::new(queue.clone(), OutboundRegistry::default(), None);
         for tag in 0..3 {
             queue.send(send_loop_message(tag)).unwrap();
         }
@@ -2127,7 +2131,7 @@ mod tests {
     #[tokio::test]
     async fn draining_after_close_decrements_every_message_in_order() {
         let (queue, rx) = OutboundQueue::new(2);
-        let client = Client::new(queue.clone(), OutboundRegistry::default());
+        let client = Client::new(queue.clone(), OutboundRegistry::default(), None);
         for tag in 0..3 {
             queue.send(send_loop_message(tag)).unwrap();
         }
@@ -2176,7 +2180,7 @@ mod tests {
     async fn a_slow_reader_cannot_grow_count_or_bytes_past_the_policy() {
         let message_bytes = encoded_len(&send_loop_message(0));
         let (queue, rx) = OutboundQueue::bounded(2, message_bytes * 2);
-        let client = Client::new(queue.clone(), OutboundRegistry::default());
+        let client = Client::new(queue.clone(), OutboundRegistry::default(), None);
         queue.send(send_loop_message(0)).unwrap();
         queue.send(send_loop_message(1)).unwrap();
 

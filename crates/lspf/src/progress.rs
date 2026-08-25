@@ -534,7 +534,7 @@ mod tests {
     ) {
         let (outgoing, receiver) = OutboundQueue::new(crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD);
         let outbound = OutboundRegistry::default();
-        let client = Client::new(outgoing, outbound.clone());
+        let client = Client::new(outgoing, outbound.clone(), None);
         (client, outbound, receiver)
     }
 

@@ -2,6 +2,11 @@
 // `wasm` feature is enforced by `lib.rs`'s compile_error, so the target check
 // alone is enough there; on native targets a runtime needs `runtime-tokio`.
 use std::future::Future;
+#[cfg(any(
+    all(not(target_arch = "wasm32"), feature = "runtime-tokio"),
+    target_arch = "wasm32",
+))]
+use std::time::Duration;
 
 #[cfg(target_arch = "wasm32")]
 use std::cell::Cell;
@@ -47,8 +52,9 @@ impl<T, F> TaskFuture<T> for F where F: Future<Output = T> + TaskSend + ?Sized {
 /// The protocol kernel reaches an executor only through this trait: it owns
 /// spawning, cooperative yielding, and — through the returned [`TaskHandle`] —
 /// abort and join. It holds no protocol state and is never nameable by users.
-/// It exists only where a runtime does: native targets with `runtime-tokio`,
-/// or wasm32 (whose `wasm` feature `lib.rs` enforces).
+/// It owns spawning, cooperative yielding, and deadline sleeps. It exists only
+/// where a runtime does: native targets with `runtime-tokio`, or wasm32 (whose
+/// `wasm` feature `lib.rs` enforces).
 #[cfg(any(
     all(not(target_arch = "wasm32"), feature = "runtime-tokio"),
     target_arch = "wasm32",
@@ -66,6 +72,19 @@ pub(crate) trait Runtime {
     /// rather than by kernel call sites.
     #[allow(dead_code)]
     fn yield_now(&self) -> impl Future<Output = ()>;
+
+    /// Wait for a connection-owned deadline without exposing the selected
+    /// executor to protocol modules.
+    fn sleep(&self, duration: Duration) -> impl Future<Output = ()>;
+}
+
+/// Wait on the selected runtime's clock.
+#[cfg(any(
+    all(not(target_arch = "wasm32"), feature = "runtime-tokio"),
+    target_arch = "wasm32",
+))]
+pub(crate) async fn sleep(duration: Duration) {
+    default_runtime().sleep(duration).await;
 }
 
 /// Runtime selected for native targets, delegating to the Tokio runtime.
@@ -89,6 +108,10 @@ impl Runtime for TokioRuntime {
 
     async fn yield_now(&self) {
         tokio::task::yield_now().await;
+    }
+
+    async fn sleep(&self, duration: Duration) {
+        tokio::time::sleep(duration).await;
     }
 }
 
@@ -166,6 +189,19 @@ impl Runtime for WasmRuntime {
             let _ = tx.send(());
         });
         let _ = rx.await;
+    }
+
+    async fn sleep(&self, mut duration: Duration) {
+        // gloo-timers accepts u32 but casts it to the signed setTimeout
+        // argument internally, so every chunk must fit in i32.
+        let max_millis = i32::MAX as u32;
+        let max_chunk = Duration::from_millis(max_millis as u64);
+        while duration > max_chunk {
+            gloo_timers::future::TimeoutFuture::new(max_millis).await;
+            duration -= max_chunk;
+        }
+        let millis = duration.as_millis().max(1) as u32;
+        gloo_timers::future::TimeoutFuture::new(millis).await;
     }
 }
 
