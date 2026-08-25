@@ -217,7 +217,11 @@ async fn syntax_tree(client: &Client, params: serde_json::Value) -> Result<Strin
 pending 请求都以 `ClientError::Cancelled` 完成；客户端返回的 JSON-RPC error 会
 变为 [`ClientError::Remote`](lspf::ClientError::Remote)，并保留完整 code、message
 和 data。请求若因出站消息或字节预算已满而被拒绝，会返回
-`ClientError::OutboundOverloaded`，并在返回前移除 pending entry。
+`ClientError::OutboundOverloaded`，并在返回前移除 pending entry。请求默认等待
+30 秒；到期后返回 [`ClientError::Timeout`](lspf::ClientError::Timeout)，并尝试发送
+一次 `$/cancelRequest`。可以通过 `ResourcePolicy::outbound_request_timeout` 调整
+时限，或设为 `None` 以停用时限。到期的 ID 不会重用，因此迟到的响应无法完成后续
+请求。
 
 ## 辅助方法参考
 

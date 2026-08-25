@@ -49,6 +49,11 @@ pub enum ClientError {
     #[error("client request was cancelled")]
     Cancelled,
 
+    /// The peer did not answer before the connection's outbound-request
+    /// deadline expired.
+    #[error("client request timed out")]
+    Timeout,
+
     /// The connection exhausted the positive outbound request-ID or
     /// progress-token space; no further server-to-client requests or progress
     /// tokens can be allocated on this connection.

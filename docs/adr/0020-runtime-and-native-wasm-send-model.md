@@ -155,6 +155,8 @@ pub(crate) trait Runtime {
         &self,
         fut: impl Future<Output = ()> + TaskSend + 'static,
     ) -> TaskHandle;
+    fn yield_now(&self) -> impl Future<Output = ()>;
+    fn sleep(&self, duration: Duration) -> impl Future<Output = ()>;
 }
 ```
 
@@ -164,18 +166,20 @@ has completed or its aborted future has been dropped. `ProtocolEngine`
 records every `TaskHandle` in its engine-owned task group; the ADR 0018
 close operation aborts and then joins through those handles.
 
-`TokioRuntime` maps `spawn` to tokio's spawn and `TaskHandle` to tokio's
-join and abort handles. `WasmRuntime` maps `spawn` to
+`TokioRuntime` maps `spawn` to tokio's spawn, `sleep` to tokio's clock, and
+`TaskHandle` to tokio's join and abort handles. `WasmRuntime` maps `spawn` to
 `wasm_bindgen_futures::spawn_local`, wrapping the future so that `abort`
 causes it to be dropped at its next yield point and the join resolves
-afterward. On both targets abort is observed at a yield point; neither
-implementation preempts a running compute section, which is why CPU-bound
-handlers poll `CancellationToken::is_cancelled` per ADR 0007.
+afterward; its `sleep` uses the worker's timer facilities. On both targets
+abort is observed at a yield point; neither implementation preempts a running
+compute section, which is why CPU-bound handlers poll
+`CancellationToken::is_cancelled` per ADR 0007.
 
 `ProtocolEngine` remains the sole owner of the task group, the session
 cancellation token, and the cancel-then-join close policy fixed by ADR 0018.
-`Runtime` executes spawning and exposes abort and join; it does not decide
-when to spawn, cancel, or close, and it holds no protocol state.
+`Runtime` executes spawning, cooperative yields, and deadline sleeps and
+exposes abort and join; it does not decide when to spawn, cancel, expire, or
+close, and it holds no protocol state.
 
 ### Target execution models
 

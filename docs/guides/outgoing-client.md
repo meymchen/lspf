@@ -241,7 +241,12 @@ resolves every pending request with `ClientError::Cancelled`; a peer's
 JSON-RPC error surfaces as [`ClientError::Remote`](lspf::ClientError::Remote)
 carrying the full code, message, and data. A request rejected by the outbound
 message or byte budget returns `ClientError::OutboundOverloaded` and removes
-the pending entry before returning.
+the pending entry before returning. By default, a request that remains pending
+for 30 seconds returns [`ClientError::Timeout`](lspf::ClientError::Timeout) and
+attempts one `$/cancelRequest`. Configure the duration through
+`ResourcePolicy::outbound_request_timeout`, or set it to `None` to wait without
+a deadline. Expired IDs are never reused, so a late response cannot complete a
+later request.
 
 ## Helper reference
 
