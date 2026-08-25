@@ -2,6 +2,8 @@
 
 Status: Accepted. Implements the outbound part of ADR 0025 and replaces ADR
 0015's observational queue-depth threshold with enforced admission budgets.
+It also narrows ADR 0018's first-close-cause rule: a required outbound
+admission failure takes precedence over a close cause recorded earlier.
 
 Each connection admits an outbound message only when both
 `ResourcePolicy::max_outbound_messages` and
@@ -31,6 +33,13 @@ the queue signals the protocol engine's existing single close operation and
 the connection ends as `Outcome::WriterFailed`. Normal connection close needs
 no reserved queue entry: it rejects new work, drains messages already admitted,
 and releases their accounting as the writer attempts them.
+
+The engine selects the final close cause only after close has quiesced the
+writer and handler tasks. Ordinary close causes remain first-wins, as specified
+by ADR 0018. If required outbound admission failed at any point before that
+quiescence, including after another cause requested closure, the final outcome
+is `Outcome::WriterFailed`. This precedence keeps a failed protocol obligation
+observable instead of making its result depend on task scheduling.
 
 We rejected a fixed reserve for required traffic. A reserve large enough for
 one response says nothing about concurrent responses or one response larger

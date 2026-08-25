@@ -204,9 +204,11 @@ impl CloseSignal {
         }
     }
 
-    /// Request the one close operation. The first caller records `cause` and
-    /// wakes the read-loop; a later caller leaves the recorded cause untouched
-    /// and observes that same close rather than starting a second one.
+    /// Request the one close operation. The first caller records the
+    /// provisional `cause` and wakes the read-loop; a later caller leaves it
+    /// untouched and observes that same close rather than starting a second
+    /// one. Required outbound admission failure can override this provisional
+    /// cause when the final outcome is selected (ADR 0026).
     fn request(&self, cause: CloseCause) {
         {
             let mut recorded = self.inner.cause.lock().unwrap();
@@ -1494,6 +1496,8 @@ enum Flow {
     Close(CloseCause),
 }
 
+/// Select the reported cause after close has quiesced every task that could
+/// fail a required outbound admission (ADR 0026).
 fn final_close_cause(close: &CloseSignal, out_tx: &OutboundQueue) -> CloseCause {
     let recorded = close
         .take_cause()
