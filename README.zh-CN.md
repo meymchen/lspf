@@ -354,9 +354,10 @@ let _server = lspf::Server::builder(State)
 `ConnectionFailureCategory` 区分 framing、protocol、Transport、panic-isolation、
 overload 与 close failure。context 包含 connection ID，以及已知的 direction、method
 与 request ID；不会包含 parameter、result、Document text、wire data、panic payload
-或底层 error message。每个 failure 都在来源处报告一次。hook 内的 panic 会被捕获并
-记录，不能阻止 response 或中断连接清理。该 hook 在用户 Layer chain 外观察连接
-failure；用户 Layer 仍然只包装用户 dispatch。
+或底层 error message。numeric request ID 会保留原值；peer-controlled string ID
+只会显示为 `ConnectionRequestId::String`，不会暴露内容。每个 failure 都在来源处
+报告一次。hook 内的 panic 会被捕获并记录，不能阻止 response 或中断连接清理。
+该 hook 在用户 Layer chain 外观察连接 failure；用户 Layer 仍然只包装用户 dispatch。
 
 服务器初始化后，`vscode-languageclient` 会自动注册 `executeCommandProvider` 宣告的
 四个 Command。扩展 manifest 在 Command Palette 的 `lspf hello` 分类下提供标题。

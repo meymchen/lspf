@@ -117,6 +117,7 @@ pub use engine::Outcome;
 pub use error::{BuildError, ClientError, Error, LspError, ProgressError, Result};
 pub use failure::{
     ConnectionDirection, ConnectionFailure, ConnectionFailureCategory, ConnectionFailureContext,
+    ConnectionRequestId,
 };
 pub use features::{FeatureSpec, NotificationFeatureSpec};
 #[cfg(target_arch = "wasm32")]

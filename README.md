@@ -400,7 +400,9 @@ let _server = lspf::Server::builder(State)
 panic-isolation, overload, and close failures. The context contains the
 connection ID and, when known, direction, method, and request ID. It never
 contains parameters, results, document text, wire data, panic payloads, or
-underlying error messages. Each failure is reported at its source. A panic in
+underlying error messages. Numeric request IDs retain their value;
+peer-controlled string IDs are exposed only as `ConnectionRequestId::String`,
+with their contents redacted. Each failure is reported at its source. A panic in
 the hook is caught and logged; it cannot suppress a response or interrupt the
 connection's cleanup. The hook observes connection failures outside the user
 Layer chain, which still wraps user dispatch only.

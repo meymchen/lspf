@@ -7,9 +7,10 @@ use bytes::Bytes;
 use lspf::types::notification::Notification;
 use lspf::types::request::Request;
 use lspf::{
-    BuildError, CancellationToken, ConnectionFailure, ConnectionFailureCategory, Context,
-    IncomingCall, JsonRpcError, Layer, Next, RawMessage, RequestId, ResourcePolicy, Server,
-    ServiceFuture, Transport, TransportError, TransportReader, TransportWriter,
+    BuildError, CancellationToken, ConnectionFailure, ConnectionFailureCategory,
+    ConnectionRequestId, Context, IncomingCall, JsonRpcError, Layer, Next, RawMessage, RequestId,
+    ResourcePolicy, Server, ServiceFuture, Transport, TransportError, TransportReader,
+    TransportWriter,
 };
 
 enum Echo {}
@@ -192,9 +193,43 @@ async fn isolated_panics_report_stable_non_sensitive_context_once() {
         Some(lspf::ConnectionDirection::Inbound)
     );
     assert_eq!(failures[0].context.method.as_deref(), Some(Echo::METHOD));
-    assert_eq!(failures[0].context.request_id, Some(RequestId::Number(2)));
+    assert_eq!(
+        failures[0].context.request_id,
+        Some(ConnectionRequestId::Number(2))
+    );
     assert_ne!(failures[0].context.connection_id, 0);
     assert!(!format!("{failures:?}").contains("secret"));
+}
+
+#[tokio::test]
+async fn peer_controlled_string_request_ids_are_redacted() {
+    let failures = Arc::new(Mutex::new(Vec::<ConnectionFailure>::new()));
+    let recorded = Arc::clone(&failures);
+    let server = Server::builder(())
+        .on_error(move |failure| recorded.lock().unwrap().push(failure))
+        .build()
+        .unwrap();
+    let transport = TestTransport {
+        inbound: VecDeque::from([
+            Ok(initialize(1)),
+            Ok(RawMessage::Request {
+                id: RequestId::String("secret-user-id".into()),
+                method: Cow::Borrowed("test/malformed"),
+                params: Bytes::from_static(b"not-json"),
+            }),
+            Ok(notification("exit", serde_json::Value::Null)),
+        ]),
+        outbound: Arc::new(Mutex::new(Vec::new())),
+    };
+
+    server.serve(transport).await.unwrap();
+    let failures = failures.lock().unwrap();
+    assert_eq!(failures.len(), 1);
+    assert_eq!(
+        failures[0].context.request_id,
+        Some(ConnectionRequestId::String)
+    );
+    assert!(!format!("{failures:?}").contains("secret-user-id"));
 }
 
 #[tokio::test]
@@ -210,16 +245,13 @@ async fn a_panicking_error_hook_cannot_suppress_a_protocol_response_or_cleanup()
         .unwrap();
     let outbound = Arc::new(Mutex::new(Vec::new()));
     let transport = TestTransport {
-        inbound: VecDeque::from([
-            Ok(RawMessage::ProtocolError {
-                error: JsonRpcError {
-                    code: -32700,
-                    message: "secret malformed payload".into(),
-                    data: None,
-                },
-            }),
-            Ok(notification("exit", serde_json::Value::Null)),
-        ]),
+        inbound: VecDeque::from([Ok(RawMessage::ProtocolError {
+            error: JsonRpcError {
+                code: -32700,
+                message: "secret malformed payload".into(),
+                data: None,
+            },
+        })]),
         outbound: Arc::clone(&outbound),
     };
 
@@ -254,22 +286,70 @@ async fn protocol_failure_reporting_does_not_enter_user_layers() {
         .build()
         .unwrap();
     let transport = TestTransport {
-        inbound: VecDeque::from([
-            Ok(RawMessage::ProtocolError {
-                error: JsonRpcError {
-                    code: -32700,
-                    message: "parse error".into(),
-                    data: None,
-                },
-            }),
-            Ok(notification("exit", serde_json::Value::Null)),
-        ]),
+        inbound: VecDeque::from([Ok(RawMessage::ProtocolError {
+            error: JsonRpcError {
+                code: -32700,
+                message: "parse error".into(),
+                data: None,
+            },
+        })]),
         outbound: Arc::new(Mutex::new(Vec::new())),
     };
 
     server.serve(transport).await.unwrap();
     assert_eq!(hook_calls.load(Ordering::Relaxed), 1);
     assert_eq!(layer_calls.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn engine_owned_protocol_rejections_each_report_once() {
+    let cases = [
+        VecDeque::from([Ok(request(2, Echo::METHOD, serde_json::Value::Null))]),
+        VecDeque::from([
+            Ok(initialize(1)),
+            Ok(request(2, Echo::METHOD, serde_json::json!("first"))),
+            Ok(request(2, Echo::METHOD, serde_json::json!("duplicate"))),
+        ]),
+        VecDeque::from([
+            Ok(initialize(1)),
+            Ok(notification(
+                "$/cancelRequest",
+                serde_json::json!("malformed"),
+            )),
+        ]),
+        VecDeque::from([
+            Ok(initialize(1)),
+            Ok(notification("initialized", serde_json::json!(1))),
+        ]),
+        VecDeque::from([
+            Ok(initialize(1)),
+            Ok(RawMessage::Response {
+                id: RequestId::Number(99),
+                result: Ok(Bytes::from_static(b"null")),
+            }),
+        ]),
+    ];
+
+    for inbound in cases {
+        let failures = Arc::new(Mutex::new(Vec::<ConnectionFailure>::new()));
+        let recorded = Arc::clone(&failures);
+        let server = Server::builder(())
+            .request::<Echo, _, _>(|_, _, _, _| async { std::future::pending().await })
+            .on_error(move |failure| recorded.lock().unwrap().push(failure))
+            .build()
+            .unwrap();
+        server
+            .serve(TestTransport {
+                inbound,
+                outbound: Arc::new(Mutex::new(Vec::new())),
+            })
+            .await
+            .unwrap();
+
+        let failures = failures.lock().unwrap();
+        assert_eq!(failures.len(), 1, "{failures:?}");
+        assert_eq!(failures[0].category, ConnectionFailureCategory::Protocol);
+    }
 }
 
 #[tokio::test]
@@ -283,7 +363,10 @@ async fn writer_send_and_shutdown_failures_have_distinct_categories() {
         (
             WriterFailure::Shutdown,
             ConnectionFailureCategory::Close,
-            VecDeque::from([Ok(notification("exit", serde_json::Value::Null))]),
+            VecDeque::from([
+                Ok(initialize(1)),
+                Ok(notification("exit", serde_json::Value::Null)),
+            ]),
         ),
     ] {
         let failures = Arc::new(Mutex::new(Vec::<ConnectionFailure>::new()));
@@ -377,7 +460,10 @@ async fn inbound_overload_reports_the_rejected_request_once() {
     assert_eq!(failures.len(), 1);
     assert_eq!(failures[0].category, ConnectionFailureCategory::Overload);
     assert_eq!(failures[0].context.method.as_deref(), Some(Echo::METHOD));
-    assert_eq!(failures[0].context.request_id, Some(RequestId::Number(3)));
+    assert_eq!(
+        failures[0].context.request_id,
+        Some(ConnectionRequestId::Number(3))
+    );
 }
 
 #[tokio::test]
@@ -408,7 +494,10 @@ async fn outbound_overload_reports_the_rejected_response_once() {
         failures[0].context.direction,
         Some(lspf::ConnectionDirection::Outbound)
     );
-    assert_eq!(failures[0].context.request_id, Some(RequestId::Number(2)));
+    assert_eq!(
+        failures[0].context.request_id,
+        Some(ConnectionRequestId::Number(2))
+    );
 }
 
 #[tokio::test]

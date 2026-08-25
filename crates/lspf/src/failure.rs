@@ -33,6 +33,28 @@ pub enum ConnectionDirection {
     Outbound,
 }
 
+/// Non-sensitive identity for a JSON-RPC request.
+///
+/// Numeric IDs retain their value for correlation. String IDs are represented
+/// only by their kind because their peer-controlled contents may be sensitive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ConnectionRequestId {
+    /// A numeric JSON-RPC request ID.
+    Number(i32),
+    /// A string JSON-RPC request ID, with its contents redacted.
+    String,
+}
+
+impl From<&RequestId> for ConnectionRequestId {
+    fn from(value: &RequestId) -> Self {
+        match value {
+            RequestId::Number(number) => Self::Number(*number),
+            RequestId::String(_) => Self::String,
+        }
+    }
+}
+
 /// Non-sensitive identity attached to a connection failure when available.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -44,7 +66,7 @@ pub struct ConnectionFailureContext {
     /// LSP or custom method, when known without inspecting a payload.
     pub method: Option<String>,
     /// JSON-RPC request ID, when the event belongs to a request.
-    pub request_id: Option<RequestId>,
+    pub request_id: Option<ConnectionRequestId>,
 }
 
 /// One connection-level failure delivered to [`ServerBuilder::on_error`](crate::ServerBuilder::on_error).
@@ -90,7 +112,7 @@ impl FailureReporter {
                 connection_id: self.connection_id,
                 direction,
                 method: method.map(str::to_owned),
-                request_id: request_id.cloned(),
+                request_id: request_id.map(ConnectionRequestId::from),
             },
         };
         if catch_unwind(AssertUnwindSafe(|| hook.invoke((failure,)))).is_err() {

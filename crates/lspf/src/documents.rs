@@ -13,15 +13,16 @@ use crate::uri_key::UriKey;
 const DOCUMENT_COUNT_CAPACITY_EXHAUSTED: &str = "document count capacity exhausted";
 const DOCUMENT_TEXT_CAPACITY_EXHAUSTED: &str = "document text capacity exhausted";
 
-fn document_text_capacity_exhausted() -> crate::LspError {
-    crate::LspError::invalid_request(DOCUMENT_TEXT_CAPACITY_EXHAUSTED)
+#[derive(Debug)]
+pub(crate) enum DocumentMutationError {
+    Capacity(crate::LspError),
+    Protocol(crate::LspError),
 }
 
-pub(crate) fn is_capacity_error(error: &crate::LspError) -> bool {
-    matches!(
-        error.message().as_str(),
-        DOCUMENT_COUNT_CAPACITY_EXHAUSTED | DOCUMENT_TEXT_CAPACITY_EXHAUSTED
-    )
+fn document_text_capacity_exhausted() -> DocumentMutationError {
+    DocumentMutationError::Capacity(crate::LspError::invalid_request(
+        DOCUMENT_TEXT_CAPACITY_EXHAUSTED,
+    ))
 }
 
 /// Negotiated meaning of `Position.character` (ADR 0016).
@@ -177,7 +178,7 @@ impl Document {
         encoding: PositionEncoding,
         change: TextDocumentContentChangeEvent,
         max_bytes: usize,
-    ) -> std::result::Result<(), crate::LspError> {
+    ) -> std::result::Result<(), DocumentMutationError> {
         let Some(range) = change.range else {
             if change.text.len() > max_bytes {
                 return Err(document_text_capacity_exhausted());
@@ -187,16 +188,24 @@ impl Document {
         };
         let start_offset = self
             .position_to_offset(encoding, range.start)
-            .ok_or_else(|| crate::LspError::invalid_request("invalid start position"))?;
+            .ok_or_else(|| {
+                DocumentMutationError::Protocol(crate::LspError::invalid_request(
+                    "invalid start position",
+                ))
+            })?;
         let end_offset = self
             .position_to_offset(encoding, range.end)
-            .ok_or_else(|| crate::LspError::invalid_request("invalid end position"))?;
+            .ok_or_else(|| {
+                DocumentMutationError::Protocol(crate::LspError::invalid_request(
+                    "invalid end position",
+                ))
+            })?;
         // A reversed range (end before start) would panic `Rope::remove`
         // while the write lock is held, poisoning the store for every
         // later access. Reject it as an invalid request instead.
         if start_offset > end_offset {
-            return Err(crate::LspError::invalid_request(
-                "range end precedes range start",
+            return Err(DocumentMutationError::Protocol(
+                crate::LspError::invalid_request("range end precedes range start"),
             ));
         }
         let retained_bytes = self.text.len_bytes() - (end_offset - start_offset);
@@ -284,7 +293,10 @@ impl Documents {
     }
 
     /// Open or replace a document in the store.
-    pub(crate) fn open(&self, item: TextDocumentItem) -> std::result::Result<(), crate::LspError> {
+    pub(crate) fn open(
+        &self,
+        item: TextDocumentItem,
+    ) -> std::result::Result<(), DocumentMutationError> {
         let mut inner = self.inner.write().unwrap();
         let key = UriKey::new(&item.uri);
         if !inner.by_uri.contains_key(&key) && inner.by_uri.len() >= inner.max_documents {
@@ -295,8 +307,8 @@ impl Documents {
                 inner.max_documents,
                 Some((inner.document_bytes, inner.max_document_bytes)),
             );
-            return Err(crate::LspError::invalid_request(
-                DOCUMENT_COUNT_CAPACITY_EXHAUSTED,
+            return Err(DocumentMutationError::Capacity(
+                crate::LspError::invalid_request(DOCUMENT_COUNT_CAPACITY_EXHAUSTED),
             ));
         }
 
@@ -397,15 +409,13 @@ impl Documents {
         uri: &Uri,
         version: i32,
         changes: impl IntoIterator<Item = TextDocumentContentChangeEvent>,
-    ) -> std::result::Result<(), crate::LspError> {
+    ) -> std::result::Result<(), DocumentMutationError> {
         let mut inner = self.inner.write().unwrap();
         let encoding = inner.encoding;
         let key = UriKey::new(uri);
-        let document = inner
-            .by_uri
-            .get(&key)
-            .cloned()
-            .ok_or_else(|| crate::LspError::invalid_request("document not found"))?;
+        let document = inner.by_uri.get(&key).cloned().ok_or_else(|| {
+            DocumentMutationError::Protocol(crate::LspError::invalid_request("document not found"))
+        })?;
         let retained_bytes = inner.document_bytes - document.text.len_bytes();
         let available_document_bytes = inner.max_document_bytes - retained_bytes;
 
@@ -414,7 +424,7 @@ impl Documents {
         let mut updated = document;
         for change in changes {
             if let Err(error) = updated.apply_change(encoding, change, available_document_bytes) {
-                if error.message() == DOCUMENT_TEXT_CAPACITY_EXHAUSTED {
+                if matches!(error, DocumentMutationError::Capacity(_)) {
                     self.trace.resource_budget(
                         Resource::Documents,
                         ResourceAction::Reject,
