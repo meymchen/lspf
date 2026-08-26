@@ -8,11 +8,11 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use lsp_types::error_codes::SERVER_CANCELLED;
-use lsp_types::notification::{Initialized, Notification};
-use lsp_types::request::{Initialize, Request};
+use lsp_types::notification::{Exit, Initialized, Notification};
+use lsp_types::request::{Initialize, Request, Shutdown};
 use lsp_types::{
     ClientCapabilities, ClientInfo, InitializeParams, InitializedParams, WorkDoneProgressParams,
 };
@@ -30,8 +30,8 @@ use crate::resource_policy::ResourcePolicy;
 use crate::runtime::{Runtime, TaskFuture, TaskSend, default_runtime, ensure_runtime_available};
 use crate::service::{HandlerTimeout, ServiceResult};
 use crate::session::{
-    INBOUND_CAPACITY_EXHAUSTED, InboundReserveError, ProtocolSession, SessionInput,
-    run_handler_with_deadline,
+    INBOUND_CAPACITY_EXHAUSTED, InboundReserveError, ProtocolControl, ProtocolSession,
+    SessionInput, run_handler_with_deadline,
 };
 use crate::telemetry::{ConnectionTrace, Direction};
 use crate::transport::{Transport, TransportError, TransportReader};
@@ -90,14 +90,20 @@ impl<T: Transport> Client<T> {
             ClientCloseCause::writer_failed,
             ClientHandle::new,
         );
+        let lifecycle = Arc::new(ClientLifecycle {
+            phase: Mutex::new(ClientPhase::Initializing),
+            protocol: protocol.control(),
+        });
         let server = ServerHandle {
             inner: peer.clone(),
+            lifecycle: Arc::clone(&lifecycle),
         };
         let mut engine = ClientEngine {
             handlers: self.handlers,
             protocol,
             peer,
             trace,
+            lifecycle,
         };
 
         let params = initialize_params(
@@ -113,7 +119,19 @@ impl<T: Transport> Client<T> {
             trace.connection_closed("initialize_failed");
             return Err(error);
         }
-        server.notify::<Initialized>(InitializedParams {})?;
+        if let Err(error) = server
+            .inner
+            .notify_required::<Initialized>(InitializedParams {})
+        {
+            server
+                .lifecycle
+                .protocol
+                .request_close(ClientCloseCause::InitializeFailed);
+            engine.protocol.close().await;
+            trace.connection_closed("initialize_failed");
+            return Err(error.into());
+        }
+        server.lifecycle.mark_running();
 
         Ok(ClientConnection {
             server,
@@ -247,6 +265,7 @@ impl ClientConnection {
 #[derive(Clone)]
 pub struct ServerHandle {
     inner: ClientHandle,
+    lifecycle: Arc<ClientLifecycle>,
 }
 
 impl std::fmt::Debug for ServerHandle {
@@ -263,6 +282,7 @@ impl ServerHandle {
     where
         N: Notification,
     {
+        self.lifecycle.ensure_running(N::METHOD)?;
         self.inner.notify::<N>(params)
     }
 
@@ -271,12 +291,180 @@ impl ServerHandle {
     where
         R: Request,
     {
+        self.lifecycle.ensure_running(R::METHOD)?;
         self.inner.request::<R>(params).await
+    }
+
+    /// Request a graceful LSP shutdown from the connected server.
+    ///
+    /// Success cancels every other pending request and reverse request. Only
+    /// [`Self::exit`] or [`Self::disconnect`] remains valid afterwards.
+    pub async fn shutdown(&self) -> std::result::Result<(), ClientError> {
+        self.lifecycle.begin_shutdown()?;
+        let result = self.inner.request::<Shutdown>(()).await;
+        self.lifecycle.finish_shutdown(&result);
+        result
+    }
+
+    /// Send the required LSP `exit` notification after successful shutdown.
+    pub fn exit(&self) -> std::result::Result<(), ClientError> {
+        self.lifecycle.begin_exit()?;
+        let result = self.inner.notify_required::<Exit>(());
+        self.lifecycle
+            .protocol
+            .request_close(ClientCloseCause::Exit);
+        result
+    }
+
+    /// End the local connection without sending shutdown or exit traffic.
+    ///
+    /// Disconnect is idempotent and resolves pending work through the shared
+    /// session close path.
+    pub fn disconnect(&self) {
+        if self.lifecycle.disconnect() {
+            self.lifecycle
+                .protocol
+                .request_close(ClientCloseCause::Disconnect);
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClientPhase {
+    Initializing,
+    Running,
+    ShutdownPending,
+    ShuttingDown,
+    Exited,
+    Disconnected,
+}
+
+#[derive(Clone, Copy)]
+enum ClientTransition {
+    Initialized,
+    BeginShutdown,
+    ShutdownSucceeded,
+    ShutdownFailed,
+    Exit,
+    Disconnect,
+}
+
+#[derive(Clone, Copy)]
+enum ClientWork {
+    Outbound,
+    Reverse,
+}
+
+impl ClientPhase {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Initializing => "initializing",
+            Self::Running => "running",
+            Self::ShutdownPending => "shutdown is pending",
+            Self::ShuttingDown => "shut down",
+            Self::Exited => "exited",
+            Self::Disconnected => "disconnected",
+        }
+    }
+
+    fn transition(self, transition: ClientTransition) -> Option<Self> {
+        match (self, transition) {
+            (Self::Initializing, ClientTransition::Initialized) => Some(Self::Running),
+            (Self::Running, ClientTransition::BeginShutdown) => Some(Self::ShutdownPending),
+            (Self::ShutdownPending, ClientTransition::ShutdownSucceeded) => {
+                Some(Self::ShuttingDown)
+            }
+            (Self::ShutdownPending, ClientTransition::ShutdownFailed) => Some(Self::Running),
+            (Self::ShuttingDown, ClientTransition::Exit) => Some(Self::Exited),
+            (Self::Exited | Self::Disconnected, ClientTransition::Disconnect) => None,
+            (_, ClientTransition::Disconnect) => Some(Self::Disconnected),
+            _ => None,
+        }
+    }
+
+    fn permits(self, work: ClientWork) -> bool {
+        match work {
+            ClientWork::Outbound => self == Self::Running,
+            ClientWork::Reverse => matches!(self, Self::Running | Self::ShutdownPending),
+        }
+    }
+}
+
+struct ClientLifecycle {
+    phase: Mutex<ClientPhase>,
+    protocol: ProtocolControl<ClientHandle, ClientCloseCause>,
+}
+
+impl ClientLifecycle {
+    fn mark_running(&self) {
+        self.transition("initialize", ClientTransition::Initialized)
+            .expect("initialization completes only from the initializing phase");
+    }
+
+    fn ensure_running(&self, operation: &'static str) -> std::result::Result<(), ClientError> {
+        let phase = *self.phase.lock().unwrap();
+        if phase.permits(ClientWork::Outbound) && !is_reserved_reverse_method(operation) {
+            Ok(())
+        } else {
+            Err(Self::invalid(operation, phase))
+        }
+    }
+
+    fn begin_shutdown(&self) -> std::result::Result<(), ClientError> {
+        self.transition("shutdown", ClientTransition::BeginShutdown)
+    }
+
+    fn finish_shutdown(&self, result: &std::result::Result<(), ClientError>) {
+        let transition = if result.is_ok() {
+            ClientTransition::ShutdownSucceeded
+        } else {
+            ClientTransition::ShutdownFailed
+        };
+        if self.transition("shutdown", transition).is_ok() && result.is_ok() {
+            self.protocol.successful_shutdown();
+        }
+    }
+
+    fn begin_exit(&self) -> std::result::Result<(), ClientError> {
+        self.transition("exit", ClientTransition::Exit)
+    }
+
+    fn disconnect(&self) -> bool {
+        self.transition("disconnect", ClientTransition::Disconnect)
+            .is_ok()
+    }
+
+    fn rejects_reverse_work(&self) -> bool {
+        !self.phase.lock().unwrap().permits(ClientWork::Reverse)
+    }
+
+    fn transition(
+        &self,
+        operation: &'static str,
+        transition: ClientTransition,
+    ) -> std::result::Result<(), ClientError> {
+        let mut phase = self.phase.lock().unwrap();
+        let current = *phase;
+        if let Some(next) = current.transition(transition) {
+            *phase = next;
+            Ok(())
+        } else {
+            Err(Self::invalid(operation, current))
+        }
+    }
+
+    fn invalid(operation: &'static str, phase: ClientPhase) -> ClientError {
+        ClientError::InvalidLifecycle {
+            operation,
+            state: phase.as_str(),
+        }
     }
 }
 
 #[derive(Debug)]
 enum ClientCloseCause {
+    Exit,
+    Disconnect,
     ReaderEof,
     ReaderFailed(TransportError),
     WriterFailed,
@@ -290,6 +478,8 @@ impl ClientCloseCause {
 
     fn as_str(&self) -> &'static str {
         match self {
+            Self::Exit => "exit",
+            Self::Disconnect => "disconnect",
             Self::ReaderEof => "reader_eof",
             Self::ReaderFailed(_) => "reader_failed",
             Self::WriterFailed => "writer_failed",
@@ -299,6 +489,8 @@ impl ClientCloseCause {
 
     fn into_result(self) -> Result<Outcome> {
         match self {
+            Self::Exit => Ok(Outcome::Exit { code: 0 }),
+            Self::Disconnect => Ok(Outcome::TransportClosed),
             Self::ReaderEof => Ok(Outcome::TransportClosed),
             Self::ReaderFailed(error) => Err(Error::Transport(error)),
             Self::WriterFailed => Ok(Outcome::WriterFailed),
@@ -312,6 +504,7 @@ struct ClientEngine<R> {
     protocol: ProtocolSession<R, ClientHandle, ClientCloseCause>,
     peer: ClientHandle,
     trace: ConnectionTrace,
+    lifecycle: Arc<ClientLifecycle>,
 }
 
 impl<R: Runtime> ClientEngine<R> {
@@ -344,6 +537,9 @@ impl<R: Runtime> ClientEngine<R> {
     fn dispatch_during_initialize(&self, message: RawMessage) {
         match message {
             RawMessage::Response { id, result } => self.complete_response(id, result),
+            RawMessage::Request { id, method, .. } if method == "initialize" => self
+                .protocol
+                .reject_inbound(id, LspError::invalid_request("duplicate initialize")),
             RawMessage::Request { id, .. } => self
                 .protocol
                 .reject_inbound(id, LspError::ServerNotInitialized),
@@ -383,6 +579,7 @@ impl<R: Runtime> ClientEngine<R> {
                 }
             }
         }
+        self.lifecycle.disconnect();
         self.protocol.close().await;
         let cause = self.protocol.final_close_cause();
         self.trace.connection_closed(cause.as_str());
@@ -457,6 +654,20 @@ impl<R: Runtime> ClientEngine<R> {
         let cancellation = reserved
             .cancellation
             .expect("reverse requests are cancellable");
+        if self.lifecycle.rejects_reverse_work() {
+            self.protocol.complete_inbound(
+                reservation,
+                Err(LspError::invalid_request("invalid request after shutdown")),
+            );
+            return;
+        }
+        if method == "initialize" {
+            self.protocol.complete_inbound(
+                reservation,
+                Err(LspError::invalid_request("duplicate initialize")),
+            );
+            return;
+        }
         let Some(handler) = self.handlers.get(method.as_str()).cloned() else {
             self.protocol.complete_inbound(
                 reservation,

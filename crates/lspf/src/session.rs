@@ -52,6 +52,37 @@ pub(crate) struct ProtocolSession<R, P, C> {
     closed: bool,
 }
 
+/// Cloneable endpoint control over shared shutdown and close mechanics.
+/// Endpoint lifecycle policy remains in the endpoint that invokes it.
+pub(crate) struct ProtocolControl<P: SessionPeer, C> {
+    inbound: InboundRegistry,
+    out_tx: OutboundQueue,
+    peer: P,
+    close: CloseSignal<C>,
+}
+
+impl<P: SessionPeer, C> Clone for ProtocolControl<P, C> {
+    fn clone(&self) -> Self {
+        Self {
+            inbound: self.inbound.clone(),
+            out_tx: self.out_tx.clone(),
+            peer: self.peer.clone(),
+            close: self.close.clone(),
+        }
+    }
+}
+
+impl<P: SessionPeer, C> ProtocolControl<P, C> {
+    pub(crate) fn successful_shutdown(&self) {
+        self.inbound.cancel_all_with_response(&self.out_tx);
+        self.peer.close_pending();
+    }
+
+    pub(crate) fn request_close(&self, cause: C) {
+        self.close.request(cause);
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct CompletionGate {
     inbound: InboundRegistry,
@@ -151,6 +182,15 @@ impl<R: Runtime, P: SessionPeer, C> ProtocolSession<R, P, C> {
 
     pub(crate) fn close_requested(&self) -> CancellationToken {
         self.close.requested()
+    }
+
+    pub(crate) fn control(&self) -> ProtocolControl<P, C> {
+        ProtocolControl {
+            inbound: self.inbound.clone(),
+            out_tx: self.out_tx.clone(),
+            peer: self.peer.clone(),
+            close: self.close.clone(),
+        }
     }
 
     pub(crate) fn outbound_failed(&self) -> CancellationToken {

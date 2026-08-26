@@ -125,19 +125,20 @@ fn decode_initialized_params(raw: &Bytes) -> std::result::Result<InitializedPara
 
 /// How one connection ended.
 ///
-/// Serving a connection resolves to exactly one `Outcome` or to a transport
-/// [`Error`]; it never terminates the process. A server binary maps the
-/// outcome to a process disposition itself — [`Outcome::code`] reports the
-/// exit code the LSP lifecycle implies.
+/// Serving a Server or Client connection resolves to exactly one `Outcome` or
+/// to a transport [`Error`]; it never terminates the process. A server binary
+/// maps its outcome to a process disposition itself — [`Outcome::code`]
+/// reports the exit code the LSP lifecycle implies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
-    /// The peer sent `exit`. `code` is the LSP exit code: 0 when `shutdown`
-    /// completed first, 1 otherwise.
+    /// The endpoint processed `exit`. For a Server, `code` is 0 when the peer
+    /// sent `shutdown` first and 1 otherwise; a Client permits local `exit`
+    /// only after its `shutdown` request succeeds and therefore reports 0.
     Exit {
         /// The process exit code prescribed by the LSP lifecycle.
         code: i32,
     },
-    /// The peer closed the transport before sending `exit`.
+    /// The transport ended before `exit`, or a Client disconnected locally.
     TransportClosed,
     /// The outbound path failed terminally: the writer failed, or required
     /// protocol traffic could not fit within the configured queue budgets.
