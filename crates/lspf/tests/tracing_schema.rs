@@ -491,6 +491,76 @@ fn assert_resource_events_stay_within_limits(events: &[Value]) {
     }
 }
 
+fn resource_peak(events: &[Value], resource: &str, field: &str) -> usize {
+    events
+        .iter()
+        .filter(|event| {
+            event["message"] == "resource budget changed" && event["resource"] == resource
+        })
+        .filter_map(|event| event[field].as_u64())
+        .max()
+        .unwrap_or(0)
+        .try_into()
+        .expect("resource observation fits usize")
+}
+
+fn record_gate_b_observations(events: &[Value], policy: ResourcePolicy, handler_task_peak: usize) {
+    let Some(path) = std::env::var_os("LSPF_GATE_B_OBSERVATIONS") else {
+        return;
+    };
+    let observations = json!({
+        "resources": [
+            {
+                "name": "inbound_requests",
+                "limit": policy.max_inbound_requests,
+                "observedPeak": resource_peak(
+                    events,
+                    "inbound_requests",
+                    "resource_current",
+                ),
+            },
+            {
+                "name": "handler_tasks",
+                "limit": policy.max_inbound_requests,
+                "observedPeak": handler_task_peak,
+            },
+            {
+                "name": "outbound_messages",
+                "limit": policy.max_outbound_messages,
+                "observedPeak": resource_peak(
+                    events,
+                    "outbound_queue",
+                    "resource_current",
+                ),
+            },
+            {
+                "name": "outbound_bytes",
+                "limit": policy.max_outbound_bytes,
+                "observedPeak": resource_peak(
+                    events,
+                    "outbound_queue",
+                    "resource_bytes",
+                ),
+            },
+            {
+                "name": "documents",
+                "limit": policy.max_documents,
+                "observedPeak": resource_peak(events, "documents", "resource_current"),
+            },
+            {
+                "name": "document_bytes",
+                "limit": policy.max_document_bytes,
+                "observedPeak": resource_peak(events, "documents", "resource_bytes"),
+            },
+        ],
+    });
+    std::fs::write(
+        path,
+        serde_json::to_vec_pretty(&observations).expect("Gate B observations serialize"),
+    )
+    .expect("Gate B observations are written");
+}
+
 fn assert_resource_finished_at_zero(events: &[Value], resource: &str) {
     let last = events
         .iter()
@@ -1025,7 +1095,8 @@ async fn fixed_budget_floods_and_a_slow_reader_never_exceed_connection_limits() 
 
     let events_during_load = logs.events();
     assert_resource_events_stay_within_limits(&events_during_load);
-    assert_eq!(state.handler_tasks.peak.load(Ordering::Acquire), 2);
+    let handler_task_peak = state.handler_tasks.peak.load(Ordering::Acquire);
+    assert_eq!(handler_task_peak, 2);
     assert!(events_during_load.iter().any(|event| {
         event["resource"] == "inbound_requests"
             && event["resource_action"] == "reject"
@@ -1046,6 +1117,7 @@ async fn fixed_budget_floods_and_a_slow_reader_never_exceed_connection_limits() 
             && event["resource_current"] == 2
             && event["resource_bytes"] == 8
     }));
+    record_gate_b_observations(&events_during_load, policy, handler_task_peak);
 
     connection.outbound_control.resume();
     wait_for_event(&logs, |event| {
