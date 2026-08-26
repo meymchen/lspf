@@ -81,7 +81,7 @@ impl HandlerTimeout {
         *self.duration.lock().unwrap() = timeout;
     }
 
-    fn arm(&self) {
+    pub(crate) fn arm(&self) {
         *self.deadline_started.lock().unwrap() = Some(Instant::now());
         self.trace.deadline(
             Deadline::Handler,

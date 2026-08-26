@@ -42,6 +42,20 @@ registrations and served through a [[Transport]] constructor such as
 connection state is never shared between servers. Defined by ADR 0017.
 _Avoid_: Session, backend, dispatcher (the pre-0.2 concept).
 
+**Client**:
+The object (`Client`) that owns one outbound LSP connection's initialization
+inputs and reverse-request registrations. `Client::connect` establishes it over
+a caller-provided [[Transport]] and returns one [[ClientConnection]].
+_Avoid_: Editor (the caller owns editor policy), connection (the connected state
+is `ClientConnection`).
+
+**ClientConnection**:
+The initialized, exclusively owned client endpoint returned by
+`Client::connect`; it drives incoming messages and exposes a cloneable
+[[ServerHandle]] until its [[Transport]] ends.
+_Avoid_: Session (the protocol session is private), ClientHandle (the opposite
+message direction).
+
 **Protocol session**:
 The private connection core shared by Server and Client endpoints for correlation, bounded admission and queues, deadlines, task ownership, writer coordination, and idempotent close. Endpoint lifecycle, registration, and domain-state policy remain outside it.
 _Avoid_: Endpoint, engine (those own direction-specific policy).
@@ -59,8 +73,9 @@ close release registry ownership immediately; the admission permit remains
 attached to admitted handler tasks until completion or abort and is released
 when the [[Protocol session]] reaps the finished task handle.
 Outbound admission charges one message and its exact encoded JSON-RPC envelope
-bytes until the transport attempt finishes. Ordinary `ClientHandle` sends fail with
-`ClientError::OutboundOverloaded` when either budget is full. Required
+bytes until the transport attempt finishes. Ordinary `ClientHandle` and
+`ServerHandle` sends fail with `ClientError::OutboundOverloaded` when either
+budget is full. Required
 responses, protocol errors, and `$/cancelRequest` use the connection's single
 failure-close path if admission fails; normal close stops admission and drains
 the already-accounted queue.
@@ -192,6 +207,13 @@ those resources. An ordinary send that would exceed the policy returns
 `ClientError::OutboundOverloaded` without retaining the message or leaking a
 pending request entry.
 _Avoid_: Connection (that is the transport level), sender.
+
+**ServerHandle**:
+The cloneable typed handle for client-to-server requests and notifications,
+obtained from [[ClientConnection]]. It uses the connection's shared correlation,
+outbound admission, deadline, cancellation, and close machinery.
+_Avoid_: ClientHandle (the opposite message direction), connection (the handle
+does not own or drive one).
 
 **Command**:
 A user-registered async closure dispatched on `workspace/executeCommand`

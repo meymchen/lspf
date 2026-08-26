@@ -42,6 +42,8 @@ compile_error!("the `websocket` feature is not supported on the wasm32 target");
 mod builder;
 mod capability;
 mod client;
+#[cfg(any(feature = "runtime-tokio", target_arch = "wasm32"))]
+mod client_endpoint;
 mod codec;
 mod context;
 mod documents;
@@ -112,6 +114,8 @@ mod markdown {
 pub use builder::SharedHandler;
 pub use builder::{InitializeRegistrar, Server, ServerBuilder};
 pub use client::{ClientHandle, TelemetryEventParams};
+#[cfg(any(feature = "runtime-tokio", target_arch = "wasm32"))]
+pub use client_endpoint::{Client, ClientBuilder, ClientConnection, ServerHandle};
 pub use context::ServerContext;
 pub use documents::{Document, DocumentsView, PositionEncoding};
 #[cfg(any(feature = "runtime-tokio", target_arch = "wasm32"))]
