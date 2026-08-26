@@ -52,7 +52,7 @@ is `ClientConnection`).
 **ClientConnection**:
 The initialized, exclusively owned client endpoint returned by
 `Client::connect`; it drives incoming messages and exposes a cloneable
-[[ServerHandle]] until its [[Transport]] ends.
+[[ServerHandle]] until exit, disconnect, or its [[Transport]] ends.
 _Avoid_: Session (the protocol session is private), ClientHandle (the opposite
 message direction).
 
@@ -211,7 +211,8 @@ _Avoid_: Connection (that is the transport level), sender.
 **ServerHandle**:
 The cloneable typed handle for client-to-server requests and notifications,
 obtained from [[ClientConnection]]. It uses the connection's shared correlation,
-outbound admission, deadline, cancellation, and close machinery.
+outbound admission, deadline, cancellation, and close machinery, and owns the
+caller-facing shutdown, exit, and disconnect transitions for that connection.
 _Avoid_: ClientHandle (the opposite message direction), connection (the handle
 does not own or drive one).
 

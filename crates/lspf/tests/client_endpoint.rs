@@ -8,8 +8,8 @@ use lspf::types::notification::Notification;
 use lspf::types::request::Request;
 use lspf::types::{ClientCapabilities, ClientInfo, InitializeResult, ServerCapabilities};
 use lspf::{
-    Client, ClientConnection, ClientError, Outcome, RawMessage, RequestId, ResourcePolicy,
-    Transport, TransportError, TransportReader, TransportWriter,
+    Client, ClientBuilder, ClientConnection, ClientError, Outcome, RawMessage, RequestId,
+    ResourcePolicy, ServerHandle, Transport, TransportError, TransportReader, TransportWriter,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -46,6 +46,14 @@ enum ClientEvent {}
 impl Notification for ClientEvent {
     type Params = Value;
     const METHOD: &'static str = "test/clientEvent";
+}
+
+enum DuplicateInitialize {}
+
+impl Request for DuplicateInitialize {
+    type Params = Value;
+    type Result = Value;
+    const METHOD: &'static str = "initialize";
 }
 
 struct ChannelTransport {
@@ -122,6 +130,66 @@ async fn initialize_client(
         ))
         .unwrap();
     connecting.await.unwrap().expect("client initializes")
+}
+
+struct ConnectedClient {
+    incoming: mpsc::UnboundedSender<RawMessage>,
+    outgoing: mpsc::UnboundedReceiver<RawMessage>,
+    server: ServerHandle,
+    serving: tokio::task::JoinHandle<lspf::Result<Outcome>>,
+}
+
+impl ConnectedClient {
+    async fn start(builder: ClientBuilder) -> Self {
+        let (incoming, incoming_rx) = mpsc::unbounded_channel();
+        let (outgoing_tx, mut outgoing) = mpsc::unbounded_channel();
+        let client = builder
+            .build(ChannelTransport {
+                incoming: incoming_rx,
+                outgoing: outgoing_tx,
+            })
+            .expect("client builds");
+        let connection = initialize_client(client, &incoming, &mut outgoing, |_| {}).await;
+        let server = connection.server();
+        let serving = tokio::spawn(connection.serve());
+        assert!(matches!(
+            recv(&mut outgoing).await,
+            RawMessage::Notification {
+                method: Cow::Borrowed("initialized"),
+                ..
+            }
+        ));
+        Self {
+            incoming,
+            outgoing,
+            server,
+            serving,
+        }
+    }
+
+    async fn recv(&mut self) -> RawMessage {
+        recv(&mut self.outgoing).await
+    }
+
+    fn send(&self, message: RawMessage) {
+        self.incoming.send(message).unwrap();
+    }
+
+    fn spawn_shutdown(&self) -> tokio::task::JoinHandle<Result<(), ClientError>> {
+        let server = self.server.clone();
+        tokio::spawn(async move { server.shutdown().await })
+    }
+
+    async fn recv_request_id(&mut self, expected_method: &'static str) -> RequestId {
+        match self.recv().await {
+            RawMessage::Request { id, method, .. } if method == expected_method => id,
+            other => panic!("expected {expected_method} request, got {other:?}"),
+        }
+    }
+
+    async fn outcome(self) -> Outcome {
+        self.serving.await.unwrap().unwrap()
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -245,6 +313,312 @@ async fn client_initializes_and_completes_one_typed_exchange_each_way() {
 
     drop(incoming_tx);
     assert_eq!(serving.await.unwrap().unwrap(), Outcome::TransportClosed);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn client_rejects_reverse_requests_before_and_after_initialize() {
+    let (incoming_tx, incoming_rx) = mpsc::unbounded_channel();
+    let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel();
+    let client = Client::builder(ClientCapabilities::default())
+        .build(ChannelTransport {
+            incoming: incoming_rx,
+            outgoing: outgoing_tx,
+        })
+        .expect("client builds");
+
+    let connecting = tokio::spawn(client.connect());
+    let initialize = recv(&mut outgoing_rx).await;
+    let initialize_id = initialize.id().cloned().expect("initialize request id");
+
+    incoming_tx
+        .send(RawMessage::Request {
+            id: RequestId::Number(70),
+            method: Cow::Borrowed(ClientEcho::METHOD),
+            params: Bytes::from_static(br#"{"text":"too early"}"#),
+        })
+        .unwrap();
+    match recv(&mut outgoing_rx).await {
+        RawMessage::Response {
+            id: RequestId::Number(70),
+            result: Err(error),
+        } => assert_eq!(error.code, -32002),
+        other => panic!("expected pre-initialize rejection, got {other:?}"),
+    }
+
+    incoming_tx
+        .send(RawMessage::Request {
+            id: RequestId::Number(71),
+            method: Cow::Borrowed("initialize"),
+            params: Bytes::from_static(b"{}"),
+        })
+        .unwrap();
+    match recv(&mut outgoing_rx).await {
+        RawMessage::Response {
+            id: RequestId::Number(71),
+            result: Err(error),
+        } => assert_eq!(error.code, -32600),
+        other => panic!("expected in-progress duplicate-initialize rejection, got {other:?}"),
+    }
+
+    incoming_tx
+        .send(response(
+            initialize_id,
+            InitializeResult {
+                capabilities: ServerCapabilities::default(),
+                server_info: None,
+            },
+        ))
+        .unwrap();
+    let connection = connecting.await.unwrap().expect("client initializes");
+    let serving = tokio::spawn(connection.serve());
+    let _initialized = recv(&mut outgoing_rx).await;
+
+    incoming_tx
+        .send(RawMessage::Request {
+            id: RequestId::Number(72),
+            method: Cow::Borrowed("initialize"),
+            params: Bytes::from_static(b"{}"),
+        })
+        .unwrap();
+    match recv(&mut outgoing_rx).await {
+        RawMessage::Response {
+            id: RequestId::Number(72),
+            result: Err(error),
+        } => assert_eq!(error.code, -32600),
+        other => panic!("expected duplicate-initialize rejection, got {other:?}"),
+    }
+
+    drop(incoming_tx);
+    assert_eq!(serving.await.unwrap().unwrap(), Outcome::TransportClosed);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn client_shutdown_refuses_later_work_and_exit_closes_cleanly() {
+    let mut client = ConnectedClient::start(Client::builder(ClientCapabilities::default())).await;
+
+    assert!(matches!(
+        client
+            .server
+            .request::<DuplicateInitialize>(json!({}))
+            .await,
+        Err(ClientError::InvalidLifecycle { .. })
+    ));
+
+    let shutting_down = client.spawn_shutdown();
+    let shutdown_id = client.recv_request_id("shutdown").await;
+    client.send(response(shutdown_id, Value::Null));
+    shutting_down
+        .await
+        .unwrap()
+        .expect("shutdown response completes lifecycle transition");
+
+    assert!(matches!(
+        client.server.notify::<ClientEvent>(json!({})),
+        Err(ClientError::InvalidLifecycle { .. })
+    ));
+    assert!(matches!(
+        client.server.shutdown().await,
+        Err(ClientError::InvalidLifecycle { .. })
+    ));
+
+    client.send(RawMessage::Request {
+        id: RequestId::Number(80),
+        method: Cow::Borrowed(ClientEcho::METHOD),
+        params: Bytes::from_static(br#"{"text":"too late"}"#),
+    });
+    match client.recv().await {
+        RawMessage::Response {
+            id: RequestId::Number(80),
+            result: Err(error),
+        } => assert_eq!(error.code, -32600),
+        other => panic!("expected post-shutdown rejection, got {other:?}"),
+    }
+
+    client.server.exit().expect("exit follows shutdown");
+    assert!(matches!(
+        client.recv().await,
+        RawMessage::Notification {
+            method: Cow::Borrowed("exit"),
+            ..
+        }
+    ));
+    assert_eq!(client.outcome().await, Outcome::Exit { code: 0 });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn client_shutdown_resolves_pending_work_in_both_directions() {
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let mut client = ConnectedClient::start(
+        Client::builder(ClientCapabilities::default()).request::<ClientEcho, _, _>(
+            move |_params, cancellation| {
+                let started_tx = started_tx.clone();
+                async move {
+                    started_tx.send(cancellation.clone()).unwrap();
+                    cancellation.cancelled().await;
+                    Err(lspf::LspError::RequestCancelled)
+                }
+            },
+        ),
+    )
+    .await;
+
+    let pending = tokio::spawn({
+        let server = client.server.clone();
+        async move {
+            server
+                .request::<ServerEcho>(EchoParams {
+                    text: "pending".into(),
+                })
+                .await
+        }
+    });
+    let _pending_request = client.recv().await;
+
+    client.send(RawMessage::Request {
+        id: RequestId::Number(90),
+        method: Cow::Borrowed(ClientEcho::METHOD),
+        params: Bytes::from_static(br#"{"text":"reverse pending"}"#),
+    });
+    let reverse_cancellation = tokio::time::timeout(Duration::from_secs(2), started_rx.recv())
+        .await
+        .expect("reverse handler starts within watchdog")
+        .expect("reverse handler reports its cancellation token");
+
+    let shutting_down = client.spawn_shutdown();
+    let shutdown_id = client.recv_request_id("shutdown").await;
+    client.send(response(shutdown_id, Value::Null));
+    shutting_down.await.unwrap().unwrap();
+
+    assert!(matches!(
+        pending.await.unwrap(),
+        Err(ClientError::Cancelled)
+    ));
+    match client.recv().await {
+        RawMessage::Response {
+            id: RequestId::Number(90),
+            result: Err(error),
+        } => assert_eq!(error.code, -32800),
+        other => panic!("expected cancelled reverse response, got {other:?}"),
+    }
+    assert!(reverse_cancellation.is_cancelled());
+
+    client.server.exit().unwrap();
+    let _exit = client.recv().await;
+    assert_eq!(client.outcome().await, Outcome::Exit { code: 0 });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn client_disconnect_is_idempotent_and_resolves_pending_work() {
+    let mut client = ConnectedClient::start(Client::builder(ClientCapabilities::default())).await;
+
+    assert!(matches!(
+        client.server.exit(),
+        Err(ClientError::InvalidLifecycle { .. })
+    ));
+    let pending = tokio::spawn({
+        let server = client.server.clone();
+        async move {
+            server
+                .request::<ServerEcho>(EchoParams {
+                    text: "pending".into(),
+                })
+                .await
+        }
+    });
+    let _pending_request = client.recv().await;
+
+    client.server.disconnect();
+    client.server.disconnect();
+
+    assert!(matches!(
+        pending.await.unwrap(),
+        Err(ClientError::Cancelled)
+    ));
+    let server = client.server.clone();
+    assert_eq!(client.outcome().await, Outcome::TransportClosed);
+    assert!(matches!(
+        server.notify::<ClientEvent>(json!({})),
+        Err(ClientError::InvalidLifecycle { .. })
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn client_initialize_uses_the_shared_outbound_deadline() {
+    let (incoming_tx, incoming_rx) = mpsc::unbounded_channel();
+    let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel();
+    let client = Client::builder(ClientCapabilities::default())
+        .resource_policy(ResourcePolicy {
+            outbound_request_timeout: Some(Duration::from_millis(20)),
+            ..ResourcePolicy::default()
+        })
+        .build(ChannelTransport {
+            incoming: incoming_rx,
+            outgoing: outgoing_tx,
+        })
+        .expect("client builds");
+
+    let connecting = tokio::spawn(client.connect());
+    let initialize_id = match recv(&mut outgoing_rx).await {
+        RawMessage::Request {
+            id,
+            method: Cow::Borrowed("initialize"),
+            ..
+        } => id,
+        other => panic!("expected initialize request, got {other:?}"),
+    };
+    assert!(matches!(
+        connecting.await.unwrap(),
+        Err(lspf::Error::Client(ClientError::Timeout))
+    ));
+    match recv(&mut outgoing_rx).await {
+        RawMessage::Notification { method, params }
+            if method == "$/cancelRequest"
+                && serde_json::from_slice::<Value>(&params).unwrap()["id"]
+                    == serde_json::to_value(initialize_id).unwrap() => {}
+        other => panic!("expected initialize cancellation, got {other:?}"),
+    }
+    drop(incoming_tx);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn client_shutdown_timeout_restores_running_and_allows_retry() {
+    let mut client = ConnectedClient::start(
+        Client::builder(ClientCapabilities::default()).resource_policy(ResourcePolicy {
+            outbound_request_timeout: Some(Duration::from_millis(20)),
+            ..ResourcePolicy::default()
+        }),
+    )
+    .await;
+
+    let first_shutdown = client.spawn_shutdown();
+    let first_id = client.recv_request_id("shutdown").await;
+    assert!(matches!(
+        first_shutdown.await.unwrap(),
+        Err(ClientError::Timeout)
+    ));
+    match client.recv().await {
+        RawMessage::Notification { method, params }
+            if method == "$/cancelRequest"
+                && serde_json::from_slice::<Value>(&params).unwrap()["id"]
+                    == serde_json::to_value(&first_id).unwrap() => {}
+        other => panic!("expected timed-out shutdown cancellation, got {other:?}"),
+    }
+
+    client
+        .server
+        .notify::<ClientEvent>(json!({ "stillRunning": true }))
+        .expect("failed shutdown leaves the client running");
+    let _notification = client.recv().await;
+
+    let retry = client.spawn_shutdown();
+    let retry_id = client.recv_request_id("shutdown").await;
+    assert_ne!(retry_id, first_id, "timed-out IDs are never reused");
+    client.send(response(retry_id, Value::Null));
+    retry.await.unwrap().expect("shutdown retry succeeds");
+
+    client.server.exit().unwrap();
+    let _exit = client.recv().await;
+    assert_eq!(client.outcome().await, Outcome::Exit { code: 0 });
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
