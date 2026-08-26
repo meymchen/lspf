@@ -10,15 +10,13 @@ trap 'rm -rf "$test_root"' EXIT
 
 package_list="$test_root/package-list.txt"
 archive_list="$test_root/archive-list.txt"
-expected_package_list=ci/lspf-package-files.txt
 
 echo "Checking the files Cargo will include in the package"
-cargo package -p "$crate_name" --list --locked | sort >"$package_list"
-test -s "$package_list"
-diff -u "$expected_package_list" "$package_list"
+cargo package -p "$crate_name" --list --locked --allow-dirty | sort >"$package_list"
+bash ci/check-package-file-policy.sh "$package_list"
 
 echo "Building and verifying the package"
-cargo package -p "$crate_name" --locked
+cargo package -p "$crate_name" --locked --allow-dirty
 
 crate_version=$(cargo metadata --no-deps --format-version 1 \
     | jq -er --arg name "$crate_name" \

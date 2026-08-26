@@ -1,5 +1,10 @@
 # Protocol invariants and Service/Layer stack
 
+Status note: ADR 0028 moves the completion gate, handler deadline race, task
+ownership, writer coordination, and idempotent close into the shared private
+`ProtocolSession`. Server lifecycle and protocol built-ins remain in
+`ProtocolEngine`, outside the Layer stack as decided here.
+
 Status: Accepted. Refines the `Service` and `Layer` decisions in
 [ADR 0010](0010-own-layer-trait-not-tower.md) and
 [ADR 0017](0017-typed-router-and-capability-catalog.md). Extends the
@@ -109,10 +114,10 @@ A Layer may inspect the normalized metadata and decoded values, replace a
 decoded parameter or result, return a request error, or short-circuit a
 notification with `NoResponse`. It cannot produce a response for a
 notification, change a call's `kind`, or add, remove, or replace its
-`request_id`. `ProtocolEngine` owns the completion gate and converts the
+`request_id`. `ProtocolSession` owns the completion gate and converts the
 final `ServiceResult` into the one permitted protocol outcome.
 
-For requests, `ProtocolEngine` races that Service future against peer
+For requests, `ProtocolSession` races that Service future against peer
 cancellation and the selected handler timeout. Expiry cancels the same
 request-scoped `CancellationToken`, polls cooperative handler code once more,
 and submits `ServerCancelled` (`-32802`, `handler deadline expired`) through
@@ -145,7 +150,7 @@ and `RouterService`. A panic in a user Layer or user handler therefore cannot
 unwind into `ProtocolEngine` or terminate the connection task. For a request,
 panic isolation returns `ServiceResult::Error` containing the framework-owned
 internal-error `LspError`; for a notification, it logs the panic and returns
-`ServiceResult::NoResponse`. The engine-owned completion gate still enforces
+`ServiceResult::NoResponse`. The session-owned completion gate still enforces
 exactly one response for every valid request.
 
 `Tracing` surrounds concurrency acquisition, so the call span includes time

@@ -61,6 +61,8 @@ mod raw;
 mod resource_policy;
 mod runtime;
 mod service;
+#[cfg(any(feature = "runtime-tokio", target_arch = "wasm32"))]
+mod session;
 mod sync;
 mod telemetry;
 mod transport;

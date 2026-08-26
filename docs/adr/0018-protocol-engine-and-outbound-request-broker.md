@@ -3,6 +3,11 @@
 Status note: ADR 0025 supersedes this decision's unbounded outbound-queue
 assumption; its ownership and completion rules remain in force.
 
+Status note: ADR 0028 moves correlation, admission, task, writer, deadline,
+and close ownership from `ProtocolEngine` into the endpoint-neutral private
+`ProtocolSession`. `ProtocolEngine` continues to own Server lifecycle,
+registration, Workspace, Documents, and Router freeze policy.
+
 Status note: ADR 0026 narrows the first-close-cause rule. Ordinary causes
 remain first-wins, but a required outbound admission failure observed before
 close completes produces `Outcome::WriterFailed` even when another cause was
@@ -45,25 +50,27 @@ The public registration vocabulary remains that of ADR 0017:
 
 ## Decision
 
-`ProtocolEngine` is an internal deep module. It is not a direct user-facing
+`ProtocolEngine` is the Server endpoint engine. It is not a direct user-facing
 interface or an additional registration surface. One `ProtocolEngine` exists
-for each `Server<S>` connection and exclusively owns all mutable protocol
-coordination for that connection:
+for each `Server<S>` connection and owns endpoint-specific policy:
 
 - lifecycle state;
-- the inbound in-flight request registry;
-- the outbound pending request registry;
-- the outbound request ID allocator;
-- session cancellation;
-- the task group;
-- the outbound queue;
-- the Writer failure signal;
 - the `Workspace`; and
 - `Router<S>` freeze state.
 
+One private `ProtocolSession` exists inside each endpoint engine and owns the
+direction-neutral mutable coordination:
+
+- the inbound in-flight request registry;
+- the outbound pending request registry and request ID allocator;
+- session cancellation and the task group;
+- handler deadlines;
+- the bounded outbound queue and Writer coordination; and
+- idempotent close signaling and cleanup.
+
 The work-done progress cancellation registry used by the built-in
-`window/workDoneProgress/cancel` notification is protocol state and is also
-owned by `ProtocolEngine`.
+`window/workDoneProgress/cancel` notification is endpoint protocol state. Its
+peer handle adapts it to the shared session close operation.
 
 `Router<S>` contains only the registration table and capability catalog
 defined by ADR 0017. Once the initialization transaction commits,
@@ -76,15 +83,17 @@ Layers, and Transport adapters do not hold or mutate lifecycle state, either
 request registry, the request ID allocator, session cancellation, the task
 group, the outbound queue, the Writer failure signal, the `Workspace`, or
 Router freeze state. A Transport adapter frames and moves messages. A
-`Runtime` executes engine-requested spawning and cancellation primitives, but
+`Runtime` executes session-requested spawning and cancellation primitives, but
 does not own the connection task group or its cancellation policy.
 
-`ServerContext`, `ClientHandle`, and `Workspace` are cloneable, capability-limited handles
-into engine-owned facilities. Cloning a handle does not create or transfer
-ownership of the underlying queue, registry, allocator, or workspace state.
-Only `ProtocolEngine` creates, mutates, closes, and destroys those facilities.
+`ServerContext`, `ClientHandle`, and `Workspace` are cloneable,
+capability-limited handles into connection-owned facilities. Cloning a handle
+does not create or transfer ownership of the underlying queue, registry,
+allocator, or workspace state. Only `ProtocolSession` creates, mutates,
+closes, and destroys shared protocol facilities; `ProtocolEngine` does the
+same for Server endpoint state.
 
-The engine maintains these invariants:
+The shared session maintains these invariants:
 
 1. Every valid inbound request gets exactly one response.
 2. Every outbound response correlates to its request by ID, and outbound
