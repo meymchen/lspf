@@ -10,8 +10,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use futures_util::FutureExt;
-use futures_util::select_biased;
 use lsp_types::error_codes::SERVER_CANCELLED;
 use lsp_types::notification::{Initialized, Notification};
 use lsp_types::request::{Initialize, Request};
@@ -32,7 +30,8 @@ use crate::resource_policy::ResourcePolicy;
 use crate::runtime::{Runtime, TaskFuture, TaskSend, default_runtime, ensure_runtime_available};
 use crate::service::{HandlerTimeout, ServiceResult};
 use crate::session::{
-    INBOUND_CAPACITY_EXHAUSTED, InboundReserveError, ProtocolSession, run_handler_with_deadline,
+    INBOUND_CAPACITY_EXHAUSTED, InboundReserveError, ProtocolSession, SessionInput,
+    run_handler_with_deadline,
 };
 use crate::telemetry::{ConnectionTrace, Direction};
 use crate::transport::{Transport, TransportError, TransportReader};
@@ -359,18 +358,15 @@ impl<R: Runtime> ClientEngine<R> {
     where
         Rd: TransportReader,
     {
-        let requested = self.protocol.close_requested();
-        let outbound_failed = self.protocol.outbound_failed();
         loop {
-            let message = select_biased! {
-                () = requested.cancelled().fuse() => break,
-                () = outbound_failed.cancelled().fuse() => {
+            let message = match self.protocol.next_input(&mut reader).await {
+                SessionInput::CloseRequested => break,
+                SessionInput::OutboundFailed => {
                     self.protocol.request_close(ClientCloseCause::WriterFailed);
                     break;
-                },
-                message = reader.recv().fuse() => message,
+                }
+                SessionInput::Message(message) => message,
             };
-            self.protocol.reap_finished().await;
             match message {
                 Ok(message) => {
                     self.trace.message(Direction::Inbound, &message);
@@ -388,15 +384,7 @@ impl<R: Runtime> ClientEngine<R> {
             }
         }
         self.protocol.close().await;
-        let recorded = self
-            .protocol
-            .take_close_cause()
-            .expect("every client read-loop ending records its close cause");
-        let cause = if self.protocol.outbound_failed().is_cancelled() {
-            ClientCloseCause::WriterFailed
-        } else {
-            recorded
-        };
+        let cause = self.protocol.final_close_cause();
         self.trace.connection_closed(cause.as_str());
         cause.into_result()
     }

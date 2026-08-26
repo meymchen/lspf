@@ -29,7 +29,7 @@ use crate::runtime::{Runtime, TaskHandle, TaskSend};
 use crate::service::{HandlerTimeout, ServiceResult};
 use crate::sync::{OwnedPermit, Semaphore};
 use crate::telemetry::{Completion, ConnectionTrace, Direction, Instant, Resource, ResourceAction};
-use crate::transport::{TransportError, TransportWriter};
+use crate::transport::{TransportError, TransportReader, TransportWriter};
 
 pub(crate) struct CloseSignal<C> {
     inner: Arc<CloseInner<C>>,
@@ -47,6 +47,7 @@ pub(crate) struct ProtocolSession<R, P, C> {
     cancellation: CancellationToken,
     close: CloseSignal<C>,
     peer: P,
+    writer_failed: fn() -> C,
     send_task: Option<TaskHandle>,
     closed: bool,
 }
@@ -55,6 +56,12 @@ pub(crate) struct ProtocolSession<R, P, C> {
 pub(crate) struct CompletionGate {
     inbound: InboundRegistry,
     outbound: OutboundQueue,
+}
+
+pub(crate) enum SessionInput {
+    CloseRequested,
+    OutboundFailed,
+    Message(std::result::Result<RawMessage, TransportError>),
 }
 
 impl CompletionGate {
@@ -117,6 +124,7 @@ impl<R: Runtime, P: SessionPeer, C> ProtocolSession<R, P, C> {
             cancellation: CancellationToken::new(),
             close,
             peer: peer.clone(),
+            writer_failed,
             send_task: Some(send_task),
             closed: false,
         };
@@ -225,6 +233,38 @@ impl<R: Runtime, P: SessionPeer, C> ProtocolSession<R, P, C> {
 
     pub(crate) async fn reap_finished(&mut self) {
         self.tasks.reap_finished().await;
+    }
+
+    /// Select the next endpoint-neutral input and reap completed handler tasks
+    /// immediately before returning a Transport message for dispatch.
+    pub(crate) async fn next_input<Rd: TransportReader>(
+        &mut self,
+        reader: &mut Rd,
+    ) -> SessionInput {
+        let requested = self.close_requested();
+        let outbound_failed = self.outbound_failed();
+        let input = select_biased! {
+            () = requested.cancelled().fuse() => SessionInput::CloseRequested,
+            () = outbound_failed.cancelled().fuse() => SessionInput::OutboundFailed,
+            message = reader.recv().fuse() => SessionInput::Message(message),
+        };
+        if matches!(input, SessionInput::Message(_)) {
+            self.reap_finished().await;
+        }
+        input
+    }
+
+    /// Take the recorded close cause, applying required-writer-failure
+    /// precedence after close has quiesced all connection tasks.
+    pub(crate) fn final_close_cause(&self) -> C {
+        let recorded = self
+            .take_close_cause()
+            .expect("every path out of an endpoint read-loop records its close cause");
+        if self.outbound_failed().is_cancelled() {
+            (self.writer_failed)()
+        } else {
+            recorded
+        }
     }
 }
 
