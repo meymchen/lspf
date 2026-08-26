@@ -23,8 +23,8 @@ use lspf::types::{
     UniquenessLevel,
 };
 use lspf::{
-    BuildError, CancellationToken, Context, LspError, RawMessage, RequestId, Server, Transport,
-    TransportError, TransportReader, TransportWriter,
+    BuildError, CancellationToken, LspError, RawMessage, RequestId, Server, ServerContext,
+    Transport, TransportError, TransportReader, TransportWriter,
 };
 
 struct AppState;
@@ -38,7 +38,7 @@ fn location(uri: &str, line: u32) -> Location {
 
 async fn signature_help(
     _: Arc<AppState>,
-    _: Context,
+    _: ServerContext,
     _: SignatureHelpParams,
     _: CancellationToken,
 ) -> Result<Option<SignatureHelp>, LspError> {
@@ -56,7 +56,7 @@ async fn signature_help(
 
 async fn declaration(
     _: Arc<AppState>,
-    _: Context,
+    _: ServerContext,
     _: GotoDeclarationParams,
     _: CancellationToken,
 ) -> Result<Option<GotoDeclarationResponse>, LspError> {
@@ -68,7 +68,7 @@ async fn declaration(
 
 async fn definition(
     _: Arc<AppState>,
-    _: Context,
+    _: ServerContext,
     _: GotoDefinitionParams,
     _: CancellationToken,
 ) -> Result<Option<GotoDefinitionResponse>, LspError> {
@@ -80,7 +80,7 @@ async fn definition(
 
 async fn type_definition(
     _: Arc<AppState>,
-    _: Context,
+    _: ServerContext,
     _: GotoTypeDefinitionParams,
     _: CancellationToken,
 ) -> Result<Option<GotoTypeDefinitionResponse>, LspError> {
@@ -92,7 +92,7 @@ async fn type_definition(
 
 async fn implementation(
     _: Arc<AppState>,
-    _: Context,
+    _: ServerContext,
     _: GotoImplementationParams,
     _: CancellationToken,
 ) -> Result<Option<GotoImplementationResponse>, LspError> {
@@ -104,7 +104,7 @@ async fn implementation(
 
 async fn references(
     _: Arc<AppState>,
-    _: Context,
+    _: ServerContext,
     _: ReferenceParams,
     _: CancellationToken,
 ) -> Result<Option<Vec<Location>>, LspError> {
@@ -113,7 +113,7 @@ async fn references(
 
 async fn document_highlight(
     _: Arc<AppState>,
-    _: Context,
+    _: ServerContext,
     _: DocumentHighlightParams,
     _: CancellationToken,
 ) -> Result<Option<Vec<DocumentHighlight>>, LspError> {
@@ -126,7 +126,7 @@ async fn document_highlight(
 #[allow(deprecated)]
 async fn document_symbol(
     _: Arc<AppState>,
-    _: Context,
+    _: ServerContext,
     _: DocumentSymbolParams,
     _: CancellationToken,
 ) -> Result<Option<DocumentSymbolResponse>, LspError> {
@@ -144,7 +144,7 @@ async fn document_symbol(
 
 async fn linked_editing_range(
     _: Arc<AppState>,
-    _: Context,
+    _: ServerContext,
     _: LinkedEditingRangeParams,
     _: CancellationToken,
 ) -> Result<Option<LinkedEditingRanges>, LspError> {
@@ -159,7 +159,7 @@ async fn linked_editing_range(
 
 async fn moniker(
     _: Arc<AppState>,
-    _: Context,
+    _: ServerContext,
     _: MonikerParams,
     _: CancellationToken,
 ) -> Result<Option<Vec<Moniker>>, LspError> {

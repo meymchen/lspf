@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use bytes::Bytes;
 use lspf::types::request::Request;
 use lspf::{
-    Context, IncomingCall, Layer, Next, RawMessage, RequestId, ResourcePolicy, Server,
+    IncomingCall, Layer, Next, RawMessage, RequestId, ResourcePolicy, Server, ServerContext,
     ServiceFuture, Transport, TransportError, TransportReader, TransportWriter,
 };
 use serde_json::json;
@@ -59,7 +59,7 @@ impl Layer<AppState> for HandlerTimeout {
 
 async fn controlled(
     state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     value: String,
     ct: lspf::CancellationToken,
 ) -> Result<String, lspf::LspError> {
@@ -90,7 +90,7 @@ async fn controlled(
 
 async fn returns_after_cancellation(
     state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     (): (),
     ct: lspf::CancellationToken,
 ) -> Result<String, lspf::LspError> {
@@ -107,7 +107,7 @@ async fn returns_after_cancellation(
 
 async fn panics_after_cancellation(
     state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     (): (),
     ct: lspf::CancellationToken,
 ) -> Result<(), lspf::LspError> {

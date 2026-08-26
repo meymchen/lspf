@@ -22,8 +22,8 @@ use lspf::types::{
     HoverParams, MarkedString, ServerCapabilities,
 };
 use lspf::{
-    CancellationToken, Context, LspError, RawMessage, RequestId, Server, Transport, TransportError,
-    TransportReader, TransportWriter,
+    CancellationToken, LspError, RawMessage, RequestId, Server, ServerContext, Transport,
+    TransportError, TransportReader, TransportWriter,
 };
 
 /// Application state shared as `Arc<S>` by every handler on the connection.
@@ -31,7 +31,7 @@ struct AppState;
 
 async fn hover(
     _state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     _params: HoverParams,
     _ct: CancellationToken,
 ) -> Result<Option<Hover>, LspError> {
@@ -43,7 +43,7 @@ async fn hover(
 
 async fn completion(
     _state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     _params: CompletionParams,
     _ct: CancellationToken,
 ) -> Result<Option<CompletionResponse>, LspError> {

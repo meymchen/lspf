@@ -8,8 +8,8 @@ use bytes::Bytes;
 use lsp_types::{LogMessageParams, MessageType};
 use lspf::types::request::Request;
 use lspf::{
-    Client, ClientError, Context, DocumentsView, RawMessage, RequestId, ResourcePolicy, Server,
-    Transport, TransportError, TransportReader, TransportWriter,
+    ClientError, ClientHandle, DocumentsView, RawMessage, RequestId, ResourcePolicy, Server,
+    ServerContext, Transport, TransportError, TransportReader, TransportWriter,
 };
 use serde_json::{Value, json};
 use tokio::sync::{Notify, mpsc};
@@ -119,7 +119,7 @@ struct StressState {
 #[derive(Clone, Default)]
 struct CleanupState {
     handler_tasks: Arc<HandlerTaskUsage>,
-    client: Arc<Mutex<Option<Client>>>,
+    client: Arc<Mutex<Option<ClientHandle>>>,
     documents: Arc<Mutex<Option<DocumentsView>>>,
 }
 
@@ -141,7 +141,7 @@ impl HasHandlerTaskUsage for CleanupState {
 
 async fn stalls<S>(
     state: Arc<S>,
-    _ctx: Context,
+    _ctx: ServerContext,
     (): (),
     cancellation: lspf::CancellationToken,
 ) -> Result<(), lspf::LspError>
@@ -155,7 +155,7 @@ where
 
 async fn fills_queue(
     state: Arc<StressState>,
-    ctx: Context,
+    ctx: ServerContext,
     (): (),
     _cancellation: lspf::CancellationToken,
 ) -> Result<(), lspf::LspError> {
@@ -181,7 +181,7 @@ async fn fills_queue(
 
 async fn capture_handles(
     state: Arc<CleanupState>,
-    ctx: Context,
+    ctx: ServerContext,
     (): (),
     _cancellation: lspf::CancellationToken,
 ) -> Result<(), lspf::LspError> {
@@ -198,7 +198,7 @@ struct OverloadState {
 
 async fn echo(
     _state: Arc<()>,
-    _ctx: Context,
+    _ctx: ServerContext,
     _params: String,
     _cancellation: lspf::CancellationToken,
 ) -> Result<String, lspf::LspError> {
@@ -208,7 +208,7 @@ async fn echo(
 
 async fn calls_peer(
     _state: Arc<()>,
-    ctx: Context,
+    ctx: ServerContext,
     (): (),
     _cancellation: lspf::CancellationToken,
 ) -> Result<String, lspf::LspError> {
@@ -220,7 +220,7 @@ async fn calls_peer(
 
 async fn never(
     _state: Arc<()>,
-    _ctx: Context,
+    _ctx: ServerContext,
     (): (),
     cancellation: lspf::CancellationToken,
 ) -> Result<(), lspf::LspError> {
@@ -230,7 +230,7 @@ async fn never(
 
 async fn calls_peer_twice(
     _state: Arc<()>,
-    ctx: Context,
+    ctx: ServerContext,
     (): (),
     _cancellation: lspf::CancellationToken,
 ) -> Result<(), lspf::LspError> {
@@ -245,7 +245,7 @@ async fn calls_peer_twice(
 
 async fn overloads_peer(
     state: Arc<OverloadState>,
-    ctx: Context,
+    ctx: ServerContext,
     (): (),
     _cancellation: lspf::CancellationToken,
 ) -> Result<(), lspf::LspError> {

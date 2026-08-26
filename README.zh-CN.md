@@ -10,10 +10,10 @@
 
 `lspf` **仅支持异步模式**，目标是让开发者用很少的代码即可启动一个可工作的语言服务器。
 你在 `Server` 上注册带类型的处理器，再把它交给传输层，协议本身由框架负责：生命周期、
-文档同步、取消、有界并发、`tracing` span，以及通过 `Client` 发出的带类型服务端消息。
+文档同步、取消、有界并发、`tracing` span，以及通过 `ClientHandle` 发出的带类型服务端消息。
 
 > **当前状态：** 项目仍处于早期阶段。当前已发布版本为 **0.5.2**。该版本包含
-> 稳定 LSP 3.17 功能目录、带类型的 Command、多根 `Workspace`、出站 `Client`
+> 稳定 LSP 3.17 功能目录、带类型的 Command、多根 `Workspace`、出站 `ClientHandle`
 > 辅助方法，以及 stdio、TCP、WebSocket 和 WASM worker-channel 传输。版本历史见
 > [crate 变更日志](./crates/lspf/CHANGELOG.md)。
 
@@ -26,17 +26,17 @@ use lspf::types::{
     CompletionItem, CompletionItemKind, CompletionOptions, CompletionParams, CompletionResponse,
     Hover, HoverContents, HoverParams, MarkedString,
 };
-use lspf::{CancellationToken, Context, LspError, OsFileProvider, Server};
+use lspf::{CancellationToken, ServerContext, LspError, OsFileProvider, Server};
 
 /// 只存放你自己的应用状态——文档、workspace 和 client 由框架持有，
-/// 并通过 `Context` 交给处理器。
+/// 并通过 `ServerContext` 交给处理器。
 struct State;
 
 /// 一个标准的带类型功能。`features::hover()` 描述符一次性确定协议方法、
 /// 本处理器的参数与结果类型，以及服务器将宣告的 `hoverProvider` capability。
 async fn hover(
     _state: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     params: HoverParams,
     _ct: CancellationToken,
 ) -> Result<Option<Hover>, LspError> {
@@ -57,7 +57,7 @@ async fn hover(
 /// 所宣告的内容。
 async fn complete(
     _state: Arc<State>,
-    _ctx: Context,
+    _ctx: ServerContext,
     _params: CompletionParams,
     _ct: CancellationToken,
 ) -> Result<Option<CompletionResponse>, LspError> {
@@ -72,7 +72,7 @@ async fn complete(
 /// 注册会把名称按注册顺序加入生成的 `executeCommandProvider`。
 async fn roots(
     _state: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     _args: Vec<String>,
     _ct: CancellationToken,
 ) -> Result<Vec<(String, String)>, LspError> {
@@ -149,7 +149,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
   并发安全且基于 rope 的 `Documents`；处理器通过没有任何修改操作的
   `DocumentsView` 读取它们。
 - **多根 `Workspace`。** 客户端声明——文件夹、根 URI、配置、trace 级别——存放在
-  一个可克隆的句柄中，只由协议修改，通过 `Context` 读取；未打开文件通过可配置的
+  一个可克隆的句柄中，只由协议修改，通过 `ServerContext` 读取；未打开文件通过可配置的
   `FileProvider` 解析。
 - **capability 不会与分发脱节。** `ServerCapabilities` 由参与分发的同一份注册
   生成，因此服务器宣告的能力就是它实际提供的能力；互相冲突的注册是构建错误，
@@ -177,8 +177,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 | `DocumentsView`     | 处理器通过 `ctx.documents()` 获得的只读文档句柄。                                      |
 | `Workspace`         | 连接 workspace 状态的可克隆句柄：文件夹、配置和文档。                                  |
 | `FileProvider`      | 解析编辑器中未打开资源的可配置 provider。                                              |
-| `Context`           | 每个处理器都会收到的框架状态句柄（克隆开销极小）：文档、workspace 和 client。          |
-| `Client`            | 发送带类型服务端通知与请求的句柄（`ctx.client()`）。                                   |
+| `ServerContext`     | 每个处理器都会收到的框架状态句柄（克隆开销极小）：文档、workspace 和 client。          |
+| `ClientHandle`      | 发送带类型服务端通知与请求的句柄（`ctx.client()`）。                                   |
 | `CancellationToken` | 传递给请求处理器的取消信号。                                                           |
 | `Transport`         | 供协议引擎使用、拆分为 reader 和 writer 两部分的消息帧通道。                           |
 | `Outcome`           | 连接如何结束；serve 返回它，其中带有 LSP 退出码，但框架从不结束进程。                  |
@@ -215,7 +215,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 - 覆盖 shutdown 与 exit 的生命周期钩子、增量或全量文本文档同步，以及变更后
   文档钩子。
 - 多根 `Workspace`、最新配置设置，以及基于 `FileProvider` 的未打开文件查找。
-- 通过 `Client` 发送带类型的服务端通知与可关联响应的请求。
+- 通过 `ClientHandle` 发送带类型的服务端通知与可关联响应的请求。
 - 并发分发、有界并发、请求取消和 `tracing` span。
 - 基于 rope 的文档，以及 UTF-8/UTF-16 位置编码协商。
 

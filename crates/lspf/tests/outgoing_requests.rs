@@ -1,4 +1,4 @@
-//! Typed outgoing request helpers on `Client` (issues #104, #105, #106, #107).
+//! Typed outgoing request helpers on `ClientHandle` (issues #104, #105, #106, #107).
 //!
 //! `show_document`, `show_message_request`, and `apply_edit` are thin wrappers
 //! over the generic typed request broker, as are the client-owned workspace
@@ -26,8 +26,8 @@ use lspf::types::{
     ApplyWorkspaceEditResponse, MessageActionItem, ShowDocumentResult, WorkspaceFolder,
 };
 use lspf::{
-    CancellationToken, Client, ClientError, Context, RawMessage, RequestId, Server, Transport,
-    TransportError, TransportReader, TransportWriter,
+    CancellationToken, ClientError, ClientHandle, RawMessage, RequestId, Server, ServerContext,
+    Transport, TransportError, TransportReader, TransportWriter,
 };
 use serde_json::json;
 use tokio::sync::mpsc;
@@ -249,7 +249,7 @@ async fn await_outcome<T>(outcome: &Arc<Mutex<Option<T>>>) -> T {
 /// - `abandoning_the_future_cancels_the_request_on_the_wire`
 /// - `connection_disconnect_resolves_the_pending_request_as_cancelled`
 ///
-/// `call` is an expression producing the helper future given a `Client` and
+/// `call` is an expression producing the helper future given a `ClientHandle` and
 /// the trigger params as `serde_json::Value`. It is invoked three ways: awaited
 /// inside the trigger handler, dropped without awaiting after a short delay
 /// (abandonment), and awaited on a detached task that survives session close.
@@ -269,14 +269,14 @@ macro_rules! helper_wire_tests {
 
             /// The helper awaited to completion inside the trigger handler.
             fn awaited_call(
-                client: Client,
+                client: ClientHandle,
                 params: serde_json::Value,
             ) -> impl std::future::Future<Output = Result<$result, ClientError>> {
                 async move { ($call)(client, params).await }
             }
 
             /// The helper's future created and dropped without being awaited.
-            async fn abandoned_call(client: Client, params: serde_json::Value) {
+            async fn abandoned_call(client: ClientHandle, params: serde_json::Value) {
                 let fut = ($call)(client, params);
                 tokio::select! {
                     _ = fut => {}
@@ -290,7 +290,7 @@ macro_rules! helper_wire_tests {
                 let outcome = Arc::clone(outcome);
                 Server::builder(())
                     .request::<Trigger, _, _>(move |_state: Arc<()>,
-                                                 ctx: Context,
+                                                 ctx: ServerContext,
                                                  params: serde_json::Value,
                                                  _ct: CancellationToken| {
                         let outcome = Arc::clone(&outcome);
@@ -307,7 +307,7 @@ macro_rules! helper_wire_tests {
             fn abandon_server() -> Server<()> {
                 Server::builder(())
                     .request::<Trigger, _, _>(move |_state: Arc<()>,
-                                                 ctx: Context,
+                                                 ctx: ServerContext,
                                                  params: serde_json::Value,
                                                  _ct: CancellationToken| {
                         async move {
@@ -325,7 +325,7 @@ macro_rules! helper_wire_tests {
                 let outcome = Arc::clone(outcome);
                 Server::builder(())
                     .request::<Trigger, _, _>(move |_state: Arc<()>,
-                                                 ctx: Context,
+                                                 ctx: ServerContext,
                                                  params: serde_json::Value,
                                                  _ct: CancellationToken| {
                         let outcome = Arc::clone(&outcome);
@@ -502,7 +502,7 @@ helper_wire_tests!(
     result = ShowDocumentResult,
     params = json!({ "uri": "file:///guide.md", "takeFocus": true }),
     fixture = SHOW_DOCUMENT_FIXTURE,
-    call = |client: Client, params: serde_json::Value| async move {
+    call = |client: ClientHandle, params: serde_json::Value| async move {
         client
             .show_document(serde_json::from_value(params).unwrap())
             .await
@@ -522,7 +522,7 @@ helper_wire_tests!(
         "actions": [{ "title": "Save" }, { "title": "Discard" }],
     }),
     fixture = SHOW_MESSAGE_REQUEST_FIXTURE,
-    call = |client: Client, params: serde_json::Value| async move {
+    call = |client: ClientHandle, params: serde_json::Value| async move {
         client
             .show_message_request(serde_json::from_value(params).unwrap())
             .await
@@ -556,7 +556,7 @@ helper_wire_tests!(
         },
     }),
     fixture = APPLY_EDIT_FIXTURE,
-    call = |client: Client, params: serde_json::Value| async move {
+    call = |client: ClientHandle, params: serde_json::Value| async move {
         client
             .apply_edit(serde_json::from_value(params).unwrap())
             .await
@@ -585,7 +585,7 @@ helper_wire_tests!(
         ],
     }),
     fixture = CONFIGURATION_FIXTURE,
-    call = |client: Client, params: serde_json::Value| async move {
+    call = |client: ClientHandle, params: serde_json::Value| async move {
         client.configuration(serde_json::from_value(params).unwrap()).await
     },
     // The reply mixes a filled value, a null, and an extra entry: the result
@@ -607,7 +607,7 @@ helper_wire_tests!(
     result = Option<Vec<WorkspaceFolder>>,
     params = json!(null),
     fixture = WORKSPACE_FOLDERS_FIXTURE,
-    call = |client: Client, _params: serde_json::Value| async move { client.workspace_folders().await },
+    call = |client: ClientHandle, _params: serde_json::Value| async move { client.workspace_folders().await },
     success_reply = json!([
         { "uri": "file:///a", "name": "a" },
         { "uri": "file:///b", "name": "b" },
@@ -636,7 +636,7 @@ helper_wire_tests!(
         ],
     }),
     fixture = REGISTER_CAPABILITY_FIXTURE,
-    call = |client: Client, params: serde_json::Value| async move {
+    call = |client: ClientHandle, params: serde_json::Value| async move {
         client
             .register_capability(serde_json::from_value(params).unwrap())
             .await
@@ -655,7 +655,7 @@ helper_wire_tests!(
         ],
     }),
     fixture = UNREGISTER_CAPABILITY_FIXTURE,
-    call = |client: Client, params: serde_json::Value| async move {
+    call = |client: ClientHandle, params: serde_json::Value| async move {
         client
             .unregister_capability(serde_json::from_value(params).unwrap())
             .await
@@ -670,7 +670,9 @@ helper_wire_tests!(
     result = (),
     params = json!(null),
     fixture = CODE_LENS_REFRESH_FIXTURE,
-    call = |client: Client, _params: serde_json::Value| async move { client.code_lens_refresh().await },
+    call = |client: ClientHandle, _params: serde_json::Value| async move {
+        client.code_lens_refresh().await
+    },
     success_reply = json!(null),
     success_assert = |value: ()| assert_eq!(value, ()),
     invalid_reply = json!({ "unexpected": true }),
@@ -681,7 +683,9 @@ helper_wire_tests!(
     result = (),
     params = json!(null),
     fixture = DIAGNOSTIC_REFRESH_FIXTURE,
-    call = |client: Client, _params: serde_json::Value| async move { client.diagnostic_refresh().await },
+    call = |client: ClientHandle, _params: serde_json::Value| async move {
+        client.diagnostic_refresh().await
+    },
     success_reply = json!(null),
     success_assert = |value: ()| assert_eq!(value, ()),
     invalid_reply = json!({ "unexpected": true }),
@@ -692,7 +696,9 @@ helper_wire_tests!(
     result = (),
     params = json!(null),
     fixture = INLAY_HINT_REFRESH_FIXTURE,
-    call = |client: Client, _params: serde_json::Value| async move { client.inlay_hint_refresh().await },
+    call = |client: ClientHandle, _params: serde_json::Value| async move {
+        client.inlay_hint_refresh().await
+    },
     success_reply = json!(null),
     success_assert = |value: ()| assert_eq!(value, ()),
     invalid_reply = json!({ "unexpected": true }),
@@ -703,7 +709,7 @@ helper_wire_tests!(
     result = (),
     params = json!(null),
     fixture = INLINE_VALUE_REFRESH_FIXTURE,
-    call = |client: Client, _params: serde_json::Value| async move {
+    call = |client: ClientHandle, _params: serde_json::Value| async move {
         client.inline_value_refresh().await
     },
     success_reply = json!(null),
@@ -716,7 +722,7 @@ helper_wire_tests!(
     result = (),
     params = json!(null),
     fixture = SEMANTIC_TOKENS_REFRESH_FIXTURE,
-    call = |client: Client, _params: serde_json::Value| async move {
+    call = |client: ClientHandle, _params: serde_json::Value| async move {
         client.semantic_tokens_refresh().await
     },
     success_reply = json!(null),
@@ -744,7 +750,7 @@ mod proposed {
         result = (),
         params = json!(null),
         fixture = FOLDING_RANGE_REFRESH_FIXTURE,
-        call = |client: Client, _params: serde_json::Value| async move {
+        call = |client: ClientHandle, _params: serde_json::Value| async move {
             client.refresh_folding_ranges().await
         },
         success_reply = json!(null),
@@ -757,7 +763,7 @@ mod proposed {
         result = (),
         params = json!({ "uri": "file:///main.rs" }),
         fixture = TEXT_DOCUMENT_CONTENT_REFRESH_FIXTURE,
-        call = |client: Client, params: serde_json::Value| async move {
+        call = |client: ClientHandle, params: serde_json::Value| async move {
             client
                 .refresh_text_document_content(serde_json::from_value(params).unwrap())
                 .await
@@ -799,7 +805,7 @@ async fn dynamic_registration_does_not_dispatch_an_absent_route() {
     let server = Server::builder(())
         .request::<Trigger, _, _>(
             move |_state: Arc<()>,
-                  ctx: Context,
+                  ctx: ServerContext,
                   params: serde_json::Value,
                   _ct: CancellationToken| {
                 async move {

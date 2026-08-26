@@ -8,7 +8,7 @@ use lspf::types::{
     Color, ColorInformation, ColorPresentation, ColorPresentationParams, ColorProviderOptions,
     DocumentColorParams, Position, Range,
 };
-use lspf::{CancellationToken, Context, LspError, Server};
+use lspf::{CancellationToken, LspError, Server, ServerContext};
 
 struct State;
 
@@ -23,7 +23,7 @@ fn hex_value(chars: &str) -> Option<u32> {
 
 async fn document_colors(
     _: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     params: DocumentColorParams,
     _: CancellationToken,
 ) -> Result<Vec<ColorInformation>, LspError> {
@@ -75,7 +75,7 @@ async fn document_colors(
 
 async fn color_presentation(
     _: Arc<State>,
-    _: Context,
+    _: ServerContext,
     params: ColorPresentationParams,
     _: CancellationToken,
 ) -> Result<Vec<ColorPresentation>, LspError> {

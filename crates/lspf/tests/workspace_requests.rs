@@ -30,8 +30,8 @@ use lspf::types::{
     WorkspaceSymbolParams, WorkspaceSymbolResponse,
 };
 use lspf::{
-    CancellationToken, Context, LspError, RawMessage, RequestId, Server, Transport, TransportError,
-    TransportReader, TransportWriter,
+    CancellationToken, LspError, RawMessage, RequestId, Server, ServerContext, Transport,
+    TransportError, TransportReader, TransportWriter,
 };
 
 /// Application state shared as `Arc<S>` by every handler on the connection.
@@ -47,7 +47,7 @@ struct AppState {
 
 async fn workspace_symbol(
     state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     params: WorkspaceSymbolParams,
     _ct: CancellationToken,
 ) -> Result<Option<WorkspaceSymbolResponse>, LspError> {
@@ -57,7 +57,7 @@ async fn workspace_symbol(
 
 async fn symbol_resolve(
     _state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     mut symbol: WorkspaceSymbol,
     _ct: CancellationToken,
 ) -> Result<WorkspaceSymbol, LspError> {
@@ -67,7 +67,7 @@ async fn symbol_resolve(
 
 async fn will_create(
     state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     params: CreateFilesParams,
     _ct: CancellationToken,
 ) -> Result<Option<WorkspaceEdit>, LspError> {
@@ -80,7 +80,7 @@ async fn will_create(
 
 async fn will_rename(
     state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     params: RenameFilesParams,
     _ct: CancellationToken,
 ) -> Result<Option<WorkspaceEdit>, LspError> {
@@ -93,7 +93,7 @@ async fn will_rename(
 
 async fn will_delete(
     state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     params: DeleteFilesParams,
     _ct: CancellationToken,
 ) -> Result<Option<WorkspaceEdit>, LspError> {
@@ -104,21 +104,21 @@ async fn will_delete(
     Ok(Some(WorkspaceEdit::default()))
 }
 
-async fn did_rename(state: Arc<AppState>, _ctx: Context, params: RenameFilesParams) {
+async fn did_rename(state: Arc<AppState>, _ctx: ServerContext, params: RenameFilesParams) {
     let mut renames = state.renames.lock().unwrap();
     for file in params.files {
         renames.push((file.old_uri, file.new_uri));
     }
 }
 
-async fn did_create(state: Arc<AppState>, _ctx: Context, params: CreateFilesParams) {
+async fn did_create(state: Arc<AppState>, _ctx: ServerContext, params: CreateFilesParams) {
     let mut creates = state.creates.lock().unwrap();
     for file in params.files {
         creates.push(file.uri);
     }
 }
 
-async fn did_delete(state: Arc<AppState>, _ctx: Context, params: DeleteFilesParams) {
+async fn did_delete(state: Arc<AppState>, _ctx: ServerContext, params: DeleteFilesParams) {
     let mut deletes = state.deletes.lock().unwrap();
     for file in params.files {
         deletes.push(file.uri);
@@ -127,7 +127,7 @@ async fn did_delete(state: Arc<AppState>, _ctx: Context, params: DeleteFilesPara
 
 async fn did_change_watched(
     state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     params: DidChangeWatchedFilesParams,
 ) {
     let mut watched = state.watched_changes.lock().unwrap();

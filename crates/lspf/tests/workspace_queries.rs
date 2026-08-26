@@ -1,7 +1,7 @@
-//! Client-owned workspace queries leave the Workspace snapshot untouched
+//! ClientHandle-owned workspace queries leave the Workspace snapshot untouched
 //! (issue #105).
 //!
-//! `Client::configuration` and `Client::workspace_folders` are read-only
+//! `ClientHandle::configuration` and `ClientHandle::workspace_folders` are read-only
 //! queries: their results go to the caller and are never written into the
 //! framework-owned Workspace state. The configuration snapshot stays under
 //! `workspace/didChangeConfiguration` sync and the folder list stays under
@@ -15,7 +15,7 @@ use bytes::Bytes;
 use lspf::types::request::Request;
 use lspf::types::{ConfigurationParams, WorkspaceFolder};
 use lspf::{
-    CancellationToken, ClientError, Context, RawMessage, RequestId, Server, Transport,
+    CancellationToken, ClientError, RawMessage, RequestId, Server, ServerContext, Transport,
     TransportError, TransportReader, TransportWriter,
 };
 use serde::de::DeserializeOwned;
@@ -215,7 +215,7 @@ async fn configuration_result_never_enters_the_workspace_snapshot() {
     let server = Server::builder(())
         .request::<ConfigTrigger, _, _>(
             move |_state: Arc<()>,
-                  ctx: Context,
+                  ctx: ServerContext,
                   params: ConfigurationParams,
                   _ct: CancellationToken| {
                 let recorded = Arc::clone(&recorded_handler);
@@ -228,7 +228,7 @@ async fn configuration_result_never_enters_the_workspace_snapshot() {
             },
         )
         .request::<WorkspaceProbe, _, _>(
-            |_state: Arc<()>, ctx: Context, _params: (), _ct: CancellationToken| async move {
+            |_state: Arc<()>, ctx: ServerContext, _params: (), _ct: CancellationToken| async move {
                 Ok(WorkspaceProbeResult {
                     configuration: ctx.workspace().configuration(),
                     folders: ctx.workspace().folders(),
@@ -342,7 +342,7 @@ async fn workspace_folders_result_never_overwrites_the_folder_snapshot() {
     let recorded_handler = Arc::clone(&recorded);
     let server = Server::builder(())
         .request::<FoldersTrigger, _, _>(
-            move |_state: Arc<()>, ctx: Context, _params: (), _ct: CancellationToken| {
+            move |_state: Arc<()>, ctx: ServerContext, _params: (), _ct: CancellationToken| {
                 let recorded = Arc::clone(&recorded_handler);
                 async move {
                     let result = ctx.client().workspace_folders().await;
@@ -353,7 +353,7 @@ async fn workspace_folders_result_never_overwrites_the_folder_snapshot() {
             },
         )
         .request::<WorkspaceProbe, _, _>(
-            |_state: Arc<()>, ctx: Context, _params: (), _ct: CancellationToken| async move {
+            |_state: Arc<()>, ctx: ServerContext, _params: (), _ct: CancellationToken| async move {
                 Ok(WorkspaceProbeResult {
                     configuration: ctx.workspace().configuration(),
                     folders: ctx.workspace().folders(),

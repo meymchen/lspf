@@ -12,8 +12,8 @@ use lspf::types::{
     WorkspaceFoldersServerCapabilities,
 };
 use lspf::{
-    CancellationToken, Context, LspError, RawMessage, RequestId, Server, Transport, TransportError,
-    TransportReader, TransportWriter,
+    CancellationToken, LspError, RawMessage, RequestId, Server, ServerContext, Transport,
+    TransportError, TransportReader, TransportWriter,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -29,7 +29,7 @@ struct AppState {
 
 async fn on_configuration(
     state: Arc<AppState>,
-    ctx: Context,
+    ctx: ServerContext,
     _params: DidChangeConfigurationParams,
 ) {
     state
@@ -39,11 +39,11 @@ async fn on_configuration(
         .push(ctx.workspace().configuration());
 }
 
-async fn on_trace(state: Arc<AppState>, ctx: Context, _params: SetTraceParams) {
+async fn on_trace(state: Arc<AppState>, ctx: ServerContext, _params: SetTraceParams) {
     state.traces.lock().unwrap().push(ctx.workspace().trace());
 }
 
-fn folders(ctx: &Context) -> Vec<(String, String)> {
+fn folders(ctx: &ServerContext) -> Vec<(String, String)> {
     ctx.workspace()
         .folders()
         .iter()
@@ -51,7 +51,11 @@ fn folders(ctx: &Context) -> Vec<(String, String)> {
         .collect()
 }
 
-async fn on_folders(state: Arc<AppState>, ctx: Context, _params: DidChangeWorkspaceFoldersParams) {
+async fn on_folders(
+    state: Arc<AppState>,
+    ctx: ServerContext,
+    _params: DidChangeWorkspaceFoldersParams,
+) {
     state.folder_snapshots.lock().unwrap().push(folders(&ctx));
 }
 
@@ -75,7 +79,7 @@ impl Request for Probe {
 
 async fn probe(
     _state: Arc<AppState>,
-    ctx: Context,
+    ctx: ServerContext,
     _params: ProbeParams,
     _ct: CancellationToken,
 ) -> Result<ProbeResult, LspError> {

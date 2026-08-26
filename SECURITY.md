@@ -27,10 +27,10 @@ toolchains are useful for early warning, but are not supported toolchains.
 
 The workspace `rust-version` field is the source of truth. Development and all
 Rust CI jobs pin Rust 1.98.0 through `rust-toolchain.toml` and the shared setup
-action. CI `feature-contract` compiles every documented feature selection for
-the Linux host and `wasm32-unknown-unknown`. CI `msrv` checks the
-release-oriented native matrix and the whole workspace with default features
-on the same compiler.
+action. On pull requests, CI `feature-contract` compiles every documented
+feature selection for the Linux host and `wasm32-unknown-unknown`. After a
+change reaches `main`, CI `msrv` also checks the release-oriented native matrix
+and the whole workspace with default features on the same compiler.
 
 An MSRV increase is a breaking change. Before 1.0 it may happen only in a new
 minor release; after 1.0 it requires a new major release. The release notes
@@ -84,6 +84,12 @@ every supported selection with and without `proposed`. It also checks that
 Transport-specific dependencies do not leak into the default build and that
 `proposed` stays independent of every Transport.
 
+Pull requests use a fast feedback path: `feature-contract`, maximal workspace
+tests, public documentation, packaging, compatibility, security, WASM, and the
+cross-platform lifecycle run before merge. The release-oriented `msrv` and
+native test matrices, coverage, and Gate A/B evidence run after a push to
+`main`. A newer commit on the same pull request cancels its older CI run.
+
 ## Semantic versioning
 
 Releases follow Cargo's interpretation of semantic versioning. The public Rust
@@ -106,13 +112,13 @@ not intentionally break them, but a minor release may change or remove them
 without a deprecation cycle. Such changes still appear in the changelog.
 
 CI `public API compatibility` compares the crate with the latest version on
-crates.io, which is the maintained baseline. It runs `cargo-semver-checks` for
-every native feature selection in the table, the two supported WASM
-selections, and each selection again with `proposed`. The default surface is
-the same as the explicit `stdio` surface and is covered by that row. The job
-uploads `public-api-compatibility-report`, a JSON artifact containing the
-baseline, current version, command output, result, and exit code for every
-surface.
+crates.io, which is the maintained baseline. The exhaustive `feature-contract`
+and public-docs gates own combination correctness. Compatibility checks the
+core and additive maximal API surfaces for native and WASM targets: native
+without features, native with `stdio,tcp,websocket,proposed`, WASM with
+`wasm,proposed`, and WASM with `worker-channel,proposed`. The job uploads
+`public-api-compatibility-report`, a JSON artifact containing the baseline,
+current version, command output, result, and exit code for every surface.
 
 For the WASM rows, rustdoc runs on the CI host with the crate's
 `target_arch = "wasm32"` branches selected. This works around a
@@ -122,16 +128,18 @@ compile those selections for the real `wasm32-unknown-unknown` target.
 
 The gate always asks cargo-semver-checks to apply patch-level compatibility.
 Exit code 100 means the tool found a break. Each failing report row includes a
-hash of the exact normalized findings, so an intentional break can be approved
-in `ci/public-api-breaking-approvals.json` for one baseline, current version,
-target, and feature selection. A different or additional finding changes the
-hash and still fails the gate.
+hash of normalized, order-independent failure blocks, so output ordering cannot
+split one finding set into several approvals. An intentional break can
+be approved in `ci/public-api-breaking-approvals.json` for one baseline,
+current version, target, and feature selection. A different or additional
+finding changes the hash and still fails the gate.
 
-To approve a reviewed break, copy the failing row's `baselineVersion`,
-`currentVersion`, `target`, `features`, and `findingsSha256` values into a new
-entry in the `approvals` array. Rerun the gate and commit the approval with the
-breaking change. Remove approval entries after their `currentVersion` is
-released; a later baseline or version cannot reuse them.
+To approve a reviewed break, copy the gate's `approval candidate` JSON into the
+`approvals` array. When every representative surface has the same findings,
+the candidate uses `"target": "*"` and `"features": "*"`; otherwise the gate
+prints the exact surface-specific records. Rerun the gate and commit the
+approval with the breaking change. Remove approval entries after their
+`currentVersion` is released; a later baseline or version cannot reuse them.
 
 An approval is valid only for a pre-1.0 minor version bump or a post-1.0 major
 version bump. The changelog and release notes must describe every approved
@@ -160,8 +168,9 @@ same target and feature surfaces.
 
 ## Gate A release evidence
 
-CI `gate-a-evidence` waits for the support matrix, documentation,
-compatibility, packaged consumer, coverage, and supply-chain jobs. It writes
+After a push to `main`, CI `gate-a-evidence` waits for the support matrix,
+documentation, compatibility, packaged consumer, coverage, and supply-chain
+jobs. It writes
 `gate-a-release-evidence`, which contains a JSON manifest and a Markdown
 summary. Both files identify the full commit SHA and workflow run. Source
 links use that SHA rather than a moving branch, and the manifest records the

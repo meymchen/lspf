@@ -2,7 +2,7 @@ use lsp_types::PublishDiagnosticsParams;
 use tokio_util::sync::CancellationToken;
 use tracing::Span;
 
-use crate::client::Client;
+use crate::client::ClientHandle;
 use crate::documents::DocumentsView;
 use crate::error::ClientError;
 use crate::raw::RequestId;
@@ -12,13 +12,13 @@ use crate::workspace::Workspace;
 ///
 /// The handle exposes connection-scoped capabilities — the established
 /// [`Workspace`] (initialization metadata, roots, workspace folders, and the
-/// read-only [`DocumentsView`]) and the [`Client`] — without exposing
+/// read-only [`DocumentsView`]) and the [`ClientHandle`] — without exposing
 /// protocol-owned queues or registries.
 #[derive(Debug, Clone)]
-pub struct Context {
+pub struct ServerContext {
     pub(crate) request_id: Option<RequestId>,
     pub(crate) span: Span,
-    pub(crate) client: Client,
+    pub(crate) client: ClientHandle,
     /// The connection's established [`Workspace`]. Handlers only run after
     /// the initialize transaction has established it, so user code always
     /// observes one — there is no workspace-less dispatch.
@@ -26,11 +26,11 @@ pub struct Context {
     pub(crate) cancellation: Option<CancellationToken>,
 }
 
-impl Context {
+impl ServerContext {
     pub(crate) fn for_request(
         id: RequestId,
         span: Span,
-        client: Client,
+        client: ClientHandle,
         workspace: Workspace,
     ) -> Self {
         Self {
@@ -42,7 +42,7 @@ impl Context {
         }
     }
 
-    pub(crate) fn for_notification(span: Span, client: Client, workspace: Workspace) -> Self {
+    pub(crate) fn for_notification(span: Span, client: ClientHandle, workspace: Workspace) -> Self {
         Self {
             request_id: None,
             span,
@@ -83,7 +83,7 @@ impl Context {
     }
 
     /// A cheap clone of the typed handle for this connection's LSP client.
-    pub fn client(&self) -> Client {
+    pub fn client(&self) -> ClientHandle {
         self.client.clone()
     }
 
@@ -96,8 +96,8 @@ impl Context {
     }
 
     /// Push a `textDocument/publishDiagnostics` notification through the
-    /// connection's typed [`Client`] (fire-and-forget); see
-    /// [`Client::publish_diagnostics`] for the exact semantics.
+    /// connection's typed [`ClientHandle`] (fire-and-forget); see
+    /// [`ClientHandle::publish_diagnostics`] for the exact semantics.
     ///
     /// Serialization and enqueue failures are returned to the caller (the
     /// client helper also reports them through `tracing`). A failed publish
@@ -118,13 +118,13 @@ mod tests {
     use crate::client::{OutboundQueue, OutboundRegistry};
     use crate::documents::Documents;
 
-    fn context() -> (Context, Documents) {
+    fn context() -> (ServerContext, Documents) {
         let (out_tx, _out_rx) = OutboundQueue::bounded(usize::MAX, usize::MAX);
         let documents = Documents::new();
         let workspace = Workspace::from_params(&InitializeParams::default(), documents.clone());
-        let client = Client::new(out_tx, OutboundRegistry::default(), None);
+        let client = ClientHandle::new(out_tx, OutboundRegistry::default(), None);
         (
-            Context::for_notification(Span::none(), client, workspace),
+            ServerContext::for_notification(Span::none(), client, workspace),
             documents,
         )
     }

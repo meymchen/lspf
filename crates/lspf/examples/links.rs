@@ -6,14 +6,14 @@ mod example_support;
 use std::sync::Arc;
 
 use lspf::types::{DocumentLink, DocumentLinkOptions, DocumentLinkParams, Position, Range};
-use lspf::{CancellationToken, Context, LspError, Server};
+use lspf::{CancellationToken, LspError, Server, ServerContext};
 use serde_json::{Value, json};
 
 struct State;
 
 async fn links(
     _: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     params: DocumentLinkParams,
     _: CancellationToken,
 ) -> Result<Option<Vec<DocumentLink>>, LspError> {
@@ -49,7 +49,7 @@ async fn links(
 
 async fn resolve(
     _: Arc<State>,
-    _: Context,
+    _: ServerContext,
     mut link: DocumentLink,
     _: CancellationToken,
 ) -> Result<DocumentLink, LspError> {

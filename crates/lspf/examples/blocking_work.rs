@@ -13,13 +13,13 @@ use lspf::types::{
     CompletionItem, CompletionOptions, CompletionParams, CompletionResponse, MessageType,
     ShowMessageParams,
 };
-use lspf::{CancellationToken, Context, LspError, Server};
+use lspf::{CancellationToken, LspError, Server, ServerContext};
 
 struct State;
 
 async fn completions(
     _: Arc<State>,
-    _: Context,
+    _: ServerContext,
     _: CompletionParams,
     _: CancellationToken,
 ) -> Result<Option<CompletionResponse>, LspError> {
@@ -36,7 +36,7 @@ async fn completions(
 
 async fn count_down(
     _: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     _: (),
     _: CancellationToken,
 ) -> Result<(), LspError> {

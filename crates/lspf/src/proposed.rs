@@ -3,7 +3,7 @@
 //!
 //! `lsp-types` 0.97.x ships only the stable protocol, so the proposed
 //! workspace refresh requests get their request markers and parameter types
-//! here. Everything in this module — and the matching `Client` helpers — is
+//! here. Everything in this module — and the matching `ClientHandle` helpers — is
 //! compiled out of default builds: enabling the feature only adds API, it
 //! never changes the stable Router catalog or the capabilities a server
 //! advertises.

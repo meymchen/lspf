@@ -7,7 +7,7 @@ wire type: `InitializeParams`, `ServerCapabilities`, `HoverOptions`,
 `lsp-types` directly. The `LanguageServer` trait's capability associated
 consts (ADR 0004) carry `lsp-types` types as-is
 (`const COMPLETION: Option<lsp_types::CompletionOptions> = None;`); the
-outgoing helpers on [[Context]] (ADR 0009) take and return `lsp-types`
+outgoing helpers on [[ServerContext]] (ADR 0009) take and return `lsp-types`
 structs.
 
 We considered building on Microsoft's `lsprotocol` crate (generated from

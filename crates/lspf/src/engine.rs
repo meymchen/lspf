@@ -50,9 +50,9 @@ use crate::builder::{
     ProtocolNotification, Registrations, Server,
 };
 use crate::capability::GeneratedCapabilities;
-use crate::client::{Client, OutboundQueue, OutboundRegistry};
+use crate::client::{ClientHandle, OutboundQueue, OutboundRegistry};
 use crate::codec::{decode_params, decode_value, encode_body};
-use crate::context::Context;
+use crate::context::ServerContext;
 use crate::documents::{DocumentMutationError, Documents};
 use crate::error::Error;
 use crate::failure::{ConnectionDirection, ConnectionFailureCategory, FailureReporter};
@@ -273,7 +273,7 @@ where
         connection_trace,
         failure_reporter.clone(),
     );
-    let client = Client::new(
+    let client = ClientHandle::new(
         out_tx.clone(),
         OutboundRegistry::default(),
         server.resource_policy.outbound_request_timeout,
@@ -742,7 +742,7 @@ fn gate_progress_cancel(registry: &ProgressRegistry, raw_params: &Bytes) -> Buil
 async fn send_loop<W: TransportWriter>(
     writer: W,
     out_rx: UnboundedReceiver<RawMessage>,
-    client: Client,
+    client: ClientHandle,
     close: CloseSignal,
 ) {
     let trace = ConnectionTrace::new();
@@ -760,7 +760,7 @@ async fn send_loop<W: TransportWriter>(
 async fn send_loop_with_trace<W: TransportWriter>(
     mut writer: W,
     mut out_rx: UnboundedReceiver<RawMessage>,
-    client: Client,
+    client: ClientHandle,
     close: CloseSignal,
     trace: ConnectionTrace,
     failure_reporter: FailureReporter,
@@ -815,7 +815,7 @@ async fn send_loop_with_trace<W: TransportWriter>(
 async fn send_outbound<W: TransportWriter>(
     writer: &mut W,
     message: RawMessage,
-    client: &Client,
+    client: &ClientHandle,
     trace: ConnectionTrace,
     failure_reporter: &FailureReporter,
 ) -> std::result::Result<(), TransportError> {
@@ -837,7 +837,7 @@ async fn send_outbound<W: TransportWriter>(
 
 fn abandon_outbound(
     out_rx: &mut UnboundedReceiver<RawMessage>,
-    client: &Client,
+    client: &ClientHandle,
     close: &CloseSignal,
 ) {
     out_rx.close();
@@ -898,7 +898,7 @@ struct ProtocolEngine<S, R> {
     handler_timeout: Duration,
     tasks: TaskGroup<R>,
     out_tx: OutboundQueue,
-    client: Client,
+    client: ClientHandle,
     /// Cancelled once by [`close`](Self::close). Every request-scoped token is
     /// a child of it, so closing the session cancels all outstanding user work
     /// even where the completion gate has already claimed its registry entry.
@@ -920,7 +920,7 @@ where
         server: Server<S>,
         runtime: R,
         out_tx: OutboundQueue,
-        client: Client,
+        client: ClientHandle,
         close: CloseSignal,
         send_task: TaskHandle,
         trace: ConnectionTrace,
@@ -1151,7 +1151,7 @@ where
                         if let Some(hook) = &self.on_shutdown {
                             let cancellation = cancellation
                                 .expect("shutdown is a cancellable non-initialize request");
-                            let ctx = Context::for_request(
+                            let ctx = ServerContext::for_request(
                                 reservation.id.clone(),
                                 span.clone(),
                                 self.client.clone(),
@@ -1223,7 +1223,7 @@ where
                     // outcome. It resolves to `()`, so it cannot change that
                     // outcome — the LSP exit code below derives from
                     // protocol-owned lifecycle state alone, and the hook
-                    // receives only the shared state and a live `Context`.
+                    // receives only the shared state and a live `ServerContext`.
                     let established = matches!(
                         self.lifecycle,
                         Lifecycle::Running(_) | Lifecycle::ShuttingDown
@@ -1238,7 +1238,7 @@ where
                     }
                     if established && let Some(hook) = self.on_exit.take() {
                         let span = self.trace.notification_span("exit");
-                        let ctx = Context::for_notification(
+                        let ctx = ServerContext::for_notification(
                             span,
                             self.client.clone(),
                             self.established_workspace(),
@@ -1279,7 +1279,7 @@ where
                 "initialized" => {
                     // The initialized hook runs at most once, and only after a
                     // successful initialize transaction: outside the running
-                    // state there is no Workspace for its Context, and the
+                    // state there is no Workspace for its ServerContext, and the
                     // notification is ignored without consuming the hook, so a
                     // later, valid `initialized` still runs it. The params are
                     // decoded before the hook is taken, so a malformed
@@ -1311,7 +1311,7 @@ where
                         return Flow::Continue;
                     };
                     let span = self.trace.notification_span("initialized");
-                    let ctx = Context::for_notification(
+                    let ctx = ServerContext::for_notification(
                         span,
                         self.client.clone(),
                         self.established_workspace(),
@@ -1448,8 +1448,11 @@ where
         params: serde_json::Value,
     ) {
         let span = self.trace.notification_span(method);
-        let ctx =
-            Context::for_notification(span, self.client.clone(), self.established_workspace());
+        let ctx = ServerContext::for_notification(
+            span,
+            self.client.clone(),
+            self.established_workspace(),
+        );
         let result = service
             .call(IncomingCall::notification(
                 method.to_string(),
@@ -1728,7 +1731,7 @@ where
         // register routes or replace the generated capabilities.
         let server_info = match on_initialize {
             Some(hook) => {
-                let ctx = Context::for_request(
+                let ctx = ServerContext::for_request(
                     reservation.id.clone(),
                     span.clone(),
                     self.client.clone(),
@@ -1812,7 +1815,7 @@ where
                 let trace_id = id.clone();
                 let trace_method = method.clone();
                 let cancellation_for_handler = cancellation.clone();
-                let ctx = Context::for_request(id.clone(), span, client, workspace)
+                let ctx = ServerContext::for_request(id.clone(), span, client, workspace)
                     .with_cancellation(cancellation_for_handler);
                 let handler_timeout = HandlerTimeout::new(
                     default_timeout,
@@ -1887,10 +1890,10 @@ where
     ///
     /// Every close cause runs exactly these steps, in this order, and a second
     /// call is a no-op: new outbound work is rejected, the session is
-    /// cancelled, every pending `Client` request is resolved, the inbound,
+    /// cancelled, every pending `ClientHandle` request is resolved, the inbound,
     /// outbound, and progress registries are emptied, every handler task is
     /// aborted and then joined, and the outbound queue is closed before the
-    /// writer task is joined. No task is detached and no pending `Client`
+    /// writer task is joined. No task is detached and no pending `ClientHandle`
     /// future is left unresolved.
     async fn close(&mut self) {
         if matches!(self.lifecycle, Lifecycle::Exited) {
@@ -1907,11 +1910,11 @@ where
         // The progress registry is connection state too: clearing it leaves no
         // stale tokens behind, so a handle that outlives the session observes
         // `ProgressError::UnknownToken` rather than a still-active token. Each
-        // connection owns its registry through its own `Client`, so clearing
+        // connection owns its registry through its own `ClientHandle`, so clearing
         // cannot touch another connection.
         self.client.progress_registry().clear();
         self.tasks.abort_and_join().await;
-        // A DocumentsView may outlive its Context when user code retains the
+        // A DocumentsView may outlive its ServerContext when user code retains the
         // cloneable handle. Empty the shared store explicitly so connection
         // shutdown releases every snapshot and its count/byte accounting even
         // while such a view remains alive.
@@ -2525,7 +2528,7 @@ mod tests {
     #[tokio::test]
     async fn requests_responses_and_notifications_share_one_depth_counter() {
         let (queue, _rx) = OutboundQueue::new(crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD);
-        let client = Client::new(queue.clone(), OutboundRegistry::default(), None);
+        let client = ClientHandle::new(queue.clone(), OutboundRegistry::default(), None);
 
         client
             .notify::<TestOutboundNotification>(serde_json::json!({}))
@@ -2561,7 +2564,7 @@ mod tests {
     #[tokio::test]
     async fn writer_failure_releases_attempted_and_abandoned_accounting() {
         let (queue, rx) = OutboundQueue::new(16);
-        let client = Client::new(queue.clone(), OutboundRegistry::default(), None);
+        let client = ClientHandle::new(queue.clone(), OutboundRegistry::default(), None);
         for tag in 0..3 {
             queue.send(send_loop_message(tag)).unwrap();
         }
@@ -2600,7 +2603,7 @@ mod tests {
     #[tokio::test]
     async fn draining_after_close_decrements_every_message_in_order() {
         let (queue, rx) = OutboundQueue::new(2);
-        let client = Client::new(queue.clone(), OutboundRegistry::default(), None);
+        let client = ClientHandle::new(queue.clone(), OutboundRegistry::default(), None);
         for tag in 0..3 {
             queue.send(send_loop_message(tag)).unwrap();
         }
@@ -2649,7 +2652,7 @@ mod tests {
     async fn a_slow_reader_cannot_grow_count_or_bytes_past_the_policy() {
         let message_bytes = encoded_len(&send_loop_message(0));
         let (queue, rx) = OutboundQueue::bounded(2, message_bytes * 2);
-        let client = Client::new(queue.clone(), OutboundRegistry::default(), None);
+        let client = ClientHandle::new(queue.clone(), OutboundRegistry::default(), None);
         queue.send(send_loop_message(0)).unwrap();
         queue.send(send_loop_message(1)).unwrap();
 

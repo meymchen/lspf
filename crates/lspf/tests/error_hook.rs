@@ -8,9 +8,9 @@ use lspf::types::notification::Notification;
 use lspf::types::request::Request;
 use lspf::{
     BuildError, CancellationToken, ConnectionFailure, ConnectionFailureCategory,
-    ConnectionRequestId, Context, IncomingCall, JsonRpcError, Layer, Next, RawMessage, RequestId,
-    ResourcePolicy, Server, ServiceFuture, Transport, TransportError, TransportReader,
-    TransportWriter,
+    ConnectionRequestId, IncomingCall, JsonRpcError, Layer, Next, RawMessage, RequestId,
+    ResourcePolicy, Server, ServerContext, ServiceFuture, Transport, TransportError,
+    TransportReader, TransportWriter,
 };
 
 enum Echo {}
@@ -249,7 +249,7 @@ async fn isolated_panics_report_stable_non_sensitive_context_once() {
     let failures = Arc::new(Mutex::new(Vec::<ConnectionFailure>::new()));
     let recorded = Arc::clone(&failures);
     let server = Server::builder(())
-        .request::<Echo, _, _>(|_, _: Context, _, _: CancellationToken| async move {
+        .request::<Echo, _, _>(|_, _: ServerContext, _, _: CancellationToken| async move {
             panic!("secret panic payload")
         })
         .notification::<Stop, _, _>(|_, _, ()| async {})
@@ -325,7 +325,7 @@ async fn malformed_correlated_response_reports_protocol_failure_once() {
     let failures = Arc::new(Mutex::new(Vec::<ConnectionFailure>::new()));
     let recorded = Arc::clone(&failures);
     let server = Server::builder(())
-        .request::<Echo, _, _>(|_, ctx: Context, value, _| async move {
+        .request::<Echo, _, _>(|_, ctx: ServerContext, value, _| async move {
             let result = ctx.client().request::<ClientQuery>(()).await;
             assert!(matches!(result, Err(lspf::ClientError::Deserialize(_))));
             Ok(value)

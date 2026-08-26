@@ -1,7 +1,7 @@
 //! Connection-scoped work-done progress lifecycle (issue #109).
 //!
 //! These tests drive the lifecycle over an in-memory transport: a handler
-//! calls `Client::begin_progress`, the test answers the
+//! calls `ClientHandle::begin_progress`, the test answers the
 //! `window/workDoneProgress/create` request, and the exact wire shape of the
 //! `$/progress` begin, report, and end notifications is observed. Registry
 //! internals and failure paths that need direct handle access are covered by
@@ -13,8 +13,8 @@ use std::sync::{Arc, Mutex};
 use bytes::Bytes;
 use lspf::types::request::Request;
 use lspf::{
-    Client, ClientError, Context, LspError, ProgressHandle, ProgressOptions, RawMessage, RequestId,
-    Server, Transport, TransportError, TransportReader, TransportWriter,
+    ClientError, ClientHandle, LspError, ProgressHandle, ProgressOptions, RawMessage, RequestId,
+    Server, ServerContext, Transport, TransportError, TransportReader, TransportWriter,
 };
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
@@ -57,7 +57,7 @@ impl TransportWriter for ChannelWriter {
 // --- Helpers -----------------------------------------------------------------
 
 struct Captured {
-    client: Mutex<Option<Client>>,
+    client: Mutex<Option<ClientHandle>>,
     handle: Mutex<Option<ProgressHandle>>,
 }
 
@@ -175,7 +175,7 @@ async fn progress_lifecycle_over_a_connection() {
 
     let server = Server::builder(())
         .request::<ProgressDemo, _, _>(
-            |_state: Arc<()>, ctx: Context, _params: Value, _ct| async move {
+            |_state: Arc<()>, ctx: ServerContext, _params: Value, _ct| async move {
                 let client = ctx.client();
 
                 let first = client
@@ -367,7 +367,7 @@ async fn progress_lifecycle_matches_the_wire_fixtures() {
 
     let server = Server::builder(())
         .request::<FixtureRun, _, _>(
-            |_state: Arc<()>, ctx: Context, _params: Value, _ct| async move {
+            |_state: Arc<()>, ctx: ServerContext, _params: Value, _ct| async move {
                 let handle = ctx
                     .client()
                     .begin_progress(
@@ -443,7 +443,7 @@ async fn create_remote_failure_sends_no_begin_over_a_connection() {
 
     let server = Server::builder(())
         .request::<BeginOnce, _, _>(
-            |_state: Arc<()>, ctx: Context, _params: Value, _ct| async move {
+            |_state: Arc<()>, ctx: ServerContext, _params: Value, _ct| async move {
                 let error = ctx
                     .client()
                     .begin_progress(ProgressOptions::new("Indexing"))
@@ -496,7 +496,7 @@ async fn create_remote_failure_sends_no_begin_over_a_connection() {
         .expect("serve ended cleanly");
 }
 
-/// After the connection closes, a still-held handle and `Client` fail fast:
+/// After the connection closes, a still-held handle and `ClientHandle` fail fast:
 /// no report, end, or new begin can be sent.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn connection_close_fails_every_further_progress_operation() {
@@ -511,7 +511,7 @@ async fn connection_close_fails_every_further_progress_operation() {
     let state = Arc::clone(&captured);
     let server = Server::builder(())
         .request::<CaptureProgress, _, _>(
-            move |_state: Arc<()>, ctx: Context, _params: Value, _ct| {
+            move |_state: Arc<()>, ctx: ServerContext, _params: Value, _ct| {
                 let state = Arc::clone(&state);
                 async move {
                     let client = ctx.client();

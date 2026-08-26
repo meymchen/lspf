@@ -11,8 +11,8 @@ use std::time::Duration;
 use bytes::Bytes;
 use lspf::types::request::Request;
 use lspf::{
-    ClientError, Context, RawMessage, RequestId, ResourcePolicy, Server, Transport, TransportError,
-    TransportReader, TransportWriter,
+    ClientError, RawMessage, RequestId, ResourcePolicy, Server, ServerContext, Transport,
+    TransportError, TransportReader, TransportWriter,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -145,7 +145,7 @@ async fn concurrent_client_requests_complete_in_reverse_order() {
 
     let server = Server::builder(())
         .request::<TriggerRequest, _, _>(
-            move |_state: Arc<()>, ctx: Context, _params: serde_json::Value, _ct| {
+            move |_state: Arc<()>, ctx: ServerContext, _params: serde_json::Value, _ct| {
                 let captured = Arc::clone(&captured);
                 async move {
                     let client = ctx.client();
@@ -255,7 +255,7 @@ async fn unknown_response_id_does_not_terminate_connection() {
 
     let server = Server::builder(())
         .request::<NoopRequest, _, _>(
-            |_state: Arc<()>, _ctx: Context, _params: serde_json::Value, _ct| async {
+            |_state: Arc<()>, _ctx: ServerContext, _params: serde_json::Value, _ct| async {
                 Ok(json!(null))
             },
         )
@@ -321,7 +321,7 @@ async fn remote_error_response_becomes_client_error_remote() {
     let captured = Arc::clone(&captured_err);
     let server = Server::builder(())
         .request::<TriggerErrRequest, _, _>(
-            move |_state: Arc<()>, ctx: Context, _params: serde_json::Value, _ct| {
+            move |_state: Arc<()>, ctx: ServerContext, _params: serde_json::Value, _ct| {
                 let captured = Arc::clone(&captured);
                 async move {
                     let err = ctx
@@ -421,7 +421,7 @@ async fn session_close_does_not_hang_with_pending_client_request() {
 
     let server = Server::builder(())
         .request::<TriggerCloseRequest, _, _>(
-            move |_state: Arc<()>, ctx: Context, _params: serde_json::Value, _ct| {
+            move |_state: Arc<()>, ctx: ServerContext, _params: serde_json::Value, _ct| {
                 let captured = Arc::clone(&captured);
                 async move {
                     let client = ctx.client();
@@ -511,7 +511,7 @@ async fn abandoned_client_request_sends_cancel_notification() {
 
     let server = Server::builder(())
         .request::<AbandonRequest, _, _>(
-            |_state: Arc<()>, ctx: Context, _params: serde_json::Value, _ct| {
+            |_state: Arc<()>, ctx: ServerContext, _params: serde_json::Value, _ct| {
                 async move {
                     let client = ctx.client();
                     // Enqueue a client request, then abandon it before any
@@ -594,7 +594,7 @@ async fn late_response_after_cleanup_cannot_complete_another_request() {
 
     let server = Server::builder(())
         .request::<StaleRequest, _, _>(
-            move |_state: Arc<()>, ctx: Context, _params: serde_json::Value, _ct| {
+            move |_state: Arc<()>, ctx: ServerContext, _params: serde_json::Value, _ct| {
                 let captured = Arc::clone(&captured_for_handler);
                 async move {
                     let client = ctx.client();
@@ -702,7 +702,7 @@ async fn expired_request_is_cancelled_and_cannot_capture_a_later_response() {
 
     let server = Server::builder(())
         .request::<TimeoutRequest, _, _>(
-            move |_state: Arc<()>, ctx: Context, _params: serde_json::Value, _ct| {
+            move |_state: Arc<()>, ctx: ServerContext, _params: serde_json::Value, _ct| {
                 let captured = Arc::clone(&captured_for_handler);
                 async move {
                     let client = ctx.client();
@@ -809,7 +809,7 @@ async fn explicitly_disabled_deadline_waits_for_the_peer_response() {
 
     let server = Server::builder(())
         .request::<DisabledTimeoutRequest, _, _>(
-            move |_state: Arc<()>, ctx: Context, _params: serde_json::Value, _ct| {
+            move |_state: Arc<()>, ctx: ServerContext, _params: serde_json::Value, _ct| {
                 let captured = Arc::clone(&captured_for_handler);
                 async move {
                     let result = ctx.client().request::<EchoRequest>(json!(null)).await;

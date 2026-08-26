@@ -5,7 +5,7 @@ mod example_support;
 use std::sync::Arc;
 
 use lspf::types::{Hover, HoverContents, HoverParams, MarkupContent, MarkupKind, Position, Range};
-use lspf::{CancellationToken, Context, LspError, Server};
+use lspf::{CancellationToken, LspError, Server, ServerContext};
 
 struct State;
 
@@ -127,7 +127,7 @@ fn markdown(value: &DateTime) -> String {
 
 async fn hover(
     _: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     params: HoverParams,
     _: CancellationToken,
 ) -> Result<Option<Hover>, LspError> {

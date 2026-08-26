@@ -3,7 +3,7 @@
 #![allow(dead_code)]
 
 use lspf::types::{Diagnostic, DiagnosticSeverity, Position, Range, Uri};
-use lspf::{Context, LspError, Server};
+use lspf::{LspError, Server, ServerContext};
 
 pub(crate) async fn serve<S: Send + Sync + 'static>(server: Server<S>) -> lspf::Result<()> {
     tracing_subscriber::fmt()
@@ -17,7 +17,7 @@ pub(crate) async fn serve<S: Send + Sync + 'static>(server: Server<S>) -> lspf::
     std::process::exit(outcome.code());
 }
 
-pub(crate) fn text(ctx: &Context, uri: &Uri) -> Result<String, LspError> {
+pub(crate) fn text(ctx: &ServerContext, uri: &Uri) -> Result<String, LspError> {
     ctx.documents()
         .get(uri)
         .map(|document| document.text())

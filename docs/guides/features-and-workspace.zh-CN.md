@@ -18,13 +18,13 @@ workspace 与文档由谁持有、Command 如何分发，以及如何通过 `Fil
 use std::sync::Arc;
 
 use lspf::types::{Hover, HoverParams};
-use lspf::{CancellationToken, Context, LspError, Server};
+use lspf::{CancellationToken, ServerContext, LspError, Server};
 
 struct State;
 
 async fn hover(
     _state: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     params: HoverParams,
     _ct: CancellationToken,
 ) -> Result<Option<Hover>, LspError> {
@@ -57,11 +57,11 @@ capability：
 ```rust
 # use std::sync::Arc;
 # use lspf::types::{CompletionOptions, CompletionParams, CompletionResponse};
-# use lspf::{CancellationToken, Context, LspError, Server};
+# use lspf::{CancellationToken, ServerContext, LspError, Server};
 # struct State;
 # async fn complete(
 #     _state: Arc<State>,
-#     _ctx: Context,
+#     _ctx: ServerContext,
 #     _params: CompletionParams,
 #     _ct: CancellationToken,
 # ) -> Result<Option<CompletionResponse>, LspError> {
@@ -88,16 +88,16 @@ let server = Server::builder(State)
 ```rust
 # use std::sync::Arc;
 # use lspf::types::{CompletionItem, CompletionOptions, CompletionParams, CompletionResponse};
-# use lspf::{CancellationToken, Context, LspError, Server};
+# use lspf::{CancellationToken, ServerContext, LspError, Server};
 # struct State;
 # async fn complete(
-#     _state: Arc<State>, _ctx: Context, _params: CompletionParams, _ct: CancellationToken,
+#     _state: Arc<State>, _ctx: ServerContext, _params: CompletionParams, _ct: CancellationToken,
 # ) -> Result<Option<CompletionResponse>, LspError> {
 #     Ok(None)
 # }
 async fn resolve(
     _state: Arc<State>,
-    _ctx: Context,
+    _ctx: ServerContext,
     item: CompletionItem,
     _ct: CancellationToken,
 ) -> Result<CompletionItem, LspError> {
@@ -137,10 +137,10 @@ let server = Server::builder(State)
 ```rust
 # use std::sync::Arc;
 # use lspf::types::CompletionItem;
-# use lspf::{CancellationToken, Context, LspError, Server};
+# use lspf::{CancellationToken, ServerContext, LspError, Server};
 # struct State;
 # async fn resolve(
-#     _state: Arc<State>, _ctx: Context, item: CompletionItem, _ct: CancellationToken,
+#     _state: Arc<State>, _ctx: ServerContext, item: CompletionItem, _ct: CancellationToken,
 # ) -> Result<CompletionItem, LspError> {
 #     Ok(item)
 # }
@@ -165,15 +165,15 @@ assert_eq!(error, lspf::BuildError::ConflictingCapability { field: "completionPr
 ```rust
 # use std::sync::Arc;
 # use lspf::types::{CompletionItem, CompletionParams, CompletionResponse};
-# use lspf::{CancellationToken, Context, LspError, Server};
+# use lspf::{CancellationToken, ServerContext, LspError, Server};
 # struct State;
 # async fn complete(
-#     _state: Arc<State>, _ctx: Context, _params: CompletionParams, _ct: CancellationToken,
+#     _state: Arc<State>, _ctx: ServerContext, _params: CompletionParams, _ct: CancellationToken,
 # ) -> Result<Option<CompletionResponse>, LspError> {
 #     Ok(None)
 # }
 # async fn resolve(
-#     _state: Arc<State>, _ctx: Context, item: CompletionItem, _ct: CancellationToken,
+#     _state: Arc<State>, _ctx: ServerContext, item: CompletionItem, _ct: CancellationToken,
 # ) -> Result<CompletionItem, LspError> {
 #     Ok(item)
 # }
@@ -201,7 +201,7 @@ let server = Server::builder(State)
 ## Workspace 与 Documents 的所有权
 
 连接的 [`Workspace`] 和 [`Documents`] 由框架持有，用户状态不持有其中任何一个。
-处理器通过 [`Context`] 参数访问二者：`ctx.workspace()` 与 `ctx.documents()`。后者
+处理器通过 [`ServerContext`] 参数访问二者：`ctx.workspace()` 与 `ctx.documents()`。后者
 返回只读 [`DocumentsView`]；只有协议引擎内置的文档同步处理器能够修改底层 store。
 
 `Workspace` 原样保存客户端声明，包括 client info、client capabilities、
@@ -211,11 +211,11 @@ initialization options、root URI，以及按声明顺序排列的 workspace fol
 
 ```rust
 # use std::sync::Arc;
-# use lspf::{CancellationToken, Context, LspError, Server};
+# use lspf::{CancellationToken, ServerContext, LspError, Server};
 # struct State;
 async fn roots(
     _state: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     _args: Vec<String>,
     _ct: CancellationToken,
 ) -> Result<Vec<(String, String)>, LspError> {
@@ -249,11 +249,11 @@ Command 是在 `workspace/executeCommand` 下按名称分发的带类型闭包�
 
 ```rust
 # use std::sync::Arc;
-# use lspf::{CancellationToken, Context, LspError, Server};
+# use lspf::{CancellationToken, ServerContext, LspError, Server};
 # struct State;
 async fn count_words(
     _state: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     args: Vec<String>,
     _ct: CancellationToken,
 ) -> Result<usize, LspError> {
@@ -332,7 +332,7 @@ scheme 时为 `UnsupportedScheme`，内容不是 UTF-8 时为 `InvalidEncoding`�
 [`Workspace`]: https://docs.rs/lspf/latest/lspf/struct.Workspace.html
 [`Documents`]: https://docs.rs/lspf/latest/lspf/struct.DocumentsView.html
 [`DocumentsView`]: https://docs.rs/lspf/latest/lspf/struct.DocumentsView.html
-[`Context`]: https://docs.rs/lspf/latest/lspf/struct.Context.html
+[`ServerContext`]: https://docs.rs/lspf/latest/lspf/struct.ServerContext.html
 [`FileProvider`]: https://docs.rs/lspf/latest/lspf/trait.FileProvider.html
 [`MemoryFileProvider`]: https://docs.rs/lspf/latest/lspf/struct.MemoryFileProvider.html
 [`WorkspaceError`]: https://docs.rs/lspf/latest/lspf/enum.WorkspaceError.html

@@ -1,6 +1,6 @@
 //! Typed server-to-client notifications from handlers (issue #45).
 //!
-//! These tests exercise the public `Server::serve` and `Context::client`
+//! These tests exercise the public `Server::serve` and `ServerContext::client`
 //! seams over an in-memory transport. Assertions observe wire messages rather
 //! than the engine's private outbound queue.
 
@@ -12,7 +12,7 @@ use bytes::Bytes;
 use lspf::types::notification::Notification;
 use lspf::types::request::Request;
 use lspf::{
-    Client, ClientError, Context, LspError, RawMessage, RequestId, Server, Transport,
+    ClientError, ClientHandle, LspError, RawMessage, RequestId, Server, ServerContext, Transport,
     TransportError, TransportReader, TransportWriter,
 };
 use serde::{Deserialize, Serialize};
@@ -49,12 +49,12 @@ impl Request for ContinueHandling {
 
 struct AppState {
     handled: Arc<AtomicUsize>,
-    client: Arc<Mutex<Option<Client>>>,
+    client: Arc<Mutex<Option<ClientHandle>>>,
 }
 
 async fn notify_and_return(
     state: Arc<AppState>,
-    ctx: Context,
+    ctx: ServerContext,
     value: String,
     _cancellation: lspf::CancellationToken,
 ) -> Result<String, LspError> {
@@ -73,7 +73,7 @@ async fn notify_and_return(
 
 async fn continue_handling(
     state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     value: String,
     _cancellation: lspf::CancellationToken,
 ) -> Result<String, LspError> {
@@ -173,7 +173,7 @@ async fn handler_emits_typed_notification_and_connection_handles_later_request()
 
     let notification = receive(&mut outgoing_rx).await;
     let RawMessage::Notification { method, params } = notification else {
-        panic!("typed Client notification is written before the handler response");
+        panic!("typed ClientHandle notification is written before the handler response");
     };
     assert_eq!(method, Status::METHOD);
     assert_eq!(
@@ -203,7 +203,7 @@ async fn handler_emits_typed_notification_and_connection_handles_later_request()
         .lock()
         .unwrap()
         .take()
-        .expect("handler captured its connection Client");
+        .expect("handler captured its connection ClientHandle");
     for value in ["after-close-1", "after-close-2"] {
         assert!(matches!(
             client.notify::<Status>(StatusParams {

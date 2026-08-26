@@ -13,14 +13,14 @@ use lspf::types::{
     CompletionItem, CompletionParams, CompletionResponse, ConfigurationItem, ConfigurationParams,
     Registration, RegistrationParams, Unregistration, UnregistrationParams,
 };
-use lspf::{CancellationToken, Context, LspError, ProgressOptions, Server};
+use lspf::{CancellationToken, LspError, ProgressOptions, Server, ServerContext};
 use serde_json::{Value, json};
 
 struct State;
 
 async fn completions(
     _: Arc<State>,
-    _: Context,
+    _: ServerContext,
     _: CompletionParams,
     _: CancellationToken,
 ) -> Result<Option<CompletionResponse>, LspError> {
@@ -38,7 +38,7 @@ async fn completions(
 
 async fn progress(
     _: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     _: (),
     _: CancellationToken,
 ) -> Result<(), LspError> {
@@ -60,7 +60,7 @@ async fn progress(
 
 async fn configuration(
     _: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     _: (),
     _: CancellationToken,
 ) -> Result<Value, LspError> {
@@ -79,7 +79,7 @@ async fn configuration(
 
 async fn register_completions(
     _: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     _: (),
     _: CancellationToken,
 ) -> Result<(), LspError> {
@@ -97,7 +97,7 @@ async fn register_completions(
 
 async fn unregister_completions(
     _: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     _: (),
     _: CancellationToken,
 ) -> Result<(), LspError> {

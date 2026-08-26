@@ -254,9 +254,9 @@ impl Default for DocumentsInner {
 /// crate-private on purpose — user code never constructs a store, never holds
 /// one in its state, and never mutates one. Mutations happen only through the
 /// engine's built-in doc-sync handling (`open`, `apply_changes`, `close`), and
-/// handlers read through the [`DocumentsView`] the [`Context`] hands them.
+/// handlers read through the [`DocumentsView`] the [`ServerContext`] hands them.
 ///
-/// [`Context`]: crate::Context
+/// [`ServerContext`]: crate::ServerContext
 #[derive(Debug, Clone)]
 pub(crate) struct Documents {
     inner: Arc<RwLock<DocumentsInner>>,
@@ -522,7 +522,7 @@ impl Documents {
 }
 
 /// The read-only view of the connection's documents that
-/// [`Context::documents`](crate::Context::documents) hands to user code
+/// [`ServerContext::documents`](crate::ServerContext::documents) hands to user code
 /// (ADR 0018).
 ///
 /// It carries the retained [`Document`] lookup and the position-conversion

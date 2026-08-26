@@ -15,15 +15,15 @@ use lspf::types::{
     WorkspaceDiagnosticReportResult,
 };
 use lspf::{
-    BuildError, CancellationToken, Context, LspError, RawMessage, RequestId, Server, Transport,
-    TransportError, TransportReader, TransportWriter,
+    BuildError, CancellationToken, LspError, RawMessage, RequestId, Server, ServerContext,
+    Transport, TransportError, TransportReader, TransportWriter,
 };
 
 struct AppState;
 
 async fn document_diagnostic(
     _state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     params: DocumentDiagnosticParams,
     _ct: CancellationToken,
 ) -> Result<DocumentDiagnosticReportResult, LspError> {
@@ -41,7 +41,7 @@ async fn document_diagnostic(
 
 async fn workspace_diagnostic(
     _state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     params: WorkspaceDiagnosticParams,
     _ct: CancellationToken,
 ) -> Result<WorkspaceDiagnosticReportResult, LspError> {
