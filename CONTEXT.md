@@ -42,6 +42,10 @@ registrations and served through a [[Transport]] constructor such as
 connection state is never shared between servers. Defined by ADR 0017.
 _Avoid_: Session, backend, dispatcher (the pre-0.2 concept).
 
+**Protocol session**:
+The private connection core shared by Server and Client endpoints for correlation, bounded admission and queues, deadlines, task ownership, writer coordination, and idempotent close. Endpoint lifecycle, registration, and domain-state policy remain outside it.
+_Avoid_: Endpoint, engine (those own direction-specific policy).
+
 **Resource policy**:
 The single connection-owned value that declares finite budgets for admitted
 inbound requests, queued outbound messages and bytes, tracked Documents and
@@ -53,7 +57,7 @@ entering those structures; a duplicate ID remains `InvalidRequest` and never
 replaces the admitted request. Completion, peer cancellation, and connection
 close release registry ownership immediately; the admission permit remains
 attached to admitted handler tasks until completion or abort and is released
-when the engine reaps the finished task handle.
+when the [[Protocol session]] reaps the finished task handle.
 Outbound admission charges one message and its exact encoded JSON-RPC envelope
 bytes until the transport attempt finishes. Ordinary `ClientHandle` sends fail with
 `ClientError::OutboundOverloaded` when either budget is full. Required
@@ -70,7 +74,7 @@ The permanently frozen table (`Router<S>`) of user request, notification,
 and [[Command]] handlers for one connection, plus the capability catalog
 those registrations imply (ADR 0017). Registrations commit through the
 static builder and the single `configure_initialize` transaction; the
-protocol engine then freezes the Router forever and computes
+Server protocol engine then freezes the Router forever and computes
 `ServerCapabilities` from it. No API mutates a frozen Router.
 _Avoid_: Dispatch table, route table (descriptive, but not the type name).
 
@@ -86,7 +90,7 @@ term).
 The framework-owned, concurrency-safe store of all tracked [[Document]]s
 for a connection — users never construct it, store it in their state
 struct, or hand it back through a getter. Mutations happen only through
-the protocol engine's built-in document-sync handlers; user code reads it
+the Server protocol engine's built-in document-sync handlers; user code reads it
 through a read-only `DocumentsView` from the [[ServerContext]] parameter
 (`ctx.documents()`), and post-mutation hooks observe the updated state.
 Identity is one normalized URI key (ADR 0021): equivalent spellings —
@@ -97,7 +101,7 @@ _Avoid_: Document store (correct but verbose).
 
 **Workspace**:
 The cloneable handle to the connection's workspace state, exposed
-through [[ServerContext]] (ADR 0017). The protocol engine establishes it from
+through [[ServerContext]] (ADR 0017). The Server protocol engine establishes it from
 `InitializeParams` during initialization — client info, capabilities,
 initialization options, root URI, and workspace folders, all verbatim
 and order-preserving (ADR 0021) — and owns its later mutation
@@ -182,7 +186,7 @@ ignored; a registered notification hook runs after a successful decode and
 observes the updated cancellation state. Session close clears the registry,
 so a handle that outlives the connection observes an unknown token.
 `ClientHandle` is only a handle — the outbound queue, ID allocator, and pending
-registry are owned by the connection's protocol engine and covered by the
+registry are owned by the connection's [[Protocol session]] and covered by the
 connection's [[Resource policy]]. `ClientHandle` itself neither owns nor configures
 those resources. An ordinary send that would exceed the policy returns
 `ClientError::OutboundOverloaded` without retaining the message or leaking a
@@ -223,7 +227,7 @@ _Avoid_: Connection (overloaded with TCP-specific meaning), socket
 **Outcome**:
 How one connection ended, returned by `Server::serve` over a [[Transport]]
 (ADR 0018). Reader EOF, a writer failure, `exit`, and a fatal initialize
-failure all converge on the protocol engine's single close operation; the
+failure all converge on the [[Protocol session]]'s single close operation; the
 first ordinary cause to arrive becomes the reported `Outcome`. Required
 outbound admission failure is the exception: if it occurs before close
 quiesces, the result is `WriterFailed` even when another cause arrived first
@@ -240,8 +244,9 @@ cancels tasks (ADR 0020). Exactly two implementations exist —
 `TokioRuntime` on native targets and `WasmRuntime` on browser or Node Worker
 WASM —
 selected by compile target, with no runtime-selection API. `Runtime`
-executes spawn, abort, join, cooperative yield, and deadline sleep but owns no
-protocol state; it is not implementable or nameable by users.
+executes spawn, abort, join, cooperative yield, and deadline sleep at the
+[[Protocol session]]'s request but owns no protocol state; it is not
+implementable or nameable by users.
 _Avoid_: Executor, reactor (those are what `Runtime` delegates to).
 
 **Layer**:
