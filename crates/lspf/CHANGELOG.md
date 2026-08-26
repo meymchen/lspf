@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1](https://github.com/meymchen/lspf/compare/v0.9.0...v0.9.1) - 2026-08-26
+
+### Other
+
+- Complete typed Client exchange over custom Transport ([#218](https://github.com/meymchen/lspf/pull/218))
+- Extract the shared private protocol session ([#217](https://github.com/meymchen/lspf/pull/217))
+
 ### Changed
 
 - [**breaking**] Rename the handler context to `ServerContext` and the
