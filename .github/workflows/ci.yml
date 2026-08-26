@@ -257,13 +257,13 @@ jobs:
           bash ci/run-gate-b-evidence.sh
           "$GITHUB_SHA"
           "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-          target/gate-b-evidence
+          "$RUNNER_TEMP/gate-b-evidence"
       - name: Retain Gate B bounded-resource evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: gate-b-bounded-resource-evidence
-          path: target/gate-b-evidence
+          path: ${{ runner.temp }}/gate-b-evidence
           if-no-files-found: error
           retention-days: 90
 

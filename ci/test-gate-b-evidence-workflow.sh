@@ -34,13 +34,14 @@ jq -e '
     .name == "Run revision-locked Gate B evidence"
     and (.run | contains("bash ci/run-gate-b-evidence.sh"))
     and (.run | contains("$GITHUB_SHA"))
-    and (.run | contains("$GITHUB_RUN_ID")))
+    and (.run | contains("$GITHUB_RUN_ID"))
+    and (.run | contains("$RUNNER_TEMP/gate-b-evidence")))
   and any(.steps[];
     .name == "Retain Gate B bounded-resource evidence"
     and .if == "${{ always() }}"
     and ((.uses // "") | startswith("actions/upload-artifact@"))
     and .with.name == "gate-b-bounded-resource-evidence"
-    and .with.path == "target/gate-b-evidence"
+    and .with.path == "${{ runner.temp }}/gate-b-evidence"
     and .with["if-no-files-found"] == "error")
 ' <<<"$job" >/dev/null
 
