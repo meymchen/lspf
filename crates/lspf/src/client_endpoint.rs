@@ -50,9 +50,10 @@ type ConnectionFuture = Pin<Box<dyn TaskFuture<Result<Outcome>>>>;
 
 /// An LSP client endpoint configured for one connection.
 ///
-/// Construct it with [`Client::builder`], then call [`Client::connect`] with
-/// any caller-provided [`Transport`].
-pub struct Client {
+/// Construct it with [`Client::builder`], supplying the caller-provided
+/// [`Transport`] to [`ClientBuilder::build`].
+pub struct Client<T = ()> {
+    transport: T,
     capabilities: ClientCapabilities,
     client_info: Option<ClientInfo>,
     initialization_options: Option<Value>,
@@ -60,27 +61,26 @@ pub struct Client {
     resource_policy: ResourcePolicy,
 }
 
-impl Client {
+impl Client<()> {
     /// Begin configuring a client with the capabilities sent in `initialize`.
     pub fn builder(capabilities: ClientCapabilities) -> ClientBuilder {
         ClientBuilder::new(capabilities)
     }
+}
 
-    /// Initialize this client over a caller-provided Transport.
+impl<T: Transport> Client<T> {
+    /// Initialize this client over its caller-provided Transport.
     ///
     /// The returned connection has completed the `initialize` request and has
     /// enqueued the required `initialized` notification. Drive it with
     /// [`ClientConnection::serve`] while using its [`ServerHandle`] for typed
     /// client-to-server calls.
-    pub async fn connect<T>(self, transport: T) -> Result<ClientConnection>
-    where
-        T: Transport,
-    {
+    pub async fn connect(self) -> Result<ClientConnection> {
         ensure_runtime_available()?;
         let trace = ConnectionTrace::new();
         let failure_reporter = FailureReporter::new(None, trace.id());
         let span = trace.span();
-        let (mut reader, writer) = transport.split();
+        let (mut reader, writer) = self.transport.split();
         let (protocol, peer) = ProtocolSession::start(
             default_runtime(),
             self.resource_policy,
@@ -197,8 +197,12 @@ impl ClientBuilder {
         self
     }
 
-    /// Validate the configuration and build a client without performing I/O.
-    pub fn build(mut self) -> std::result::Result<Client, BuildError> {
+    /// Validate the configuration and build a client over `transport` without
+    /// performing I/O.
+    pub fn build<T: Transport>(
+        mut self,
+        transport: T,
+    ) -> std::result::Result<Client<T>, BuildError> {
         if let Err(error) = self.resource_policy.validate() {
             self.record(error);
         }
@@ -206,6 +210,7 @@ impl ClientBuilder {
             return Err(error);
         }
         Ok(Client {
+            transport,
             capabilities: self.capabilities,
             client_info: self.client_info,
             initialization_options: self.initialization_options,

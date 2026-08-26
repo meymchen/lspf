@@ -8,8 +8,8 @@ use lspf::types::notification::Notification;
 use lspf::types::request::Request;
 use lspf::types::{ClientCapabilities, ClientInfo, InitializeResult, ServerCapabilities};
 use lspf::{
-    Client, ClientError, Outcome, RawMessage, RequestId, ResourcePolicy, Transport, TransportError,
-    TransportReader, TransportWriter,
+    Client, ClientConnection, ClientError, Outcome, RawMessage, RequestId, ResourcePolicy,
+    Transport, TransportError, TransportReader, TransportWriter,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -95,6 +95,35 @@ async fn recv(outgoing: &mut mpsc::UnboundedReceiver<RawMessage>) -> RawMessage 
         .expect("outgoing channel remains open")
 }
 
+async fn initialize_client(
+    client: Client<ChannelTransport>,
+    incoming: &mpsc::UnboundedSender<RawMessage>,
+    outgoing: &mut mpsc::UnboundedReceiver<RawMessage>,
+    inspect_params: impl FnOnce(&Bytes),
+) -> ClientConnection {
+    let connecting = tokio::spawn(client.connect());
+    let initialize = recv(outgoing).await;
+    let (id, params) = match initialize {
+        RawMessage::Request {
+            id,
+            method: Cow::Borrowed("initialize"),
+            params,
+        } => (id, params),
+        other => panic!("expected initialize request, got {other:?}"),
+    };
+    inspect_params(&params);
+    incoming
+        .send(response(
+            id,
+            InitializeResult {
+                capabilities: ServerCapabilities::default(),
+                server_info: None,
+            },
+        ))
+        .unwrap();
+    connecting.await.unwrap().expect("client initializes")
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn client_initializes_and_completes_one_typed_exchange_each_way() {
     let capabilities = ClientCapabilities {
@@ -106,6 +135,8 @@ async fn client_initializes_and_completes_one_typed_exchange_each_way() {
         version: Some("1.2.3".into()),
     };
     let initialization_options = json!({ "profile": "integration" });
+    let (incoming_tx, incoming_rx) = mpsc::unbounded_channel();
+    let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel();
 
     let client = Client::builder(capabilities.clone())
         .client_info(client_info.clone())
@@ -116,47 +147,25 @@ async fn client_initializes_and_completes_one_typed_exchange_each_way() {
                 text: format!("client: {}", params.text),
             })
         })
-        .build()
+        .build(ChannelTransport {
+            incoming: incoming_rx,
+            outgoing: outgoing_tx,
+        })
         .expect("client builds");
 
-    let (incoming_tx, incoming_rx) = mpsc::unbounded_channel();
-    let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel();
-    let connecting = tokio::spawn(client.connect(ChannelTransport {
-        incoming: incoming_rx,
-        outgoing: outgoing_tx,
-    }));
-
-    let initialize = recv(&mut outgoing_rx).await;
-    let (initialize_id, params) = match initialize {
-        RawMessage::Request {
-            id,
-            method: Cow::Borrowed("initialize"),
-            params,
-        } => (id, params),
-        other => panic!("expected initialize request, got {other:?}"),
-    };
-    let params: Value = serde_json::from_slice(&params).unwrap();
-    assert_eq!(
-        params["capabilities"],
-        serde_json::to_value(capabilities).unwrap()
-    );
-    assert_eq!(
-        params["clientInfo"],
-        serde_json::to_value(client_info).unwrap()
-    );
-    assert_eq!(params["initializationOptions"], initialization_options);
-
-    incoming_tx
-        .send(response(
-            initialize_id,
-            InitializeResult {
-                capabilities: ServerCapabilities::default(),
-                server_info: None,
-            },
-        ))
-        .unwrap();
-
-    let connection = connecting.await.unwrap().expect("client initializes");
+    let connection = initialize_client(client, &incoming_tx, &mut outgoing_rx, |params| {
+        let params: Value = serde_json::from_slice(params).unwrap();
+        assert_eq!(
+            params["capabilities"],
+            serde_json::to_value(capabilities).unwrap()
+        );
+        assert_eq!(
+            params["clientInfo"],
+            serde_json::to_value(client_info).unwrap()
+        );
+        assert_eq!(params["initializationOptions"], initialization_options);
+    })
+    .await;
     let server = connection.server();
     let serving = tokio::spawn(connection.serve());
 
@@ -240,30 +249,15 @@ async fn client_initializes_and_completes_one_typed_exchange_each_way() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn client_uses_shared_correlation_and_close_for_outbound_requests() {
-    let client = Client::builder(ClientCapabilities::default())
-        .build()
-        .expect("client builds");
     let (incoming_tx, incoming_rx) = mpsc::unbounded_channel();
     let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel();
-    let connecting = tokio::spawn(client.connect(ChannelTransport {
-        incoming: incoming_rx,
-        outgoing: outgoing_tx,
-    }));
-    let initialize_id = recv(&mut outgoing_rx)
-        .await
-        .id()
-        .expect("initialize request ID")
-        .clone();
-    incoming_tx
-        .send(response(
-            initialize_id,
-            InitializeResult {
-                capabilities: ServerCapabilities::default(),
-                server_info: None,
-            },
-        ))
-        .unwrap();
-    let connection = connecting.await.unwrap().unwrap();
+    let client = Client::builder(ClientCapabilities::default())
+        .build(ChannelTransport {
+            incoming: incoming_rx,
+            outgoing: outgoing_tx,
+        })
+        .expect("client builds");
+    let connection = initialize_client(client, &incoming_tx, &mut outgoing_rx, |_| {}).await;
     let server = connection.server();
     let serving = tokio::spawn(connection.serve());
     let _initialized = recv(&mut outgoing_rx).await;
@@ -341,6 +335,8 @@ async fn client_uses_shared_correlation_and_close_for_outbound_requests() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn client_uses_shared_admission_and_cancellation_for_reverse_requests() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let (incoming_tx, incoming_rx) = mpsc::unbounded_channel();
+    let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel();
     let client = Client::builder(ClientCapabilities::default())
         .resource_policy(ResourcePolicy {
             max_inbound_requests: 1,
@@ -354,29 +350,12 @@ async fn client_uses_shared_admission_and_cancellation_for_reverse_requests() {
                 Err(lspf::LspError::RequestCancelled)
             }
         })
-        .build()
+        .build(ChannelTransport {
+            incoming: incoming_rx,
+            outgoing: outgoing_tx,
+        })
         .expect("client builds");
-    let (incoming_tx, incoming_rx) = mpsc::unbounded_channel();
-    let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel();
-    let connecting = tokio::spawn(client.connect(ChannelTransport {
-        incoming: incoming_rx,
-        outgoing: outgoing_tx,
-    }));
-    let initialize_id = recv(&mut outgoing_rx)
-        .await
-        .id()
-        .expect("initialize request ID")
-        .clone();
-    incoming_tx
-        .send(response(
-            initialize_id,
-            InitializeResult {
-                capabilities: ServerCapabilities::default(),
-                server_info: None,
-            },
-        ))
-        .unwrap();
-    let connection = connecting.await.unwrap().unwrap();
+    let connection = initialize_client(client, &incoming_tx, &mut outgoing_rx, |_| {}).await;
     let serving = tokio::spawn(connection.serve());
     let _initialized = recv(&mut outgoing_rx).await;
 

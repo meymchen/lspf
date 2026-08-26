@@ -44,8 +44,8 @@ _Avoid_: Session, backend, dispatcher (the pre-0.2 concept).
 
 **Client**:
 The object (`Client`) that owns one outbound LSP connection's initialization
-inputs and reverse-request registrations. `Client::connect` establishes it over
-a caller-provided [[Transport]] and returns one [[ClientConnection]].
+inputs, reverse-request registrations, and caller-provided [[Transport]].
+`Client::connect` establishes it and returns one [[ClientConnection]].
 _Avoid_: Editor (the caller owns editor policy), connection (the connected state
 is `ClientConnection`).
 
