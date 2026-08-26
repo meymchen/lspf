@@ -18,6 +18,10 @@ pub enum Error {
     #[error(transparent)]
     Transport(#[from] TransportError),
 
+    /// A typed client-endpoint operation failed while establishing a connection.
+    #[error(transparent)]
+    Client(#[from] ClientError),
+
     /// Native serving was attempted without a running Tokio runtime. The
     /// framework never starts a runtime implicitly (ADR 0020): start one —
     /// for example with `#[tokio::main]` — before serving the connection.
