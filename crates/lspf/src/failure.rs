@@ -83,7 +83,7 @@ pub struct ConnectionFailure {
     pub context: ConnectionFailureContext,
 }
 
-pub(crate) type ErrorHook = Arc<dyn SharedHandler<(ConnectionFailure,), ()>>;
+pub(crate) type ErrorHook = Arc<dyn SharedHandler<(ConnectionFailure,), ()> + Send + Sync>;
 
 #[derive(Clone)]
 pub(crate) struct FailureReporter {

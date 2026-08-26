@@ -99,15 +99,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.feature-matrix.outputs.matrix) }}
-    # `rust-toolchain.toml` selects stable for development; RUSTUP_TOOLCHAIN
-    # outranks it so this job really checks the MSRV (1.96), not stable.
+    # Keep the explicit override aligned with `rust-toolchain.toml` and the
+    # workspace `rust-version`, so the MSRV matrix cannot drift independently.
     env:
-      RUSTUP_TOOLCHAIN: "1.96.0"
+      RUSTUP_TOOLCHAIN: "1.98.0"
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: ./.github/actions/setup-rust
         with:
-          toolchain: 1.96.0
+          toolchain: 1.98.0
       - run: cargo check -p lspf --locked ${{ matrix.cargo_args }}
         env:
           RUSTFLAGS: ${{ matrix.msrv_rustflags }}
@@ -120,12 +120,12 @@ jobs:
     permissions:
       contents: read
     env:
-      RUSTUP_TOOLCHAIN: "1.96.0"
+      RUSTUP_TOOLCHAIN: "1.98.0"
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: ./.github/actions/setup-rust
         with:
-          toolchain: 1.96.0
+          toolchain: 1.98.0
           targets: wasm32-unknown-unknown
       - run: bash ci/check-feature-contract.sh
 
@@ -214,7 +214,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: ./.github/actions/setup-rust
         with:
-          toolchain: 1.97.1
+          toolchain: 1.98.0
           components: llvm-tools-preview
       - run: cargo install cargo-llvm-cov --version 0.6.21 --locked
       - name: Test the test-coverage gate behavior

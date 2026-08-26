@@ -134,7 +134,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ```
 
-该 crate 要求 Rust 1.96 或更高版本。快速开始使用默认启用的 `stdio` feature；
+该 crate 要求 Rust 1.98 或更高版本。快速开始使用默认启用的 `stdio` feature；
 如需其他传输，请选择对应的 feature 组合。
 
 应用代码直接引用的 crate 都应列为直接依赖。上例中的 `tokio`、`tracing` 和

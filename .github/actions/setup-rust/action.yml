@@ -4,7 +4,7 @@ description: Install the requested Rust toolchain and optionally restore the Car
 inputs:
   toolchain:
     description: Rust toolchain name or version.
-    default: stable
+    default: 1.98.0
   components:
     description: Comma-separated Rust components to install.
     default: ""

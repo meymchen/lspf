@@ -16,14 +16,15 @@ Cargo feature 组合，以及兼容性、弃用和安全报告规则。
 
 ## Rust 版本
 
-最低支持 Rust 版本（MSRV）是 **1.96.0**。受支持的编译器范围从 Rust 1.96.0 到
+最低支持 Rust 版本（MSRV）是 **1.98.0**。受支持的编译器范围从 Rust 1.98.0 到
 最新 stable Rust 版本。nightly 与 beta toolchain 可用于提前发现问题，但不属于
 受支持的 toolchain。
 
-workspace 的 `rust-version` 字段是唯一准则。CI `feature-contract` 使用 Rust 1.96.0
-为 Linux host 与 `wasm32-unknown-unknown` 编译文档中的每个 feature 组合。CI `msrv`
-使用同一编译器检查面向发布的原生矩阵，并使用默认 feature 检查整个 workspace。CI
-`native-matrix`、`test` 与 `wasm` 等其他 Rust job 使用 stable。
+workspace 的 `rust-version` 字段是唯一准则。开发环境与所有 Rust CI job 都通过
+`rust-toolchain.toml` 和共享 setup action 固定使用 Rust 1.98.0。CI
+`feature-contract` 会为 Linux host 与 `wasm32-unknown-unknown` 编译文档中的每个
+feature 组合。CI `msrv` 使用同一编译器检查面向发布的原生矩阵，并使用默认 feature
+检查整个 workspace。
 
 提高 MSRV 属于破坏性变更。1.0 之前，只能在新的 minor 版本中提高；1.0 之后，必须
 发布新的 major 版本。release notes 必须写明新旧 MSRV。patch 版本不得提高 MSRV。

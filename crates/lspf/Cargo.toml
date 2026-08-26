@@ -158,6 +158,10 @@ required-features = ["stdio"]
 # runtime requirement in the manifest gives Cargo one authoritative gate.
 
 [[test]]
+name = "error_hook"
+required-features = ["runtime-tokio"]
+
+[[test]]
 name = "catalog"
 required-features = ["runtime-tokio"]
 

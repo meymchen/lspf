@@ -1034,10 +1034,16 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
     /// The hook receives stable failure categories and non-sensitive identity
     /// only. It runs outside the user Layer chain, and any panic from the hook
     /// is isolated so it cannot change protocol responses or connection
-    /// cleanup. Registering it more than once is reported by [`build`](Self::build).
+    /// cleanup. The hook must be `Send + Sync` on every target because its
+    /// reporter is shared by connection handles. Registering it more than once
+    /// is reported by [`build`](Self::build).
     pub fn on_error<H>(mut self, hook: H) -> Self
     where
-        H: Fn(crate::ConnectionFailure) + SharedHandler<(crate::ConnectionFailure,), ()> + 'static,
+        H: Fn(crate::ConnectionFailure)
+            + SharedHandler<(crate::ConnectionFailure,), ()>
+            + Send
+            + Sync
+            + 'static,
     {
         if self.error_hook.is_some() {
             self.record(BuildError::DuplicateErrorHook);

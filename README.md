@@ -143,7 +143,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ```
 
-The crate requires Rust 1.96 or newer. The quickstart uses the default `stdio`
+The crate requires Rust 1.98 or newer. The quickstart uses the default `stdio`
 feature; select a different feature set for another Transport.
 
 List every crate your application names directly. In this example, `tokio`,
