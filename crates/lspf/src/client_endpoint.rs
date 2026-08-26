@@ -11,17 +11,19 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use lsp_types::error_codes::SERVER_CANCELLED;
-use lsp_types::notification::{Exit, Initialized, Notification};
-use lsp_types::request::{Initialize, Request, Shutdown};
+use lsp_types::notification::{Exit, Initialized, Notification, Progress};
+use lsp_types::request::{Initialize, Request, Shutdown, WorkDoneProgressCreate};
 use lsp_types::{
-    ClientCapabilities, ClientInfo, InitializeParams, InitializedParams, WorkDoneProgressParams,
+    ClientCapabilities, ClientInfo, InitializeParams, InitializedParams, ProgressParams,
+    WorkDoneProgressCreateParams, WorkDoneProgressParams,
 };
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, debug};
+use tracing::{Instrument, Span, debug};
 
 use crate::builder::SharedHandler;
 use crate::client::ClientHandle;
+use crate::client_progress::{ClientProgressRegistry, CreateOutcome};
 use crate::codec::{decode_value, encode_body, erase_value};
 use crate::error::{BuildError, LspError};
 use crate::failure::FailureReporter;
@@ -38,12 +40,21 @@ use crate::transport::{Transport, TransportError, TransportReader};
 use crate::{ClientError, Error, Outcome, Result};
 
 type ReverseFuture = Pin<Box<dyn TaskFuture<std::result::Result<Value, LspError>>>>;
+type ReverseNotificationFuture = Pin<Box<dyn TaskFuture<std::result::Result<(), LspError>>>>;
 
 #[cfg(not(target_arch = "wasm32"))]
-type ReverseHandler = Arc<dyn Fn(Value, CancellationToken) -> ReverseFuture + Send + Sync>;
+type ReverseHandler =
+    Arc<dyn Fn(ClientContext, Value, CancellationToken) -> ReverseFuture + Send + Sync>;
+
+#[cfg(not(target_arch = "wasm32"))]
+type ReverseNotificationHandler =
+    Arc<dyn Fn(ClientContext, Value) -> ReverseNotificationFuture + Send + Sync>;
 
 #[cfg(target_arch = "wasm32")]
-type ReverseHandler = Arc<dyn Fn(Value, CancellationToken) -> ReverseFuture>;
+type ReverseHandler = Arc<dyn Fn(ClientContext, Value, CancellationToken) -> ReverseFuture>;
+
+#[cfg(target_arch = "wasm32")]
+type ReverseNotificationHandler = Arc<dyn Fn(ClientContext, Value) -> ReverseNotificationFuture>;
 
 type ConnectionFuture = Pin<Box<dyn TaskFuture<Result<Outcome>>>>;
 
@@ -56,7 +67,8 @@ pub struct Client<T = ()> {
     capabilities: ClientCapabilities,
     client_info: Option<ClientInfo>,
     initialization_options: Option<Value>,
-    handlers: HashMap<&'static str, ReverseHandler>,
+    request_handlers: HashMap<&'static str, ReverseHandler>,
+    notification_handlers: HashMap<&'static str, ReverseNotificationHandler>,
     resource_policy: ResourcePolicy,
 }
 
@@ -94,12 +106,16 @@ impl<T: Transport> Client<T> {
             phase: Mutex::new(ClientPhase::Initializing),
             protocol: protocol.control(),
         });
+        let progress = ClientProgressRegistry::default();
         let server = ServerHandle {
             inner: peer.clone(),
             lifecycle: Arc::clone(&lifecycle),
+            progress: progress.clone(),
         };
         let mut engine = ClientEngine {
-            handlers: self.handlers,
+            request_handlers: self.request_handlers,
+            notification_handlers: self.notification_handlers,
+            progress,
             protocol,
             peer,
             trace,
@@ -145,7 +161,8 @@ pub struct ClientBuilder {
     capabilities: ClientCapabilities,
     client_info: Option<ClientInfo>,
     initialization_options: Option<Value>,
-    handlers: HashMap<&'static str, ReverseHandler>,
+    request_handlers: HashMap<&'static str, ReverseHandler>,
+    notification_handlers: HashMap<&'static str, ReverseNotificationHandler>,
     resource_policy: ResourcePolicy,
     error: Option<BuildError>,
 }
@@ -156,7 +173,8 @@ impl ClientBuilder {
             capabilities,
             client_info: None,
             initialization_options: None,
-            handlers: HashMap::new(),
+            request_handlers: HashMap::new(),
+            notification_handlers: HashMap::new(),
             resource_policy: ResourcePolicy::default(),
             error: None,
         }
@@ -181,11 +199,16 @@ impl ClientBuilder {
     }
 
     /// Register one typed server-to-client request handler.
+    ///
+    /// The handler receives a [`ClientContext`], decoded parameters, and a
+    /// request-scoped [`CancellationToken`]. `window/workDoneProgress/create`
+    /// reserves its token in this connection's progress registry and commits
+    /// it only when the request completes successfully.
     pub fn request<R, H, Fut>(mut self, handler: H) -> Self
     where
         R: Request,
-        H: Fn(R::Params, CancellationToken) -> Fut
-            + SharedHandler<(R::Params, CancellationToken), Fut>
+        H: Fn(ClientContext, R::Params, CancellationToken) -> Fut
+            + SharedHandler<(ClientContext, R::Params, CancellationToken), Fut>
             + 'static,
         Fut: Future<Output = std::result::Result<R::Result, LspError>> + TaskSend + 'static,
     {
@@ -193,21 +216,61 @@ impl ClientBuilder {
             self.record(BuildError::ReservedMethod(R::METHOD.to_string()));
             return self;
         }
-        if self.handlers.contains_key(R::METHOD) {
+        if self.request_handlers.contains_key(R::METHOD) {
             self.record(BuildError::DuplicateMethod(R::METHOD.to_string()));
             return self;
         }
         let handler = Arc::new(handler);
-        self.handlers.insert(
+        self.request_handlers.insert(
             R::METHOD,
-            Arc::new(move |params, cancellation| {
+            Arc::new(move |ctx, params, cancellation| {
                 let handler = Arc::clone(&handler);
                 let params =
                     serde_json::from_value::<R::Params>(params).map_err(LspError::invalid_params);
                 Box::pin(async move {
                     let params = params?;
-                    let result = handler.invoke((params, cancellation)).await?;
+                    let result = handler.invoke((ctx, params, cancellation)).await?;
                     erase_value(result)
+                })
+            }),
+        );
+        self
+    }
+
+    /// Register one typed server-to-client notification handler.
+    ///
+    /// The handler receives a connection-scoped [`ClientContext`] and decoded
+    /// parameters. Notifications have no response or cancellation token.
+    /// Registered `$/progress` notifications are dispatched only for a token
+    /// created on this connection and a valid begin, report, or end transition;
+    /// the first end removes the token, so duplicate and late progress is
+    /// ignored.
+    pub fn notification<N, H, Fut>(mut self, handler: H) -> Self
+    where
+        N: Notification,
+        H: Fn(ClientContext, N::Params) -> Fut
+            + SharedHandler<(ClientContext, N::Params), Fut>
+            + 'static,
+        Fut: Future<Output = ()> + TaskSend + 'static,
+    {
+        if is_reserved_reverse_method(N::METHOD) {
+            self.record(BuildError::ReservedMethod(N::METHOD.to_string()));
+            return self;
+        }
+        if self.notification_handlers.contains_key(N::METHOD) {
+            self.record(BuildError::DuplicateMethod(N::METHOD.to_string()));
+            return self;
+        }
+        let handler = Arc::new(handler);
+        self.notification_handlers.insert(
+            N::METHOD,
+            Arc::new(move |ctx, params| {
+                let handler = Arc::clone(&handler);
+                let params =
+                    serde_json::from_value::<N::Params>(params).map_err(LspError::invalid_params);
+                Box::pin(async move {
+                    handler.invoke((ctx, params?)).await;
+                    Ok(())
                 })
             }),
         );
@@ -231,7 +294,8 @@ impl ClientBuilder {
             capabilities: self.capabilities,
             client_info: self.client_info,
             initialization_options: self.initialization_options,
-            handlers: self.handlers,
+            request_handlers: self.request_handlers,
+            notification_handlers: self.notification_handlers,
             resource_policy: self.resource_policy,
         })
     }
@@ -261,11 +325,69 @@ impl ClientConnection {
     }
 }
 
+/// Per-call handle passed to server-to-client handlers.
+///
+/// It exposes only protocol-facing connection state: the current request ID
+/// (if any), its tracing span, and a cloneable [`ServerHandle`] for typed
+/// client-to-server calls. Editor workspace, UI, filesystem, and extension
+/// host policy remain owned by the application.
+#[derive(Clone, Debug)]
+pub struct ClientContext {
+    request_id: Option<RequestId>,
+    span: Span,
+    server: ServerHandle,
+}
+
+impl ClientContext {
+    fn for_request(request_id: RequestId, span: Span, server: ServerHandle) -> Self {
+        Self {
+            request_id: Some(request_id),
+            span,
+            server,
+        }
+    }
+
+    fn for_notification(span: Span, server: ServerHandle) -> Self {
+        Self {
+            request_id: None,
+            span,
+            server,
+        }
+    }
+
+    /// The JSON-RPC request ID, or `None` while handling a notification.
+    pub fn request_id(&self) -> Option<&RequestId> {
+        self.request_id.as_ref()
+    }
+
+    /// The tracing span associated with the incoming call.
+    pub fn span(&self) -> &Span {
+        &self.span
+    }
+
+    /// A cheap clone of the typed handle for this connection's LSP server.
+    pub fn server(&self) -> ServerHandle {
+        self.server.clone()
+    }
+}
+
 /// A cloneable typed handle for messages sent to the connected LSP server.
 #[derive(Clone)]
 pub struct ServerHandle {
     inner: ClientHandle,
     lifecycle: Arc<ClientLifecycle>,
+    progress: ClientProgressRegistry,
+}
+
+struct RequestProgressGuard {
+    registry: ClientProgressRegistry,
+    token: lsp_types::ProgressToken,
+}
+
+impl Drop for RequestProgressGuard {
+    fn drop(&mut self) {
+        self.registry.remove(&self.token);
+    }
 }
 
 impl std::fmt::Debug for ServerHandle {
@@ -287,12 +409,34 @@ impl ServerHandle {
     }
 
     /// Send one typed client-to-server request and await its correlated result.
+    ///
+    /// A top-level `workDoneToken` in the encoded LSP params is registered for
+    /// this request's lifetime, so matching `$/progress` notifications use the
+    /// same ordered, connection-local lifecycle as server-created progress.
     pub async fn request<R>(&self, params: R::Params) -> std::result::Result<R::Result, ClientError>
     where
         R: Request,
     {
         self.lifecycle.ensure_running(R::METHOD)?;
-        self.inner.request::<R>(params).await
+        let params = serde_json::to_vec(&params).map_err(ClientError::Serialize)?;
+        let token = work_done_token(&params)?;
+        let _request_progress_guard = match token {
+            Some(token) => {
+                if !self.progress.try_register_request(token.clone()) {
+                    return Err(ClientError::InvalidHelperParams(
+                        "duplicate work-done progress token".to_string(),
+                    ));
+                }
+                Some(RequestProgressGuard {
+                    registry: self.progress.clone(),
+                    token,
+                })
+            }
+            None => None,
+        };
+        self.inner
+            .request_encoded::<R>(bytes::Bytes::from(params))
+            .await
     }
 
     /// Request a graceful LSP shutdown from the connected server.
@@ -500,7 +644,9 @@ impl ClientCloseCause {
 }
 
 struct ClientEngine<R> {
-    handlers: HashMap<&'static str, ReverseHandler>,
+    request_handlers: HashMap<&'static str, ReverseHandler>,
+    notification_handlers: HashMap<&'static str, ReverseNotificationHandler>,
+    progress: ClientProgressRegistry,
     protocol: ProtocolSession<R, ClientHandle, ClientCloseCause>,
     peer: ClientHandle,
     trace: ConnectionTrace,
@@ -508,6 +654,14 @@ struct ClientEngine<R> {
 }
 
 impl<R: Runtime> ClientEngine<R> {
+    fn server_handle(&self) -> ServerHandle {
+        ServerHandle {
+            inner: self.peer.clone(),
+            lifecycle: Arc::clone(&self.lifecycle),
+            progress: self.progress.clone(),
+        }
+    }
+
     async fn initialize<Rd>(&mut self, reader: &mut Rd, params: InitializeParams) -> Result<()>
     where
         Rd: TransportReader,
@@ -606,8 +760,8 @@ impl<R: Runtime> ClientEngine<R> {
                     Err(error) => debug!(%error, "malformed cancellation ignored"),
                 }
             }
-            RawMessage::Notification { method, .. } => {
-                debug!(%method, "unregistered server notification ignored");
+            RawMessage::Notification { method, params } => {
+                self.dispatch_notification(method.into_owned(), params)
             }
             RawMessage::ProtocolError { error } => self.protocol.send_protocol_error(error),
         }
@@ -668,7 +822,7 @@ impl<R: Runtime> ClientEngine<R> {
             );
             return;
         }
-        let Some(handler) = self.handlers.get(method.as_str()).cloned() else {
+        let Some(handler) = self.request_handlers.get(method.as_str()).cloned() else {
             self.protocol.complete_inbound(
                 reservation,
                 Err(LspError::MethodNotFound(method.to_string())),
@@ -682,6 +836,29 @@ impl<R: Runtime> ClientEngine<R> {
                 return;
             }
         };
+        let progress_token = if method == WorkDoneProgressCreate::METHOD {
+            let create =
+                match serde_json::from_value::<WorkDoneProgressCreateParams>(params.clone()) {
+                    Ok(create) => create,
+                    Err(error) => {
+                        self.protocol
+                            .complete_inbound(reservation, Err(LspError::invalid_params(error)));
+                        return;
+                    }
+                };
+            if !self.progress.try_reserve_create(create.token.clone()) {
+                self.protocol.complete_inbound(
+                    reservation,
+                    Err(LspError::invalid_params(
+                        "duplicate work-done progress token",
+                    )),
+                );
+                return;
+            }
+            Some(create.token)
+        } else {
+            None
+        };
         let completion = self.protocol.completion_gate();
         let permit = Arc::clone(&reservation._permit);
         let timeout = HandlerTimeout::new(
@@ -692,12 +869,15 @@ impl<R: Runtime> ClientEngine<R> {
         );
         timeout.arm();
         let span = self.trace.request_span(&method, &reservation.id);
+        let ctx =
+            ClientContext::for_request(reservation.id.clone(), span.clone(), self.server_handle());
+        let progress = self.progress.clone();
         self.protocol.spawn(
             async move {
                 let handler_cancellation = cancellation.clone();
                 let result = run_handler_with_deadline(
                     async move {
-                        match handler(params, handler_cancellation).await {
+                        match handler(ctx, params, handler_cancellation).await {
                             Ok(value) => ServiceResult::Response(value),
                             Err(error) => ServiceResult::Error(error),
                         }
@@ -713,10 +893,76 @@ impl<R: Runtime> ClientEngine<R> {
                         Err(LspError::internal("reverse request returned no response"))
                     }
                 };
-                completion.complete(reservation, result);
+                if let Some(token) = progress_token {
+                    let outcome = if result.is_ok() {
+                        CreateOutcome::Succeeded
+                    } else {
+                        CreateOutcome::Failed
+                    };
+                    let claimed = completion.try_complete_with(reservation, result, {
+                        let progress = progress.clone();
+                        let token = token.clone();
+                        move || progress.finish_create(&token, outcome)
+                    });
+                    if !claimed {
+                        progress.finish_create(&token, CreateOutcome::Failed);
+                    }
+                } else {
+                    completion.complete(reservation, result);
+                }
             }
             .instrument(span),
             permit,
+        );
+    }
+
+    fn dispatch_notification(&mut self, method: String, params: bytes::Bytes) {
+        if self.lifecycle.rejects_reverse_work() {
+            debug!(%method, "notification after client shutdown ignored");
+            return;
+        }
+        let params = match decode_value(&params) {
+            Ok(params) => params,
+            Err(error) => {
+                debug!(%method, %error, "server notification with malformed params ignored");
+                return;
+            }
+        };
+        let progress_delivery = if method == Progress::METHOD {
+            let progress = match serde_json::from_value::<ProgressParams>(params.clone()) {
+                Ok(progress) => progress,
+                Err(error) => {
+                    debug!(%method, %error, "server progress with malformed params ignored");
+                    return;
+                }
+            };
+            match self.progress.accept(&progress) {
+                Some(delivery) => Some(delivery),
+                None => {
+                    debug!(token = ?progress.token, "inactive or invalid server progress ignored");
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+        let Some(handler) = self.notification_handlers.get(method.as_str()).cloned() else {
+            debug!(%method, "unregistered server notification ignored");
+            return;
+        };
+        let span = self.trace.notification_span(&method);
+        let ctx = ClientContext::for_notification(span.clone(), self.server_handle());
+        self.protocol.spawn_notification(
+            async move {
+                let _progress_order = match progress_delivery {
+                    Some(delivery) => Some(delivery.wait().await),
+                    None => None,
+                };
+                if let Err(error) = handler(ctx, params).await {
+                    debug!(%method, %error, "server notification with malformed params ignored");
+                }
+            }
+            .instrument(span),
         );
     }
 }
@@ -726,6 +972,21 @@ fn is_reserved_reverse_method(method: &str) -> bool {
         method,
         "initialize" | "initialized" | "shutdown" | "exit" | "$/cancelRequest"
     )
+}
+
+fn work_done_token(
+    params: &[u8],
+) -> std::result::Result<Option<lsp_types::ProgressToken>, ClientError> {
+    let value = serde_json::from_slice::<Value>(params).map_err(ClientError::Serialize)?;
+    let Some(token) = value.get("workDoneToken") else {
+        return Ok(None);
+    };
+    if token.is_null() {
+        return Ok(None);
+    }
+    serde_json::from_value(token.clone())
+        .map(Some)
+        .map_err(ClientError::Serialize)
 }
 
 #[allow(deprecated)]
