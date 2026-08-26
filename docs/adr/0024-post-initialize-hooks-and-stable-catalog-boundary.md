@@ -8,7 +8,7 @@ and fixes the boundaries of the stable catalog the 0.3 PRD defines.
 
 ## `on_initialized`
 
-`on_initialized` has the notification-handler state, `Context`, and params
+`on_initialized` has the notification-handler state, `ServerContext`, and params
 shape and runs at most once, only after a successful initialize transaction:
 when the client's `initialized` notification arrives while the connection is
 running. It resolves to `()`, and it cannot register routes or contribute
@@ -21,7 +21,7 @@ does not lose its hook.
 ## `on_exit` clarification
 
 `on_exit` keeps ADR 0018's notification-handler shape — shared state and
-`Context`, no `CancellationToken`, resolving to `()` — and `exit` carries no
+`ServerContext`, no `CancellationToken`, resolving to `()` — and `exit` carries no
 parameters, so the typed hook receives none. It runs before the engine
 computes the exit outcome; the outcome then derives from protocol-owned
 lifecycle state alone (0 only after a successful `shutdown`), so the hook
@@ -32,7 +32,7 @@ closes with code 1.
 ## `on_shutdown` completion
 
 `on_shutdown`, specified by ADR 0018 and implemented after the original catalog
-work, has the request-handler shape: shared state, `Context`, unit params, and a
+work, has the request-handler shape: shared state, `ServerContext`, unit params, and a
 `CancellationToken`. The engine validates shutdown params and awaits the hook
 before replying or changing lifecycle state. `Ok(())` permits the successful
 response and transition to shutting down; `LspError` is returned to the client,

@@ -12,11 +12,11 @@ A Rust framework for building extensible LSP (Language Server Protocol) language
 language server in very little code. You register typed handlers on a
 `Server`, hand it to a transport, and the framework owns the protocol:
 lifecycle, document synchronization, cancellation, bounded concurrency,
-`tracing` spans, and typed server-to-client traffic through `Client`.
+`tracing` spans, and typed server-to-client traffic through `ClientHandle`.
 
 > **Status:** early-stage. The current published release is **0.5.2**. It
 > includes the stable LSP 3.17 feature catalog, typed Commands, the
-> multi-root `Workspace`, outgoing `Client` helpers, and stdio, TCP, WebSocket,
+> multi-root `Workspace`, outgoing `ClientHandle` helpers, and stdio, TCP, WebSocket,
 > and WASM worker-channel transports. See the
 > [package changelog](./crates/lspf/CHANGELOG.md) for release history.
 
@@ -29,10 +29,10 @@ use lspf::types::{
     CompletionItem, CompletionItemKind, CompletionOptions, CompletionParams, CompletionResponse,
     Hover, HoverContents, HoverParams, MarkedString,
 };
-use lspf::{CancellationToken, Context, LspError, OsFileProvider, Server};
+use lspf::{CancellationToken, ServerContext, LspError, OsFileProvider, Server};
 
 /// Only your own application state — the framework owns the documents, the
-/// workspace, and the client, and hands them to handlers through `Context`.
+/// workspace, and the client, and hands them to handlers through `ServerContext`.
 struct State;
 
 /// A standard typed feature. The `features::hover()` descriptor fixes the
@@ -40,7 +40,7 @@ struct State;
 /// `hoverProvider` capability the server will advertise — all at once.
 async fn hover(
     _state: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     params: HoverParams,
     _ct: CancellationToken,
 ) -> Result<Option<Hover>, LspError> {
@@ -61,7 +61,7 @@ async fn hover(
 /// generated `completionProvider` advertises.
 async fn complete(
     _state: Arc<State>,
-    _ctx: Context,
+    _ctx: ServerContext,
     _params: CompletionParams,
     _ct: CancellationToken,
 ) -> Result<Option<CompletionResponse>, LspError> {
@@ -77,7 +77,7 @@ async fn complete(
 /// in registration order.
 async fn roots(
     _state: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     _args: Vec<String>,
     _ct: CancellationToken,
 ) -> Result<Vec<(String, String)>, LspError> {
@@ -163,7 +163,7 @@ also uses them internally.
   mutation operation.
 - **A multi-root `Workspace`.** Client announcements — folders, root URI,
   configuration, trace level — live in one cloneable handle, mutated only by
-  the protocol and read through `Context`; unopened files resolve through a
+  the protocol and read through `ServerContext`; unopened files resolve through a
   configurable `FileProvider`.
 - **Capabilities that cannot drift.** `ServerCapabilities` are generated from
   the same registrations that dispatch, so what the server advertises is what
@@ -197,8 +197,8 @@ the docs.
 | `DocumentsView`     | The read-only document handle a handler reaches through `ctx.documents()`.                               |
 | `Workspace`         | The cloneable handle to the connection's workspace state: folders, configuration, and documents.         |
 | `FileProvider`      | The configurable resolver for resources that are not open in the editor.                                 |
-| `Context`           | The cheap-to-clone framework-state handle every handler receives: documents, workspace, client, scope.   |
-| `Client`            | The typed handle for server-to-client notifications and requests (`ctx.client()`).                       |
+| `ServerContext`     | The cheap-to-clone framework-state handle every handler receives: documents, workspace, client, scope.   |
+| `ClientHandle`      | The typed handle for server-to-client notifications and requests (`ctx.client()`).                       |
 | `CancellationToken` | The cancellation signal passed to request handlers.                                                      |
 | `Transport`         | A message-framed channel split into reader and writer halves for the protocol engine.                    |
 | `Outcome`           | How one connection ended, returned by serving; it carries the LSP exit code but never exits the process. |
@@ -244,7 +244,7 @@ Available today:
 - The multi-root `Workspace`, latest configuration settings, and
   `FileProvider`-backed unopened-file lookup.
 - Typed server-to-client notifications and correlated requests through
-  `Client`.
+  `ClientHandle`.
 - Concurrent dispatch, bounded concurrency, request cancellation, and
   `tracing` spans.
 - Rope-backed documents with UTF-8/UTF-16 position negotiation.

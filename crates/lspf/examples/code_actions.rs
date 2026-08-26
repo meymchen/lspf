@@ -10,13 +10,13 @@ use lspf::types::{
     CodeAction, CodeActionKind, CodeActionOptions, CodeActionOrCommand, CodeActionParams,
     CodeActionResponse, TextEdit, WorkspaceEdit,
 };
-use lspf::{CancellationToken, Context, LspError, Server};
+use lspf::{CancellationToken, LspError, Server, ServerContext};
 
 struct State;
 
 async fn code_actions(
     _: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     params: CodeActionParams,
     _: CancellationToken,
 ) -> Result<Option<CodeActionResponse>, LspError> {

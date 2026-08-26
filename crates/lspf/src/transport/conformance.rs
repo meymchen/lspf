@@ -13,7 +13,7 @@ use lsp_types::{InitializedParams, LogMessageParams, MessageType};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::conformance_support::{self, Context, LspError, Outcome, Server, TaskSend};
+use super::conformance_support::{self, LspError, Outcome, Server, ServerContext, TaskSend};
 
 pub(crate) trait WireClient {
     fn send(&mut self, message: Value) -> impl Future<Output = ()> + TaskSend;
@@ -210,7 +210,11 @@ impl TaskProbe {
     }
 }
 
-async fn pending_task(ctx: Context, drops: Arc<TaskDrops>, kind: TaskKind) -> Result<(), LspError> {
+async fn pending_task(
+    ctx: ServerContext,
+    drops: Arc<TaskDrops>,
+    kind: TaskKind,
+) -> Result<(), LspError> {
     let (started_message, _drop_guard) = kind.start(&drops);
     ctx.client()
         .log_message(LogMessageParams {
@@ -242,7 +246,7 @@ fn build_server() -> (Server<ConformanceState>, Arc<TaskDrops>) {
     let non_send_value = std::rc::Rc::new(wasm_bindgen::JsValue::from_str("héllo"));
     let server = Server::builder(state)
         .on_initialized(
-            |_state: Arc<ConformanceState>, ctx: Context, _params: InitializedParams| async move {
+            |_state: Arc<ConformanceState>, ctx: ServerContext, _params: InitializedParams| async move {
                 ctx.client()
                     .log_message(LogMessageParams {
                         typ: MessageType::INFO,
@@ -252,7 +256,7 @@ fn build_server() -> (Server<ConformanceState>, Arc<TaskDrops>) {
             },
         )
         .notification::<Observe, _, _>(
-            |state: Arc<ConformanceState>, ctx: Context, params: ObserveParams| async move {
+            |state: Arc<ConformanceState>, ctx: ServerContext, params: ObserveParams| async move {
                 state
                     .observed_sequence
                     .store(params.sequence, Ordering::SeqCst);
@@ -265,7 +269,7 @@ fn build_server() -> (Server<ConformanceState>, Arc<TaskDrops>) {
             },
         )
         .request::<Journey, _, _>(
-            move |state: Arc<ConformanceState>, ctx: Context, params: JourneyParams, _ct| {
+            move |state: Arc<ConformanceState>, ctx: ServerContext, params: JourneyParams, _ct| {
                 #[cfg(target_arch = "wasm32")]
                 let non_send_value = std::rc::Rc::clone(&non_send_value);
                 async move {

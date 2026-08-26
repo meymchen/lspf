@@ -9,7 +9,7 @@ use lspf::types::{
     PrepareRenameResponse, RenameOptions, RenameParams, TextDocumentPositionParams, TextEdit,
     WorkspaceEdit,
 };
-use lspf::{CancellationToken, Context, LspError, Server};
+use lspf::{CancellationToken, LspError, Server, ServerContext};
 
 struct State;
 
@@ -25,7 +25,7 @@ fn renameable(text: &str, word: &str) -> bool {
 
 async fn prepare(
     _: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     params: TextDocumentPositionParams,
     _: CancellationToken,
 ) -> Result<Option<PrepareRenameResponse>, LspError> {
@@ -43,7 +43,7 @@ async fn prepare(
 
 async fn rename(
     _: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     params: RenameParams,
     _: CancellationToken,
 ) -> Result<Option<WorkspaceEdit>, LspError> {

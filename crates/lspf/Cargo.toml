@@ -71,7 +71,7 @@ wasm = ["dep:gloo-timers", "dep:wasm-bindgen-futures"]
 worker-channel = ["wasm", "dep:js-sys", "dep:wasm-bindgen", "dep:web-sys"]
 # Proposed (not yet stabilized) LSP protocol surface. Off by default so the
 # stable API stays exactly the 3.17 catalog; enabling it only adds the
-# `proposed` module and the gated `Client` helpers. It pulls in no Transport.
+# `proposed` module and the gated `ClientHandle` helpers. It pulls in no Transport.
 proposed = []
 
 # Transport examples name feature-gated APIs directly. `required-features`

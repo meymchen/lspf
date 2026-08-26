@@ -23,7 +23,7 @@ use tokio::sync::mpsc;
 use lspf::types::request::Request;
 use lspf::types::{InitializeResult, PositionEncodingKind, ServerCapabilities, ServerInfo, Uri};
 use lspf::{
-    Context, PositionEncoding, RawMessage, RequestId, Server, Transport, TransportError,
+    PositionEncoding, RawMessage, RequestId, Server, ServerContext, Transport, TransportError,
     TransportReader, TransportWriter,
 };
 
@@ -50,7 +50,7 @@ impl Request for Ping {
 
 async fn ping(
     _state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     params: PingParams,
     _ct: lspf::CancellationToken,
 ) -> Result<PingResult, lspf::LspError> {
@@ -59,7 +59,7 @@ async fn ping(
     })
 }
 
-// --- A document-probe request reading through the Context --------------------
+// --- A document-probe request reading through the ServerContext --------------------
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 struct DocProbeParams {
@@ -85,7 +85,7 @@ impl Request for DocProbe {
 
 async fn doc_probe(
     _state: Arc<AppState>,
-    ctx: Context,
+    ctx: ServerContext,
     params: DocProbeParams,
     _ct: lspf::CancellationToken,
 ) -> Result<DocProbeResult, lspf::LspError> {
@@ -131,7 +131,7 @@ struct WorkspaceSnapshot {
     roots: Vec<(String, String)>,
 }
 
-fn roots_of(ctx: &Context) -> Vec<(String, String)> {
+fn roots_of(ctx: &ServerContext) -> Vec<(String, String)> {
     ctx.workspace()
         .roots()
         .iter()
@@ -408,7 +408,7 @@ async fn configure_initialize_can_advertise_a_conditional_feature() {
 
 async fn hover(
     _state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     _params: lspf::types::HoverParams,
     _ct: lspf::CancellationToken,
 ) -> Result<Option<lspf::types::Hover>, lspf::LspError> {

@@ -2,7 +2,7 @@
 // every adapter parses and serializes the same JSON-RPC envelopes.
 #[cfg(all(test, feature = "runtime-tokio", not(target_arch = "wasm32")))]
 mod conformance_support {
-    pub(crate) use crate::{Context, LspError, Outcome, Result, Server, TaskSend};
+    pub(crate) use crate::{LspError, Outcome, Result, Server, ServerContext, TaskSend};
 
     #[cfg(all(not(target_arch = "wasm32"), any(feature = "stdio", feature = "tcp")))]
     pub(crate) use crate::transport::framing::ContentLengthCodec;

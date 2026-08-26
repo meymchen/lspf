@@ -19,7 +19,7 @@ use tokio::sync::mpsc;
 
 use lspf::types::notification::Notification;
 use lspf::{
-    Context, RawMessage, RequestId, Server, Transport, TransportError, TransportReader,
+    RawMessage, RequestId, Server, ServerContext, Transport, TransportError, TransportReader,
     TransportWriter,
 };
 
@@ -48,7 +48,7 @@ struct AppState {
     notes: Arc<Mutex<Vec<String>>>,
 }
 
-async fn ping(state: Arc<AppState>, _ctx: Context, params: PingParams) {
+async fn ping(state: Arc<AppState>, _ctx: ServerContext, params: PingParams) {
     state.handled.fetch_add(1, Ordering::SeqCst);
     state.notes.lock().await.push(params.note);
 }

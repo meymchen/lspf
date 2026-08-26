@@ -11,7 +11,7 @@ use lspf::types::{
     DocumentSymbolParams, DocumentSymbolResponse, Location, Position, Range, SymbolInformation,
     SymbolKind, Uri, WorkspaceSymbolOptions, WorkspaceSymbolParams, WorkspaceSymbolResponse,
 };
-use lspf::{CancellationToken, Context, LspError, Server};
+use lspf::{CancellationToken, LspError, Server, ServerContext};
 
 #[derive(Clone)]
 struct IndexedSymbol {
@@ -49,7 +49,7 @@ fn parse(text: &str) -> Vec<IndexedSymbol> {
         .collect()
 }
 
-fn update(state: &State, ctx: &Context, uri: &Uri) {
+fn update(state: &State, ctx: &ServerContext, uri: &Uri) {
     let Some(document) = ctx.documents().get(uri) else {
         return;
     };
@@ -60,18 +60,18 @@ fn update(state: &State, ctx: &Context, uri: &Uri) {
         .insert(uri.clone(), parse(&document.text()));
 }
 
-async fn did_open(state: Arc<State>, ctx: Context, params: DidOpenTextDocumentParams) {
+async fn did_open(state: Arc<State>, ctx: ServerContext, params: DidOpenTextDocumentParams) {
     update(&state, &ctx, &params.text_document.uri);
 }
 
-async fn did_change(state: Arc<State>, ctx: Context, params: DidChangeTextDocumentParams) {
+async fn did_change(state: Arc<State>, ctx: ServerContext, params: DidChangeTextDocumentParams) {
     update(&state, &ctx, &params.text_document.uri);
 }
 
 #[allow(deprecated)]
 async fn document_symbols(
     state: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     params: DocumentSymbolParams,
     _: CancellationToken,
 ) -> Result<Option<DocumentSymbolResponse>, LspError> {
@@ -99,7 +99,7 @@ async fn document_symbols(
 #[allow(deprecated)]
 async fn workspace_symbols(
     state: Arc<State>,
-    _: Context,
+    _: ServerContext,
     params: WorkspaceSymbolParams,
     _: CancellationToken,
 ) -> Result<Option<WorkspaceSymbolResponse>, LspError> {

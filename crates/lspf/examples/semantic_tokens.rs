@@ -10,7 +10,7 @@ use lspf::types::{
     SemanticTokensOptions, SemanticTokensParams, SemanticTokensRangeParams,
     SemanticTokensRangeResult, SemanticTokensResult,
 };
-use lspf::{CancellationToken, Context, LspError, Server};
+use lspf::{CancellationToken, LspError, Server, ServerContext};
 
 struct State;
 
@@ -100,7 +100,7 @@ fn tokens(text: &str, start_line: u32, end_line: u32) -> SemanticTokens {
 
 async fn full(
     _: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     params: SemanticTokensParams,
     _: CancellationToken,
 ) -> Result<Option<SemanticTokensResult>, LspError> {
@@ -110,7 +110,7 @@ async fn full(
 
 async fn delta(
     _: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     params: SemanticTokensDeltaParams,
     _: CancellationToken,
 ) -> Result<Option<SemanticTokensFullDeltaResult>, LspError> {
@@ -120,7 +120,7 @@ async fn delta(
 
 async fn range(
     _: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     params: SemanticTokensRangeParams,
     _: CancellationToken,
 ) -> Result<Option<SemanticTokensRangeResult>, LspError> {

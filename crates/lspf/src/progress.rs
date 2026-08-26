@@ -1,7 +1,7 @@
 //! Connection-scoped work-done progress lifecycle (LSP 3.17
 //! `window/workDoneProgress/*` and `$/progress`).
 //!
-//! [`Client::begin_progress`] performs the whole begin sequence as one
+//! [`ClientHandle::begin_progress`] performs the whole begin sequence as one
 //! failure-safe operation: it allocates a connection-local numeric token,
 //! completes `window/workDoneProgress/create`, registers the token only after
 //! the remote success, and enqueues exactly one work-done begin notification.
@@ -9,7 +9,7 @@
 //! active handle reclaims its token without performing any I/O.
 //!
 //! The [`ProgressRegistry`] is the connection-local registry of active
-//! progress tokens. It is shared by every [`Client`] clone of the connection
+//! progress tokens. It is shared by every [`ClientHandle`] clone of the connection
 //! and is independent of the outbound request-ID allocator: progress tokens
 //! and request IDs are separate monotonic sequences. The protocol engine's
 //! `window/workDoneProgress/cancel` built-in resolves a client cancellation
@@ -28,7 +28,7 @@ use lsp_types::{
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use crate::client::Client;
+use crate::client::ClientHandle;
 use crate::error::{ClientError, ProgressError};
 
 /// The largest token value handed out: progress tokens travel as JSON
@@ -63,10 +63,10 @@ pub(crate) enum ProgressCancel {
 /// Tokens are allocated from a monotonically increasing numeric sequence
 /// starting at 1 that never reuses a value and skips any token already
 /// active on the connection — server-originated ones handed out by
-/// [`Client::begin_progress`] and client-originated ones alike. Allocation is
+/// [`ClientHandle::begin_progress`] and client-originated ones alike. Allocation is
 /// independent of the outbound request-ID allocator.
 ///
-/// Allocation and registration are separate steps: [`Client::begin_progress`]
+/// Allocation and registration are separate steps: [`ClientHandle::begin_progress`]
 /// registers its token only after `window/workDoneProgress/create` succeeds,
 /// so a failed create leaves no registered token behind.
 #[derive(Clone, Default)]
@@ -191,7 +191,7 @@ impl ProgressRegistry {
     }
 }
 
-/// Options for [`Client::begin_progress`], mapped verbatim onto the work-done
+/// Options for [`ClientHandle::begin_progress`], mapped verbatim onto the work-done
 /// begin notification.
 ///
 /// `cancellable` defaults to `false`; `message` and `percentage` default to
@@ -257,7 +257,7 @@ pub(crate) struct SharedProgress {
 }
 
 struct SharedInner {
-    client: Client,
+    client: ClientHandle,
     registry: ProgressRegistry,
     token: ProgressToken,
     cancellable: bool,
@@ -267,7 +267,7 @@ struct SharedInner {
 
 impl SharedProgress {
     fn new(
-        client: Client,
+        client: ClientHandle,
         registry: ProgressRegistry,
         token: ProgressToken,
         cancellable: bool,
@@ -347,7 +347,7 @@ impl SharedProgress {
 }
 
 /// The connection-scoped handle for one work-done progress operation,
-/// created by [`Client::begin_progress`].
+/// created by [`ClientHandle::begin_progress`].
 ///
 /// The handle reports through [`ProgressHandle::report`] and finishes through
 /// [`ProgressHandle::end`], which consumes it. Dropping an active handle
@@ -435,7 +435,7 @@ impl Drop for ProgressHandle {
     }
 }
 
-impl Client {
+impl ClientHandle {
     /// Begin one connection-scoped work-done progress operation (LSP 3.17).
     ///
     /// The sequence is one failure-safe lifecycle: allocate a
@@ -453,9 +453,9 @@ impl Client {
     ///
     /// - [`ClientError::InvalidHelperParams`] for a begin percentage outside
     ///   0 through 100, before any request or notification is sent;
-    /// - the [`Client::request`] errors for the create step, including
+    /// - the [`ClientHandle::request`] errors for the create step, including
     ///   [`ClientError::Remote`] when the client refuses the creation;
-    /// - the [`Client::notify`] errors when the begin notification cannot be
+    /// - the [`ClientHandle::notify`] errors when the begin notification cannot be
     ///   enqueued.
     pub async fn begin_progress(
         &self,
@@ -528,13 +528,13 @@ mod tests {
     use crate::raw::{RawMessage, RequestId};
 
     fn make_client() -> (
-        Client,
+        ClientHandle,
         OutboundRegistry,
         mpsc::UnboundedReceiver<RawMessage>,
     ) {
         let (outgoing, receiver) = OutboundQueue::new(crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD);
         let outbound = OutboundRegistry::default();
-        let client = Client::new(outgoing, outbound.clone(), None);
+        let client = ClientHandle::new(outgoing, outbound.clone(), None);
         (client, outbound, receiver)
     }
 

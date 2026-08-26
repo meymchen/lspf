@@ -33,9 +33,9 @@ from the same registrations used for dispatch, and freeze all local dispatch
 state before the server reports its capabilities.
 
 This decision uses the glossary terms [[Handler]], [[User handler]],
-[[Command]], [[Context]], [[Layer]], and [[Service]]. A `Client` is the
-outgoing-client concern available through `Context`, not a replacement name
-for `Context`. A `Workspace` is the workspace-folder and configuration
+[[Command]], [[ServerContext]], [[Layer]], and [[Service]]. A `ClientHandle` is the
+outgoing-client concern available through `ServerContext`, not a replacement name
+for `ServerContext`. A `Workspace` is the workspace-folder and configuration
 concern; it does not replace the [[Documents]] store.
 
 ## Decision
@@ -48,12 +48,12 @@ The 0.2 public registration model consists of these top-level objects:
 - `Router<S>` is the permanently frozen table of user request,
   notification, and command handlers for that connection.
 - `FeatureSpec` is the sealed descriptor contract for standard LSP features.
-- `Context` is the cheap-to-clone framework-state handle passed to every user
+- `ServerContext` is the cheap-to-clone framework-state handle passed to every user
   handler.
-- `Client` is the cloneable outgoing request and notification handle exposed
-  through `Context`.
+- `ClientHandle` is the cloneable outgoing request and notification handle exposed
+  through `ServerContext`.
 - `Workspace` is the cloneable workspace-folder and configuration handle
-  exposed through `Context`.
+  exposed through `ServerContext`.
 
 `ProtocolEngine`, `Service`, `Layer`, and `Runtime` are not additional
 registration surfaces. `ProtocolEngine` owns JSON-RPC and LSP lifecycle
@@ -139,7 +139,7 @@ Typed request handlers have this semantic signature:
 ```rust
 Fn(
     Arc<S>,
-    Context,
+    ServerContext,
     Params,
     CancellationToken,
 ) -> Future<Output = Result<ResultType, LspError>>
@@ -148,7 +148,7 @@ Fn(
 Typed notification handlers have this semantic signature:
 
 ```rust
-Fn(Arc<S>, Context, Params) -> Future<Output = ()>
+Fn(Arc<S>, ServerContext, Params) -> Future<Output = ()>
 ```
 
 Typed command handlers have this semantic signature:
@@ -156,7 +156,7 @@ Typed command handlers have this semantic signature:
 ```rust
 Fn(
     Arc<S>,
-    Context,
+    ServerContext,
     Args,
     CancellationToken,
 ) -> Future<Output = Result<Output, LspError>>
@@ -164,14 +164,14 @@ Fn(
 
 On native targets, every returned future is `Send + 'static`. Request and
 command cancellation uses the request-scoped `CancellationToken`;
-notifications have no response and therefore no token. `Context` is passed by
+notifications have no response and therefore no token. `ServerContext` is passed by
 value and is cheap to clone. Parameters and command arguments are deserialized
 and passed by value. The framework always supplies user state as `Arc<S>`;
 users do not opt into shared wrapping themselves.
 
-Handlers reach [[Documents]], `Workspace`, and `Client` through `Context`.
-They never receive or access the raw outgoing channel. `Context` may expose
-convenience helpers that delegate to `Client`, but it remains the one
+Handlers reach [[Documents]], `Workspace`, and `ClientHandle` through `ServerContext`.
+They never receive or access the raw outgoing channel. `ServerContext` may expose
+convenience helpers that delegate to `ClientHandle`, but it remains the one
 framework-state parameter named by the glossary.
 
 ### Type erasure and the Service seam
@@ -290,7 +290,7 @@ receives JSON-RPC `InternalError`; no partial Router or partial capability set
 becomes observable, and that `Server` does not proceed to the initialized
 state.
 
-Outgoing dynamic-registration helpers on `Client` may send
+Outgoing dynamic-registration helpers on `ClientHandle` may send
 `client/registerCapability` and `client/unregisterCapability` after
 initialization. They describe client-side routing expectations only. They
 never add, replace, or remove a local Router entry and never recompute
@@ -338,7 +338,7 @@ escape its transaction. Repeated hooks make capability output and dispatch
 depend on timing.
 
 We rejected mutating the local Router from dynamic-registration helpers.
-Client registration and server dispatch have different ownership; coupling
+ClientHandle registration and server dispatch have different ownership; coupling
 them would make an outgoing request able to silently replace local behavior.
 
 We rejected serializing values at every Layer boundary. Layers govern a
@@ -384,13 +384,13 @@ descriptor options or, when it depends on the client, into the single
 
 User state that previously lived on a `LanguageServer` receiver becomes the
 value passed to `Server::builder` and arrives as `Arc<S>`. Framework state and
-outgoing helpers move behind the by-value `Context`; handlers do not retain a
+outgoing helpers move behind the by-value `ServerContext`; handlers do not retain a
 raw sender.
 
 This call shape deliberately revises ADR 0003's `&self` receiver and ADR
-0009's `&Context` parameter. It preserves their concurrency and explicit
+0009's `&ServerContext` parameter. It preserves their concurrency and explicit
 dependency decisions: the framework still shares state through an `Arc`,
-dispatches user work concurrently, and passes `Context` explicitly, but the
+dispatches user work concurrently, and passes `ServerContext` explicitly, but the
 typed free handler receives owned clones of both handles. ADR 0006's
 framework-owned `LspError` and unit-returning notifications remain unchanged;
 its `Option<T>` is now carried by the request marker's exact `ResultType`

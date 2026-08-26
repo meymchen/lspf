@@ -10,7 +10,7 @@ use lspf::types::{
     DocumentOnTypeFormattingParams, DocumentRangeFormattingOptions, DocumentRangeFormattingParams,
     TextEdit,
 };
-use lspf::{CancellationToken, Context, LspError, Server};
+use lspf::{CancellationToken, LspError, Server, ServerContext};
 
 struct State;
 
@@ -38,7 +38,7 @@ fn format_tables(text: &str, first_line: usize, last_line: usize) -> Vec<TextEdi
 
 async fn document_formatting(
     _: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     params: DocumentFormattingParams,
     _: CancellationToken,
 ) -> Result<Option<Vec<TextEdit>>, LspError> {
@@ -48,7 +48,7 @@ async fn document_formatting(
 
 async fn range_formatting(
     _: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     params: DocumentRangeFormattingParams,
     _: CancellationToken,
 ) -> Result<Option<Vec<TextEdit>>, LspError> {
@@ -62,7 +62,7 @@ async fn range_formatting(
 
 async fn on_type_formatting(
     _: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     params: DocumentOnTypeFormattingParams,
     _: CancellationToken,
 ) -> Result<Option<Vec<TextEdit>>, LspError> {

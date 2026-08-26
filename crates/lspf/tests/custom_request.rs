@@ -20,7 +20,7 @@ use tokio::sync::mpsc;
 
 use lspf::types::request::Request;
 use lspf::{
-    Context, RawMessage, RequestId, Server, Transport, TransportError, TransportReader,
+    RawMessage, RequestId, Server, ServerContext, Transport, TransportError, TransportReader,
     TransportWriter,
 };
 
@@ -58,7 +58,7 @@ struct AppState {
 
 async fn greet(
     state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     params: GreetParams,
     _ct: lspf::CancellationToken,
 ) -> Result<GreetResult, lspf::LspError> {

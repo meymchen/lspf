@@ -14,15 +14,15 @@ use lspf::types::{
     TextEdit,
 };
 use lspf::{
-    BuildError, CancellationToken, Context, LspError, RawMessage, RequestId, Server, Transport,
-    TransportError, TransportReader, TransportWriter,
+    BuildError, CancellationToken, LspError, RawMessage, RequestId, Server, ServerContext,
+    Transport, TransportError, TransportReader, TransportWriter,
 };
 
 struct AppState;
 
 async fn format_document(
     _: Arc<AppState>,
-    _: Context,
+    _: ServerContext,
     _: DocumentFormattingParams,
     _: CancellationToken,
 ) -> Result<Option<Vec<TextEdit>>, LspError> {
@@ -34,7 +34,7 @@ async fn format_document(
 
 async fn document_colors(
     _: Arc<AppState>,
-    _: Context,
+    _: ServerContext,
     _: DocumentColorParams,
     _: CancellationToken,
 ) -> Result<Vec<ColorInformation>, LspError> {
@@ -51,7 +51,7 @@ async fn document_colors(
 
 async fn color_presentations(
     _: Arc<AppState>,
-    _: Context,
+    _: ServerContext,
     _: ColorPresentationParams,
     _: CancellationToken,
 ) -> Result<Vec<ColorPresentation>, LspError> {

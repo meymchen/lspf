@@ -21,13 +21,13 @@ shape as a custom request handler.
 use std::sync::Arc;
 
 use lspf::types::{Hover, HoverParams};
-use lspf::{CancellationToken, Context, LspError, Server};
+use lspf::{CancellationToken, ServerContext, LspError, Server};
 
 struct State;
 
 async fn hover(
     _state: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     params: HoverParams,
     _ct: CancellationToken,
 ) -> Result<Option<Hover>, LspError> {
@@ -61,11 +61,11 @@ capability knob:
 ```rust
 # use std::sync::Arc;
 # use lspf::types::{CompletionOptions, CompletionParams, CompletionResponse};
-# use lspf::{CancellationToken, Context, LspError, Server};
+# use lspf::{CancellationToken, ServerContext, LspError, Server};
 # struct State;
 # async fn complete(
 #     _state: Arc<State>,
-#     _ctx: Context,
+#     _ctx: ServerContext,
 #     _params: CompletionParams,
 #     _ct: CancellationToken,
 # ) -> Result<Option<CompletionResponse>, LspError> {
@@ -92,16 +92,16 @@ provider into an options object carrying `resolveProvider: true`:
 ```rust
 # use std::sync::Arc;
 # use lspf::types::{CompletionItem, CompletionOptions, CompletionParams, CompletionResponse};
-# use lspf::{CancellationToken, Context, LspError, Server};
+# use lspf::{CancellationToken, ServerContext, LspError, Server};
 # struct State;
 # async fn complete(
-#     _state: Arc<State>, _ctx: Context, _params: CompletionParams, _ct: CancellationToken,
+#     _state: Arc<State>, _ctx: ServerContext, _params: CompletionParams, _ct: CancellationToken,
 # ) -> Result<Option<CompletionResponse>, LspError> {
 #     Ok(None)
 # }
 async fn resolve(
     _state: Arc<State>,
-    _ctx: Context,
+    _ctx: ServerContext,
     item: CompletionItem,
     _ct: CancellationToken,
 ) -> Result<CompletionItem, LspError> {
@@ -143,10 +143,10 @@ never a runtime surprise or a silent last-write-wins:
 ```rust
 # use std::sync::Arc;
 # use lspf::types::CompletionItem;
-# use lspf::{CancellationToken, Context, LspError, Server};
+# use lspf::{CancellationToken, ServerContext, LspError, Server};
 # struct State;
 # async fn resolve(
-#     _state: Arc<State>, _ctx: Context, item: CompletionItem, _ct: CancellationToken,
+#     _state: Arc<State>, _ctx: ServerContext, item: CompletionItem, _ct: CancellationToken,
 # ) -> Result<CompletionItem, LspError> {
 #     Ok(item)
 # }
@@ -172,15 +172,15 @@ either commits the whole transaction or fails initialization:
 ```rust
 # use std::sync::Arc;
 # use lspf::types::{CompletionItem, CompletionParams, CompletionResponse};
-# use lspf::{CancellationToken, Context, LspError, Server};
+# use lspf::{CancellationToken, ServerContext, LspError, Server};
 # struct State;
 # async fn complete(
-#     _state: Arc<State>, _ctx: Context, _params: CompletionParams, _ct: CancellationToken,
+#     _state: Arc<State>, _ctx: ServerContext, _params: CompletionParams, _ct: CancellationToken,
 # ) -> Result<Option<CompletionResponse>, LspError> {
 #     Ok(None)
 # }
 # async fn resolve(
-#     _state: Arc<State>, _ctx: Context, item: CompletionItem, _ct: CancellationToken,
+#     _state: Arc<State>, _ctx: ServerContext, item: CompletionItem, _ct: CancellationToken,
 # ) -> Result<CompletionItem, LspError> {
 #     Ok(item)
 # }
@@ -208,7 +208,7 @@ let server = Server::builder(State)
 ## Workspace and Documents ownership
 
 The framework owns the connection's [`Workspace`] and [`Documents`]; user
-state never holds either. Handlers reach both through the [`Context`]
+state never holds either. Handlers reach both through the [`ServerContext`]
 parameter: `ctx.workspace()` and `ctx.documents()` — the read-only
 [`DocumentsView`], a view over the store only the protocol engine's built-in
 document-sync handlers ever mutate.
@@ -222,11 +222,11 @@ handler sees the current connection state:
 
 ```rust
 # use std::sync::Arc;
-# use lspf::{CancellationToken, Context, LspError, Server};
+# use lspf::{CancellationToken, ServerContext, LspError, Server};
 # struct State;
 async fn roots(
     _state: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     _args: Vec<String>,
     _ct: CancellationToken,
 ) -> Result<Vec<(String, String)>, LspError> {
@@ -262,11 +262,11 @@ decodes as an empty array) and returns `Output` as the command result:
 
 ```rust
 # use std::sync::Arc;
-# use lspf::{CancellationToken, Context, LspError, Server};
+# use lspf::{CancellationToken, ServerContext, LspError, Server};
 # struct State;
 async fn count_words(
     _state: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     args: Vec<String>,
     _ct: CancellationToken,
 ) -> Result<usize, LspError> {
@@ -350,7 +350,7 @@ limit, and `Io` for the underlying read error.
 [`Workspace`]: https://docs.rs/lspf/latest/lspf/struct.Workspace.html
 [`Documents`]: https://docs.rs/lspf/latest/lspf/struct.DocumentsView.html
 [`DocumentsView`]: https://docs.rs/lspf/latest/lspf/struct.DocumentsView.html
-[`Context`]: https://docs.rs/lspf/latest/lspf/struct.Context.html
+[`ServerContext`]: https://docs.rs/lspf/latest/lspf/struct.ServerContext.html
 [`FileProvider`]: https://docs.rs/lspf/latest/lspf/trait.FileProvider.html
 [`MemoryFileProvider`]: https://docs.rs/lspf/latest/lspf/struct.MemoryFileProvider.html
 [`WorkspaceError`]: https://docs.rs/lspf/latest/lspf/enum.WorkspaceError.html

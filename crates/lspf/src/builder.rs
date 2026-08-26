@@ -43,7 +43,7 @@ use tracing::warn;
 use crate::FileProvider;
 use crate::capability::{CapabilityBuilder, GeneratedCapabilities};
 use crate::codec::erase_value;
-use crate::context::Context;
+use crate::context::ServerContext;
 use crate::error::{BuildError, LspError};
 use crate::features::{FeatureSpec, NotificationFeatureSpec};
 use crate::file_provider::{SharedFileProvider, erase};
@@ -204,7 +204,7 @@ where
 /// the success value once. Malformed parameters become
 /// [`LspError::InvalidParams`] without ever calling the typed handler.
 pub(crate) type ErasedRequestHandler<S> =
-    Box<dyn SharedHandler<(Arc<S>, Context, Value, CancellationToken), HandlerFuture>>;
+    Box<dyn SharedHandler<(Arc<S>, ServerContext, Value, CancellationToken), HandlerFuture>>;
 
 /// A type-erased notification handler stored in the frozen [`Router`].
 ///
@@ -212,7 +212,7 @@ pub(crate) type ErasedRequestHandler<S> =
 /// it encodes nothing: notifications have no response. Malformed parameters are
 /// logged and dropped without ever calling the typed handler.
 pub(crate) type ErasedNotificationHandler<S> =
-    Box<dyn SharedHandler<(Arc<S>, Context, Value), NotificationFuture>>;
+    Box<dyn SharedHandler<(Arc<S>, ServerContext, Value), NotificationFuture>>;
 
 /// A type-erased command handler stored in the frozen [`Router`].
 ///
@@ -223,7 +223,7 @@ pub(crate) type ErasedNotificationHandler<S> =
 ///
 /// [`ExecuteCommandParams`]: lsp_types::ExecuteCommandParams
 pub(crate) type ErasedCommandHandler<S> =
-    Box<dyn SharedHandler<(Arc<S>, Context, Vec<Value>, CancellationToken), HandlerFuture>>;
+    Box<dyn SharedHandler<(Arc<S>, ServerContext, Vec<Value>, CancellationToken), HandlerFuture>>;
 
 /// The synchronous, run-at-most-once initialization-dependent registration
 /// callback (ADR 0017). It receives read-only `InitializeParams` and a
@@ -240,7 +240,10 @@ type OnInitializeFuture = Pin<Box<dyn TaskFuture<Result<Option<ServerInfo>, LspE
 /// handler shape but returns optional [`ServerInfo`]; it cannot register routes
 /// or replace the generated capabilities.
 pub(crate) type OnInitialize<S> = Box<
-    dyn SharedHandler<(Arc<S>, Context, InitializeParams, CancellationToken), OnInitializeFuture>,
+    dyn SharedHandler<
+            (Arc<S>, ServerContext, InitializeParams, CancellationToken),
+            OnInitializeFuture,
+        >,
 >;
 
 /// The erased `on_initialized` lifecycle hook. It has the notification handler
@@ -248,7 +251,7 @@ pub(crate) type OnInitialize<S> = Box<
 /// resolves to `()`. The engine invokes it at most once, only after the
 /// initialize transaction succeeded.
 pub(crate) type OnInitialized<S> =
-    Box<dyn SharedHandler<(Arc<S>, Context, InitializedParams), NotificationFuture>>;
+    Box<dyn SharedHandler<(Arc<S>, ServerContext, InitializedParams), NotificationFuture>>;
 
 /// The future produced by the erased `on_shutdown` hook. Success permits the
 /// protocol-owned transition into shutting down; an error is returned to the
@@ -258,13 +261,13 @@ type OnShutdownFuture = Pin<Box<dyn TaskFuture<Result<(), LspError>>>>;
 /// The erased `on_shutdown` lifecycle hook (ADR 0018). The LSP request carries
 /// unit parameters, and otherwise has the standard request-handler shape.
 pub(crate) type OnShutdown<S> =
-    Box<dyn SharedHandler<(Arc<S>, Context, (), CancellationToken), OnShutdownFuture>>;
+    Box<dyn SharedHandler<(Arc<S>, ServerContext, (), CancellationToken), OnShutdownFuture>>;
 
 /// The erased `on_exit` lifecycle hook. `exit` carries no parameters, so the
-/// typed hook receives only the shared state and a [`Context`]; it resolves to
+/// typed hook receives only the shared state and a [`ServerContext`]; it resolves to
 /// `()`, which is what keeps the engine's lifecycle-derived [`Outcome`] beyond
 /// its reach.
-pub(crate) type OnExit<S> = Box<dyn SharedHandler<(Arc<S>, Context), NotificationFuture>>;
+pub(crate) type OnExit<S> = Box<dyn SharedHandler<(Arc<S>, ServerContext), NotificationFuture>>;
 
 /// The synchronous, panic-isolated observer for connection-level failures.
 pub(crate) type ErrorHook = crate::failure::ErrorHook;
@@ -276,8 +279,8 @@ fn erase_request<S, R, H, Fut>(handler: H) -> ErasedRequestHandler<S>
 where
     S: Send + Sync + 'static,
     R: Request,
-    H: Fn(Arc<S>, Context, R::Params, CancellationToken) -> Fut
-        + SharedHandler<(Arc<S>, Context, R::Params, CancellationToken), Fut>
+    H: Fn(Arc<S>, ServerContext, R::Params, CancellationToken) -> Fut
+        + SharedHandler<(Arc<S>, ServerContext, R::Params, CancellationToken), Fut>
         + 'static,
     Fut: Future<Output = Result<R::Result, LspError>> + TaskSend + 'static,
 {
@@ -302,8 +305,8 @@ fn erase_notification<S, N, H, Fut>(handler: H) -> ErasedNotificationHandler<S>
 where
     S: Send + Sync + 'static,
     N: Notification,
-    H: Fn(Arc<S>, Context, N::Params) -> Fut
-        + SharedHandler<(Arc<S>, Context, N::Params), Fut>
+    H: Fn(Arc<S>, ServerContext, N::Params) -> Fut
+        + SharedHandler<(Arc<S>, ServerContext, N::Params), Fut>
         + 'static,
     Fut: Future<Output = ()> + TaskSend + 'static,
 {
@@ -365,11 +368,11 @@ impl<S: Send + Sync + 'static> Registrations<S> {
     fn add_feature<F, H, Fut>(&mut self, spec: F, handler: H) -> Result<(), BuildError>
     where
         F: FeatureSpec,
-        H: Fn(Arc<S>, Context, <F::Marker as Request>::Params, CancellationToken) -> Fut
+        H: Fn(Arc<S>, ServerContext, <F::Marker as Request>::Params, CancellationToken) -> Fut
             + SharedHandler<
                 (
                     Arc<S>,
-                    Context,
+                    ServerContext,
                     <F::Marker as Request>::Params,
                     CancellationToken,
                 ),
@@ -387,8 +390,8 @@ impl<S: Send + Sync + 'static> Registrations<S> {
     fn add_request<R, H, Fut>(&mut self, handler: H) -> Result<(), BuildError>
     where
         R: Request,
-        H: Fn(Arc<S>, Context, R::Params, CancellationToken) -> Fut
-            + SharedHandler<(Arc<S>, Context, R::Params, CancellationToken), Fut>
+        H: Fn(Arc<S>, ServerContext, R::Params, CancellationToken) -> Fut
+            + SharedHandler<(Arc<S>, ServerContext, R::Params, CancellationToken), Fut>
             + 'static,
         Fut: Future<Output = Result<R::Result, LspError>> + TaskSend + 'static,
     {
@@ -419,8 +422,8 @@ impl<S: Send + Sync + 'static> Registrations<S> {
     fn add_notification<N, H, Fut>(&mut self, handler: H) -> Result<(), BuildError>
     where
         N: Notification,
-        H: Fn(Arc<S>, Context, N::Params) -> Fut
-            + SharedHandler<(Arc<S>, Context, N::Params), Fut>
+        H: Fn(Arc<S>, ServerContext, N::Params) -> Fut
+            + SharedHandler<(Arc<S>, ServerContext, N::Params), Fut>
             + 'static,
         Fut: Future<Output = ()> + TaskSend + 'static,
     {
@@ -436,8 +439,8 @@ impl<S: Send + Sync + 'static> Registrations<S> {
     fn add_feature_notification<F, H, Fut>(&mut self, spec: F, handler: H) -> Result<(), BuildError>
     where
         F: NotificationFeatureSpec,
-        H: Fn(Arc<S>, Context, <F::Marker as Notification>::Params) -> Fut
-            + SharedHandler<(Arc<S>, Context, <F::Marker as Notification>::Params), Fut>
+        H: Fn(Arc<S>, ServerContext, <F::Marker as Notification>::Params) -> Fut
+            + SharedHandler<(Arc<S>, ServerContext, <F::Marker as Notification>::Params), Fut>
             + 'static,
         Fut: Future<Output = ()> + TaskSend + 'static,
     {
@@ -479,8 +482,8 @@ impl<S: Send + Sync + 'static> Registrations<S> {
     where
         Args: DeserializeOwned + TaskSend + 'static,
         Output: Serialize + 'static,
-        H: Fn(Arc<S>, Context, Args, CancellationToken) -> Fut
-            + SharedHandler<(Arc<S>, Context, Args, CancellationToken), Fut>
+        H: Fn(Arc<S>, ServerContext, Args, CancellationToken) -> Fut
+            + SharedHandler<(Arc<S>, ServerContext, Args, CancellationToken), Fut>
             + 'static,
         Fut: Future<Output = Result<Output, LspError>> + TaskSend + 'static,
     {
@@ -752,11 +755,11 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
     pub fn feature<F, H, Fut>(mut self, spec: F, handler: H) -> Self
     where
         F: FeatureSpec,
-        H: Fn(Arc<S>, Context, <F::Marker as Request>::Params, CancellationToken) -> Fut
+        H: Fn(Arc<S>, ServerContext, <F::Marker as Request>::Params, CancellationToken) -> Fut
             + SharedHandler<
                 (
                     Arc<S>,
-                    Context,
+                    ServerContext,
                     <F::Marker as Request>::Params,
                     CancellationToken,
                 ),
@@ -775,7 +778,7 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
     /// The marker `R` implements [`lspf::types::request::Request`](crate::types)
     /// (lspf's re-export of `lsp_types::request::Request`) and thereby fixes
     /// the wire method, parameter type, and result type used by dispatch. The
-    /// handler receives the shared application state, a [`Context`], the
+    /// handler receives the shared application state, a [`ServerContext`], the
     /// decoded parameters, and a request-scoped [`CancellationToken`].
     ///
     /// Custom requests add nothing to `ServerCapabilities`. Registering two
@@ -784,8 +787,8 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
     pub fn request<R, H, Fut>(mut self, handler: H) -> Self
     where
         R: Request,
-        H: Fn(Arc<S>, Context, R::Params, CancellationToken) -> Fut
-            + SharedHandler<(Arc<S>, Context, R::Params, CancellationToken), Fut>
+        H: Fn(Arc<S>, ServerContext, R::Params, CancellationToken) -> Fut
+            + SharedHandler<(Arc<S>, ServerContext, R::Params, CancellationToken), Fut>
             + 'static,
         Fut: Future<Output = Result<R::Result, LspError>> + TaskSend + 'static,
     {
@@ -801,7 +804,7 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
     /// [`lspf::types::notification::Notification`](crate::types) (lspf's
     /// re-export of `lsp_types::notification::Notification`) and fixes the wire
     /// method and parameter type. The handler receives the shared application
-    /// state, a [`Context`], and the decoded parameters. A notification has no
+    /// state, a [`ServerContext`], and the decoded parameters. A notification has no
     /// response, so the handler returns `()` and there is no cancellation token.
     ///
     /// Custom notifications add nothing to `ServerCapabilities`. Malformed
@@ -811,8 +814,8 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
     pub fn notification<N, H, Fut>(mut self, handler: H) -> Self
     where
         N: Notification,
-        H: Fn(Arc<S>, Context, N::Params) -> Fut
-            + SharedHandler<(Arc<S>, Context, N::Params), Fut>
+        H: Fn(Arc<S>, ServerContext, N::Params) -> Fut
+            + SharedHandler<(Arc<S>, ServerContext, N::Params), Fut>
             + 'static,
         Fut: Future<Output = ()> + TaskSend + 'static,
     {
@@ -839,8 +842,8 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
     pub fn feature_notification<F, H, Fut>(mut self, spec: F, handler: H) -> Self
     where
         F: NotificationFeatureSpec,
-        H: Fn(Arc<S>, Context, <F::Marker as Notification>::Params) -> Fut
-            + SharedHandler<(Arc<S>, Context, <F::Marker as Notification>::Params), Fut>
+        H: Fn(Arc<S>, ServerContext, <F::Marker as Notification>::Params) -> Fut
+            + SharedHandler<(Arc<S>, ServerContext, <F::Marker as Notification>::Params), Fut>
             + 'static,
         Fut: Future<Output = ()> + TaskSend + 'static,
     {
@@ -857,7 +860,7 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
     /// `Args` (tuple, struct, and `Vec` types alike), and an absent `arguments`
     /// field decodes as an empty array. The handler's `Output` is returned as
     /// the command result. The
-    /// handler receives the shared application state, a [`Context`], the typed
+    /// handler receives the shared application state, a [`ServerContext`], the typed
     /// arguments, and a request-scoped [`CancellationToken`]. `Args` and
     /// `Output` are bounded by the serialization required to cross the wire.
     ///
@@ -870,8 +873,8 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
     where
         Args: DeserializeOwned + TaskSend + 'static,
         Output: Serialize + 'static,
-        H: Fn(Arc<S>, Context, Args, CancellationToken) -> Fut
-            + SharedHandler<(Arc<S>, Context, Args, CancellationToken), Fut>
+        H: Fn(Arc<S>, ServerContext, Args, CancellationToken) -> Fut
+            + SharedHandler<(Arc<S>, ServerContext, Args, CancellationToken), Fut>
             + 'static,
         Fut: Future<Output = Result<Output, LspError>> + TaskSend + 'static,
     {
@@ -922,8 +925,8 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
     /// [`BuildError::DuplicateLifecycleHook`] reported by [`build`](Self::build).
     pub fn on_initialize<H, Fut>(mut self, hook: H) -> Self
     where
-        H: Fn(Arc<S>, Context, InitializeParams, CancellationToken) -> Fut
-            + SharedHandler<(Arc<S>, Context, InitializeParams, CancellationToken), Fut>
+        H: Fn(Arc<S>, ServerContext, InitializeParams, CancellationToken) -> Fut
+            + SharedHandler<(Arc<S>, ServerContext, InitializeParams, CancellationToken), Fut>
             + 'static,
         Fut: Future<Output = Result<Option<ServerInfo>, LspError>> + TaskSend + 'static,
     {
@@ -946,7 +949,7 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
     /// The hook runs at most once, and only after a successful initialize
     /// transaction: when the client's `initialized` notification arrives while
     /// the connection is running. It receives the shared application state, a
-    /// [`Context`], and the typed [`InitializedParams`]. A notification has no
+    /// [`ServerContext`], and the typed [`InitializedParams`]. A notification has no
     /// response, so the hook resolves to `()`. An `initialized` notification
     /// received before `initialize` or after `shutdown` is ignored without
     /// consuming the hook, and malformed parameters are dropped.
@@ -955,8 +958,8 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
     /// [`BuildError::DuplicateLifecycleHook`] reported by [`build`](Self::build).
     pub fn on_initialized<H, Fut>(mut self, hook: H) -> Self
     where
-        H: Fn(Arc<S>, Context, InitializedParams) -> Fut
-            + SharedHandler<(Arc<S>, Context, InitializedParams), Fut>
+        H: Fn(Arc<S>, ServerContext, InitializedParams) -> Fut
+            + SharedHandler<(Arc<S>, ServerContext, InitializedParams), Fut>
             + 'static,
         Fut: Future<Output = ()> + TaskSend + 'static,
     {
@@ -974,7 +977,7 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
     ///
     /// The hook runs after a successful initialize transaction and before the
     /// protocol engine enters its shutting-down state. It receives the shared
-    /// application state, a live [`Context`], the shutdown request's unit
+    /// application state, a live [`ServerContext`], the shutdown request's unit
     /// parameters, and its [`CancellationToken`]. Returning `Ok(())` permits
     /// shutdown; returning [`LspError`] sends that error response and leaves
     /// the connection running so the client may retry or continue using it.
@@ -983,8 +986,8 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
     /// [`BuildError::DuplicateLifecycleHook`] reported by [`build`](Self::build).
     pub fn on_shutdown<H, Fut>(mut self, hook: H) -> Self
     where
-        H: Fn(Arc<S>, Context, (), CancellationToken) -> Fut
-            + SharedHandler<(Arc<S>, Context, (), CancellationToken), Fut>
+        H: Fn(Arc<S>, ServerContext, (), CancellationToken) -> Fut
+            + SharedHandler<(Arc<S>, ServerContext, (), CancellationToken), Fut>
             + 'static,
         Fut: Future<Output = Result<(), LspError>> + TaskSend + 'static,
     {
@@ -1005,7 +1008,7 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
     /// The hook runs when the peer's `exit` notification arrives after a
     /// successful initialize transaction, before the protocol engine computes
     /// the exit outcome. It receives the shared application state and a
-    /// [`Context`] — the notification-handler shape; `exit` carries no
+    /// [`ServerContext`] — the notification-handler shape; `exit` carries no
     /// parameters — and resolves to `()`, so it cannot override the
     /// lifecycle-derived outcome: the reported LSP exit code is still 0 after
     /// a successful `shutdown` and 1 otherwise. An `exit` received before
@@ -1016,7 +1019,7 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
     /// [`BuildError::DuplicateLifecycleHook`] reported by [`build`](Self::build).
     pub fn on_exit<H, Fut>(mut self, hook: H) -> Self
     where
-        H: Fn(Arc<S>, Context) -> Fut + SharedHandler<(Arc<S>, Context), Fut> + 'static,
+        H: Fn(Arc<S>, ServerContext) -> Fut + SharedHandler<(Arc<S>, ServerContext), Fut> + 'static,
         Fut: Future<Output = ()> + TaskSend + 'static,
     {
         if self.on_exit.is_some() {
@@ -1173,11 +1176,11 @@ impl<S: Send + Sync + 'static> InitializeRegistrar<S> {
     pub fn feature<F, H, Fut>(&mut self, spec: F, handler: H) -> &mut Self
     where
         F: FeatureSpec,
-        H: Fn(Arc<S>, Context, <F::Marker as Request>::Params, CancellationToken) -> Fut
+        H: Fn(Arc<S>, ServerContext, <F::Marker as Request>::Params, CancellationToken) -> Fut
             + SharedHandler<
                 (
                     Arc<S>,
-                    Context,
+                    ServerContext,
                     <F::Marker as Request>::Params,
                     CancellationToken,
                 ),
@@ -1193,8 +1196,8 @@ impl<S: Send + Sync + 'static> InitializeRegistrar<S> {
     pub fn request<R, H, Fut>(&mut self, handler: H) -> &mut Self
     where
         R: Request,
-        H: Fn(Arc<S>, Context, R::Params, CancellationToken) -> Fut
-            + SharedHandler<(Arc<S>, Context, R::Params, CancellationToken), Fut>
+        H: Fn(Arc<S>, ServerContext, R::Params, CancellationToken) -> Fut
+            + SharedHandler<(Arc<S>, ServerContext, R::Params, CancellationToken), Fut>
             + 'static,
         Fut: Future<Output = Result<R::Result, LspError>> + TaskSend + 'static,
     {
@@ -1206,8 +1209,8 @@ impl<S: Send + Sync + 'static> InitializeRegistrar<S> {
     pub fn notification<N, H, Fut>(&mut self, handler: H) -> &mut Self
     where
         N: Notification,
-        H: Fn(Arc<S>, Context, N::Params) -> Fut
-            + SharedHandler<(Arc<S>, Context, N::Params), Fut>
+        H: Fn(Arc<S>, ServerContext, N::Params) -> Fut
+            + SharedHandler<(Arc<S>, ServerContext, N::Params), Fut>
             + 'static,
         Fut: Future<Output = ()> + TaskSend + 'static,
     {
@@ -1219,8 +1222,8 @@ impl<S: Send + Sync + 'static> InitializeRegistrar<S> {
     pub fn feature_notification<F, H, Fut>(&mut self, spec: F, handler: H) -> &mut Self
     where
         F: NotificationFeatureSpec,
-        H: Fn(Arc<S>, Context, <F::Marker as Notification>::Params) -> Fut
-            + SharedHandler<(Arc<S>, Context, <F::Marker as Notification>::Params), Fut>
+        H: Fn(Arc<S>, ServerContext, <F::Marker as Notification>::Params) -> Fut
+            + SharedHandler<(Arc<S>, ServerContext, <F::Marker as Notification>::Params), Fut>
             + 'static,
         Fut: Future<Output = ()> + TaskSend + 'static,
     {
@@ -1236,8 +1239,8 @@ impl<S: Send + Sync + 'static> InitializeRegistrar<S> {
     where
         Args: DeserializeOwned + TaskSend + 'static,
         Output: Serialize + 'static,
-        H: Fn(Arc<S>, Context, Args, CancellationToken) -> Fut
-            + SharedHandler<(Arc<S>, Context, Args, CancellationToken), Fut>
+        H: Fn(Arc<S>, ServerContext, Args, CancellationToken) -> Fut
+            + SharedHandler<(Arc<S>, ServerContext, Args, CancellationToken), Fut>
             + 'static,
         Fut: Future<Output = Result<Output, LspError>> + TaskSend + 'static,
     {
@@ -1337,7 +1340,7 @@ mod tests {
 
     async fn ok_hover(
         _state: Arc<DummyState>,
-        _ctx: Context,
+        _ctx: ServerContext,
         _params: lsp_types::HoverParams,
         _ct: CancellationToken,
     ) -> Result<Option<lsp_types::Hover>, LspError> {
@@ -1346,7 +1349,7 @@ mod tests {
 
     async fn ok_completion(
         _state: Arc<DummyState>,
-        _ctx: Context,
+        _ctx: ServerContext,
         _params: lsp_types::CompletionParams,
         _ct: CancellationToken,
     ) -> Result<Option<lsp_types::CompletionResponse>, LspError> {
@@ -1355,7 +1358,7 @@ mod tests {
 
     async fn ok_resolve(
         _state: Arc<DummyState>,
-        _ctx: Context,
+        _ctx: ServerContext,
         item: lsp_types::CompletionItem,
         _ct: CancellationToken,
     ) -> Result<lsp_types::CompletionItem, LspError> {
@@ -1364,14 +1367,14 @@ mod tests {
 
     async fn noop_command(
         _state: Arc<DummyState>,
-        _ctx: Context,
+        _ctx: ServerContext,
         _args: Vec<String>,
         _ct: CancellationToken,
     ) -> Result<(), LspError> {
         Ok(())
     }
 
-    async fn noop_notification(_state: Arc<DummyState>, _ctx: Context, _params: ()) {}
+    async fn noop_notification(_state: Arc<DummyState>, _ctx: ServerContext, _params: ()) {}
 
     #[test]
     fn duplicate_request_method_is_a_build_error() {
@@ -1391,7 +1394,7 @@ mod tests {
     fn registering_a_reserved_method_is_a_build_error() {
         async fn shutdown_handler(
             _state: Arc<DummyState>,
-            _ctx: Context,
+            _ctx: ServerContext,
             _params: (),
             _ct: CancellationToken,
         ) -> Result<(), LspError> {
@@ -1595,7 +1598,7 @@ mod tests {
     fn commands_alongside_an_explicit_execute_command_handler_conflict() {
         async fn raw_execute(
             _state: Arc<DummyState>,
-            _ctx: Context,
+            _ctx: ServerContext,
             _params: lsp_types::ExecuteCommandParams,
             _ct: CancellationToken,
         ) -> Result<Option<serde_json::Value>, LspError> {
@@ -1764,7 +1767,7 @@ mod tests {
 
     async fn noop_on_initialize(
         _state: Arc<DummyState>,
-        _ctx: Context,
+        _ctx: ServerContext,
         _params: lsp_types::InitializeParams,
         _ct: CancellationToken,
     ) -> Result<Option<lsp_types::ServerInfo>, LspError> {
@@ -1795,21 +1798,21 @@ mod tests {
 
     async fn noop_on_initialized(
         _state: Arc<DummyState>,
-        _ctx: Context,
+        _ctx: ServerContext,
         _params: lsp_types::InitializedParams,
     ) {
     }
 
     async fn noop_on_shutdown(
         _state: Arc<DummyState>,
-        _ctx: Context,
+        _ctx: ServerContext,
         _params: (),
         _ct: CancellationToken,
     ) -> Result<(), LspError> {
         Ok(())
     }
 
-    async fn noop_on_exit(_state: Arc<DummyState>, _ctx: Context) {}
+    async fn noop_on_exit(_state: Arc<DummyState>, _ctx: ServerContext) {}
 
     #[test]
     fn duplicate_on_initialized_is_a_build_error() {
@@ -1878,7 +1881,7 @@ mod tests {
 
     async fn ok_workspace_symbol(
         _state: Arc<DummyState>,
-        _ctx: Context,
+        _ctx: ServerContext,
         _params: lsp_types::WorkspaceSymbolParams,
         _ct: CancellationToken,
     ) -> Result<Option<lsp_types::WorkspaceSymbolResponse>, LspError> {
@@ -1887,7 +1890,7 @@ mod tests {
 
     async fn ok_symbol_resolve(
         _state: Arc<DummyState>,
-        _ctx: Context,
+        _ctx: ServerContext,
         symbol: lsp_types::WorkspaceSymbol,
         _ct: CancellationToken,
     ) -> Result<lsp_types::WorkspaceSymbol, LspError> {
@@ -1896,7 +1899,7 @@ mod tests {
 
     async fn ok_will_rename(
         _state: Arc<DummyState>,
-        _ctx: Context,
+        _ctx: ServerContext,
         _params: lsp_types::RenameFilesParams,
         _ct: CancellationToken,
     ) -> Result<Option<lsp_types::WorkspaceEdit>, LspError> {
@@ -1905,7 +1908,7 @@ mod tests {
 
     async fn noop_rename_files(
         _state: Arc<DummyState>,
-        _ctx: Context,
+        _ctx: ServerContext,
         _params: lsp_types::RenameFilesParams,
     ) {
     }
@@ -2065,7 +2068,7 @@ mod tests {
     fn watched_files_feature_registers_a_route_and_contributes_no_capability() {
         async fn noop_watched(
             _state: Arc<DummyState>,
-            _ctx: Context,
+            _ctx: ServerContext,
             _params: lsp_types::DidChangeWatchedFilesParams,
         ) {
         }

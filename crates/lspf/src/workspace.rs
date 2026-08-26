@@ -28,7 +28,7 @@ use crate::uri_key::{UriKey, percent_decode};
 /// Cheap to clone: every copy shares one `Arc`, so clones observe the same
 /// connection state rather than a snapshot of it. The engine owns
 /// construction from `InitializeParams`; user code only reads it through
-/// [`Context::workspace`](crate::Context::workspace).
+/// [`ServerContext::workspace`](crate::ServerContext::workspace).
 #[derive(Debug, Clone)]
 pub struct Workspace {
     inner: Arc<WorkspaceState>,
@@ -47,9 +47,9 @@ struct WorkspaceState {
 }
 
 /// The connection's protocol trace level, shared between the [`Workspace`]
-/// and the connection's [`Client`](crate::Client).
+/// and the connection's [`ClientHandle`](crate::ClientHandle).
 ///
-/// `$/setTrace` writes through the workspace; [`Client::log_trace`](crate::Client::log_trace)
+/// `$/setTrace` writes through the workspace; [`ClientHandle::log_trace`](crate::ClientHandle::log_trace)
 /// reads the same cell to gate its enqueue, so the two never observe
 /// different levels.
 #[derive(Debug, Clone, Default)]
@@ -121,7 +121,7 @@ impl Workspace {
     ///
     /// This test-only constructor gives the workspace a private trace cell;
     /// the engine uses [`Workspace::from_params_with_provider`] so the cell
-    /// is the one the connection's [`Client`](crate::Client) reads.
+    /// is the one the connection's [`ClientHandle`](crate::ClientHandle) reads.
     #[cfg(test)]
     pub(crate) fn from_params(params: &InitializeParams, documents: Documents) -> Self {
         Self::from_params_with_provider(
@@ -226,7 +226,7 @@ impl Workspace {
     ///
     /// The workspace owns the document store the engine mutates through its
     /// built-in document-sync handling; user code reads it through this view
-    /// (or [`Context::documents`](crate::Context::documents), which is the
+    /// (or [`ServerContext::documents`](crate::ServerContext::documents), which is the
     /// same view).
     pub fn documents(&self) -> DocumentsView {
         self.inner.documents.view()

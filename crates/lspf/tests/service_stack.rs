@@ -8,8 +8,8 @@ use bytes::Bytes;
 use lspf::types::notification::Notification;
 use lspf::types::request::Request;
 use lspf::{
-    CallKind, Context, IncomingCall, Layer, Next, RawMessage, RequestId, Server, ServiceFuture,
-    ServiceResult, Transport, TransportError, TransportReader, TransportWriter,
+    CallKind, IncomingCall, Layer, Next, RawMessage, RequestId, Server, ServerContext,
+    ServiceFuture, ServiceResult, Transport, TransportError, TransportReader, TransportWriter,
 };
 use serde_json::json;
 use tokio::sync::{Semaphore, mpsc};
@@ -29,7 +29,7 @@ struct AppState {
 
 async fn echo(
     state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     value: String,
     _cancellation: lspf::CancellationToken,
 ) -> Result<String, lspf::LspError> {
@@ -46,7 +46,7 @@ impl Notification for TestNotification {
 
 async fn sometimes_panics(
     _state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     value: String,
     _cancellation: lspf::CancellationToken,
 ) -> Result<String, lspf::LspError> {
@@ -54,7 +54,7 @@ async fn sometimes_panics(
     Ok(value)
 }
 
-async fn notification_sometimes_panics(state: Arc<AppState>, _ctx: Context, value: String) {
+async fn notification_sometimes_panics(state: Arc<AppState>, _ctx: ServerContext, value: String) {
     assert_ne!(value, "notification panic");
     state.events.lock().unwrap().push("later notification");
     state.notification_done.notify_one();
@@ -332,7 +332,7 @@ struct ConcurrencyState;
 
 async fn slow(
     _state: Arc<ConcurrencyState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     value: usize,
     _cancellation: lspf::CancellationToken,
 ) -> Result<usize, lspf::LspError> {
@@ -485,7 +485,7 @@ impl Request for Counted {
 
 async fn counted(
     _state: Arc<ConcurrencyState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     params: CountedParams,
     _cancellation: lspf::CancellationToken,
 ) -> Result<CountedResult, lspf::LspError> {

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- [**breaking**] Rename the handler context to `ServerContext` and the
+  server-to-client peer handle to `ClientHandle`, without compatibility aliases.
 - [**breaking**] Raise the MSRV from Rust 1.96 to 1.98 and pin development and
   CI to the exact Rust 1.98.0 toolchain.
 
@@ -144,7 +146,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expose DocumentsView through post-mutation hooks ([#49](https://github.com/meymchen/lspf/pull/49)) ([#64](https://github.com/meymchen/lspf/pull/64))
 - Converge shutdown, exit, EOF, and writer failure ([#48](https://github.com/meymchen/lspf/pull/48)) ([#63](https://github.com/meymchen/lspf/pull/63))
 - Cancel outgoing requests without registry leaks
-- [WIP] Implement concurrent typed Client requests handling ([#61](https://github.com/meymchen/lspf/pull/61))
-- Send typed Client notifications from handlers ([#60](https://github.com/meymchen/lspf/pull/60))
+- [WIP] Implement concurrent typed ClientHandle requests handling ([#61](https://github.com/meymchen/lspf/pull/61))
+- Send typed ClientHandle notifications from handlers ([#60](https://github.com/meymchen/lspf/pull/60))
 - Run user dispatch through the fixed Service stack ([#59](https://github.com/meymchen/lspf/pull/59))
 - Guarantee exactly-once inbound request completion ([#58](https://github.com/meymchen/lspf/pull/58))

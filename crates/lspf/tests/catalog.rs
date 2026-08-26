@@ -54,7 +54,7 @@ use lspf::types::{
     WorkspaceSymbolOptions,
 };
 use lspf::{
-    CancellationToken, Context, LspError, Outcome, RawMessage, RequestId, Server, Transport,
+    CancellationToken, LspError, Outcome, RawMessage, RequestId, Server, ServerContext, Transport,
     TransportError, TransportReader, TransportWriter,
 };
 
@@ -70,7 +70,7 @@ macro_rules! request_handlers {
         $(
             async fn $name(
                 _state: Arc<AppState>,
-                _ctx: Context,
+                _ctx: ServerContext,
                 _params: <$marker as Request>::Params,
                 _ct: CancellationToken,
             ) -> Result<<$marker as Request>::Result, LspError> {
@@ -128,7 +128,7 @@ request_handlers! {
 /// for result structs `lsp-types` does not give a `Default` impl.
 async fn resolve_completion(
     _state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     item: CompletionItem,
     _ct: CancellationToken,
 ) -> Result<CompletionItem, LspError> {
@@ -137,7 +137,7 @@ async fn resolve_completion(
 
 async fn resolve_code_action(
     _state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     action: CodeAction,
     _ct: CancellationToken,
 ) -> Result<CodeAction, LspError> {
@@ -146,7 +146,7 @@ async fn resolve_code_action(
 
 async fn resolve_code_lens(
     _state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     lens: CodeLens,
     _ct: CancellationToken,
 ) -> Result<CodeLens, LspError> {
@@ -155,7 +155,7 @@ async fn resolve_code_lens(
 
 async fn resolve_document_link(
     _state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     link: DocumentLink,
     _ct: CancellationToken,
 ) -> Result<DocumentLink, LspError> {
@@ -164,7 +164,7 @@ async fn resolve_document_link(
 
 async fn resolve_inlay_hint(
     _state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     hint: InlayHint,
     _ct: CancellationToken,
 ) -> Result<InlayHint, LspError> {
@@ -173,7 +173,7 @@ async fn resolve_inlay_hint(
 
 async fn resolve_workspace_symbol(
     _state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     symbol: WorkspaceSymbol,
     _ct: CancellationToken,
 ) -> Result<WorkspaceSymbol, LspError> {
@@ -182,7 +182,7 @@ async fn resolve_workspace_symbol(
 
 async fn document_diagnostic(
     _state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     _params: <DocumentDiagnosticRequest as Request>::Params,
     _ct: CancellationToken,
 ) -> Result<DocumentDiagnosticReportResult, LspError> {
@@ -193,7 +193,7 @@ async fn document_diagnostic(
 
 async fn workspace_diagnostic(
     _state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     _params: <WorkspaceDiagnosticRequest as Request>::Params,
     _ct: CancellationToken,
 ) -> Result<WorkspaceDiagnosticReportResult, LspError> {
@@ -208,7 +208,7 @@ macro_rules! notification_handlers {
         $(
             async fn $name(
                 _state: Arc<AppState>,
-                _ctx: Context,
+                _ctx: ServerContext,
                 _params: <$marker as Notification>::Params,
             ) {
             }
@@ -233,7 +233,7 @@ notification_handlers! {
 
 async fn noop_command(
     _state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     _args: Vec<String>,
     _ct: CancellationToken,
 ) -> Result<(), LspError> {
@@ -259,14 +259,14 @@ impl Notification for CatalogNotice {
 
 async fn custom_request(
     _state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     _params: Value,
     _ct: CancellationToken,
 ) -> Result<Value, LspError> {
     Ok(json!(null))
 }
 
-async fn custom_notification(_state: Arc<AppState>, _ctx: Context, _params: Value) {}
+async fn custom_notification(_state: Arc<AppState>, _ctx: ServerContext, _params: Value) {}
 
 // --- Fixed options for the whole catalog --------------------------------------
 
@@ -756,7 +756,7 @@ async fn the_full_catalog_keeps_command_registration_order() {
 /// Enabling the `proposed` Cargo feature must not move the stable catalog
 /// boundary (issue #108): the full-catalog capability bytes stay pinned to the
 /// fixture and no notebook capability appears. The proposed refresh helpers
-/// are outgoing-only `Client` calls, so the Router catalog cannot change.
+/// are outgoing-only `ClientHandle` calls, so the Router catalog cannot change.
 #[cfg(feature = "proposed")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_proposed_feature_leaves_the_stable_catalog_untouched() {

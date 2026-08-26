@@ -1,7 +1,7 @@
 //! End-to-end coverage for the typed command wire contract (issues #40, #70).
 //!
 //! Commands register beneath the built-in `workspace/executeCommand` entry and
-//! dispatch by name with typed arguments, a typed result, a [`Context`], and a
+//! dispatch by name with typed arguments, a typed result, a [`ServerContext`], and a
 //! request-scoped cancellation token. Tuple, struct, and `Vec` argument types
 //! all decode from the complete LSP `arguments` array, an absent `arguments`
 //! field is an empty array, decode failures and unknown names are
@@ -22,8 +22,8 @@ use serde_json::json;
 use tokio::sync::{Mutex, mpsc, oneshot};
 
 use lspf::{
-    CancellationToken, Context, LspError, RawMessage, RequestId, Server, Transport, TransportError,
-    TransportReader, TransportWriter,
+    CancellationToken, LspError, RawMessage, RequestId, Server, ServerContext, Transport,
+    TransportError, TransportReader, TransportWriter,
 };
 
 /// Application state shared as `Arc<S>` by every handler on the connection.
@@ -38,7 +38,7 @@ struct AppState {
 /// state-derived bias.
 async fn add(
     state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     args: (i64, i64),
     ct: CancellationToken,
 ) -> Result<i64, LspError> {
@@ -58,7 +58,7 @@ struct RepeatArgs {
 /// A command taking a struct argument.
 async fn repeat(
     _state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     args: RepeatArgs,
     _ct: CancellationToken,
 ) -> Result<String, LspError> {
@@ -68,7 +68,7 @@ async fn repeat(
 /// A command taking a `Vec` argument.
 async fn total(
     state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     args: Vec<i64>,
     _ct: CancellationToken,
 ) -> Result<i64, LspError> {
@@ -78,7 +78,7 @@ async fn total(
 /// A no-op command used to fill the advertised command list.
 async fn noop(
     _state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     _args: (),
     _ct: CancellationToken,
 ) -> Result<(), LspError> {
@@ -95,7 +95,7 @@ struct CancelState {
 /// A command that parks until its request cancellation token fires.
 async fn hang(
     state: Arc<CancelState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     _args: Vec<serde_json::Value>,
     ct: CancellationToken,
 ) -> Result<(), LspError> {

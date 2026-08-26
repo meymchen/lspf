@@ -15,7 +15,7 @@ use crate::builder::Router;
 use crate::failure::{ConnectionDirection, ConnectionFailureCategory, FailureReporter};
 use crate::sync::Semaphore;
 use crate::telemetry::{Deadline, DeadlineAction, Direction, Instant};
-use crate::{Context, LspError, RequestId, TaskFuture, TaskSend};
+use crate::{LspError, RequestId, ServerContext, TaskFuture, TaskSend};
 
 /// Whether a normalized user call came from a request or a notification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,7 +39,7 @@ pub struct IncomingCall<S> {
     method: String,
     request_id: Option<RequestId>,
     params: Value,
-    context: Context,
+    context: ServerContext,
     state: Arc<S>,
     handler_timeout: Option<HandlerTimeout>,
 }
@@ -128,7 +128,7 @@ impl<S> IncomingCall<S> {
         method: String,
         request_id: RequestId,
         params: Value,
-        context: Context,
+        context: ServerContext,
         state: Arc<S>,
         handler_timeout: HandlerTimeout,
     ) -> Self {
@@ -146,7 +146,7 @@ impl<S> IncomingCall<S> {
     pub(crate) fn notification(
         method: String,
         params: Value,
-        context: Context,
+        context: ServerContext,
         state: Arc<S>,
     ) -> Self {
         Self {
@@ -186,7 +186,7 @@ impl<S> IncomingCall<S> {
     }
 
     /// The framework context for this call.
-    pub fn context(&self) -> &Context {
+    pub fn context(&self) -> &ServerContext {
         &self.context
     }
 

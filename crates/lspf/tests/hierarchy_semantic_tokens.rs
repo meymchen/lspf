@@ -19,8 +19,8 @@ use lspf::types::{
     TypeHierarchyPrepareParams, TypeHierarchySubtypesParams, TypeHierarchySupertypesParams,
 };
 use lspf::{
-    BuildError, CancellationToken, Context, LspError, RawMessage, RequestId, Server, Transport,
-    TransportError, TransportReader, TransportWriter,
+    BuildError, CancellationToken, LspError, RawMessage, RequestId, Server, ServerContext,
+    Transport, TransportError, TransportReader, TransportWriter,
 };
 
 struct AppState;
@@ -53,7 +53,7 @@ fn type_item(name: &str) -> TypeHierarchyItem {
 
 async fn call_prepare(
     _: Arc<AppState>,
-    _: Context,
+    _: ServerContext,
     _: CallHierarchyPrepareParams,
     _: CancellationToken,
 ) -> Result<Option<Vec<CallHierarchyItem>>, LspError> {
@@ -62,7 +62,7 @@ async fn call_prepare(
 
 async fn incoming_calls(
     _: Arc<AppState>,
-    _: Context,
+    _: ServerContext,
     _: CallHierarchyIncomingCallsParams,
     _: CancellationToken,
 ) -> Result<Option<Vec<CallHierarchyIncomingCall>>, LspError> {
@@ -74,7 +74,7 @@ async fn incoming_calls(
 
 async fn outgoing_calls(
     _: Arc<AppState>,
-    _: Context,
+    _: ServerContext,
     _: CallHierarchyOutgoingCallsParams,
     _: CancellationToken,
 ) -> Result<Option<Vec<CallHierarchyOutgoingCall>>, LspError> {
@@ -86,7 +86,7 @@ async fn outgoing_calls(
 
 async fn type_prepare(
     _: Arc<AppState>,
-    _: Context,
+    _: ServerContext,
     _: TypeHierarchyPrepareParams,
     _: CancellationToken,
 ) -> Result<Option<Vec<TypeHierarchyItem>>, LspError> {
@@ -95,7 +95,7 @@ async fn type_prepare(
 
 async fn supertypes(
     _: Arc<AppState>,
-    _: Context,
+    _: ServerContext,
     _: TypeHierarchySupertypesParams,
     _: CancellationToken,
 ) -> Result<Option<Vec<TypeHierarchyItem>>, LspError> {
@@ -104,7 +104,7 @@ async fn supertypes(
 
 async fn subtypes(
     _: Arc<AppState>,
-    _: Context,
+    _: ServerContext,
     _: TypeHierarchySubtypesParams,
     _: CancellationToken,
 ) -> Result<Option<Vec<TypeHierarchyItem>>, LspError> {
@@ -126,7 +126,7 @@ fn tokens(result_id: &str) -> SemanticTokens {
 
 async fn semantic_full(
     _: Arc<AppState>,
-    _: Context,
+    _: ServerContext,
     _: SemanticTokensParams,
     _: CancellationToken,
 ) -> Result<Option<SemanticTokensResult>, LspError> {
@@ -135,7 +135,7 @@ async fn semantic_full(
 
 async fn semantic_delta(
     _: Arc<AppState>,
-    _: Context,
+    _: ServerContext,
     _: SemanticTokensDeltaParams,
     _: CancellationToken,
 ) -> Result<Option<SemanticTokensFullDeltaResult>, LspError> {
@@ -154,7 +154,7 @@ async fn semantic_delta(
 
 async fn semantic_range(
     _: Arc<AppState>,
-    _: Context,
+    _: ServerContext,
     _: SemanticTokensRangeParams,
     _: CancellationToken,
 ) -> Result<Option<SemanticTokensRangeResult>, LspError> {

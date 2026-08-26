@@ -49,7 +49,7 @@ pub(crate) enum PendingOutcome {
 ///
 /// Shared through an `Arc` between the `ProtocolEngine` (which inserts entries
 /// before enqueue and completes them on response arrival or session close) and
-/// `Client` handles (which await their specific entry).
+/// `ClientHandle` handles (which await their specific entry).
 #[derive(Clone, Default)]
 pub(crate) struct OutboundRegistry {
     inner: Arc<Mutex<OutboundInner>>,
@@ -112,13 +112,13 @@ pub(crate) enum InsertOutcome {
 /// `$/cancelRequest` notification. Requests that failed before enqueue never
 /// emit one.
 struct PendingGuard {
-    client: Client,
+    client: ClientHandle,
     id: u32,
     enqueued: bool,
 }
 
 impl PendingGuard {
-    fn new(client: Client, id: u32) -> Self {
+    fn new(client: ClientHandle, id: u32) -> Self {
         Self {
             client,
             id,
@@ -819,11 +819,11 @@ impl Notification for TelemetryEvent {
 
 /// A cloneable typed handle for messages sent to the current LSP client.
 ///
-/// A `Client` is connection-scoped. It does not expose the connection's
+/// A `ClientHandle` is connection-scoped. It does not expose the connection's
 /// outbound queue or protocol registries; cloning it only clones a cheap
 /// handle into facilities owned by the protocol engine.
 #[derive(Clone)]
-pub struct Client {
+pub struct ClientHandle {
     outgoing: OutboundQueue,
     outbound: OutboundRegistry,
     outbound_request_timeout: Option<Duration>,
@@ -834,13 +834,15 @@ pub struct Client {
     failure_reporter: crate::failure::FailureReporter,
 }
 
-impl fmt::Debug for Client {
+impl fmt::Debug for ClientHandle {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.debug_struct("Client").finish_non_exhaustive()
+        formatter
+            .debug_struct("ClientHandle")
+            .finish_non_exhaustive()
     }
 }
 
-impl Client {
+impl ClientHandle {
     pub(crate) fn new(
         outgoing: OutboundQueue,
         outbound: OutboundRegistry,
@@ -1153,7 +1155,7 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Behaves exactly as [`Client::request`]: [`ClientError::Serialize`],
+    /// Behaves exactly as [`ClientHandle::request`]: [`ClientError::Serialize`],
     /// [`ClientError::ConnectionClosed`], [`ClientError::OutboundClosed`], [`ClientError::OutboundOverloaded`],
     /// or [`ClientError::IdExhausted`] if the request never reaches the wire;
     /// [`ClientError::Remote`] if the client answers with a JSON-RPC error;
@@ -1178,7 +1180,7 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Behaves exactly as [`Client::request`]: [`ClientError::Serialize`],
+    /// Behaves exactly as [`ClientHandle::request`]: [`ClientError::Serialize`],
     /// [`ClientError::ConnectionClosed`], [`ClientError::OutboundClosed`], [`ClientError::OutboundOverloaded`],
     /// or [`ClientError::IdExhausted`] if the request never reaches the wire;
     /// [`ClientError::Remote`] if the client answers with a JSON-RPC error;
@@ -1204,7 +1206,7 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Behaves exactly as [`Client::request`]: [`ClientError::Serialize`],
+    /// Behaves exactly as [`ClientHandle::request`]: [`ClientError::Serialize`],
     /// [`ClientError::ConnectionClosed`], [`ClientError::OutboundClosed`], [`ClientError::OutboundOverloaded`],
     /// or [`ClientError::IdExhausted`] if the request never reaches the wire;
     /// [`ClientError::Remote`] if the client answers with a JSON-RPC error;
@@ -1232,7 +1234,7 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Behaves exactly as [`Client::request`]: [`ClientError::Serialize`],
+    /// Behaves exactly as [`ClientHandle::request`]: [`ClientError::Serialize`],
     /// [`ClientError::ConnectionClosed`], [`ClientError::OutboundClosed`], [`ClientError::OutboundOverloaded`],
     /// or [`ClientError::IdExhausted`] if the request never reaches the wire;
     /// [`ClientError::Remote`] if the client answers with a JSON-RPC error;
@@ -1259,7 +1261,7 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Behaves exactly as [`Client::request`]: [`ClientError::ConnectionClosed`],
+    /// Behaves exactly as [`ClientHandle::request`]: [`ClientError::ConnectionClosed`],
     /// [`ClientError::OutboundClosed`], [`ClientError::OutboundOverloaded`], or [`ClientError::IdExhausted`] if the
     /// request never reaches the wire; [`ClientError::Remote`] if the client
     /// answers with a JSON-RPC error; [`ClientError::Deserialize`] if the
@@ -1286,7 +1288,7 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Behaves exactly as [`Client::request`]: [`ClientError::Serialize`],
+    /// Behaves exactly as [`ClientHandle::request`]: [`ClientError::Serialize`],
     /// [`ClientError::ConnectionClosed`], [`ClientError::OutboundClosed`], [`ClientError::OutboundOverloaded`],
     /// or [`ClientError::IdExhausted`] if the request never reaches the wire;
     /// [`ClientError::Remote`] if the client answers with a JSON-RPC error;
@@ -1314,7 +1316,7 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Behaves exactly as [`Client::request`]: [`ClientError::Serialize`],
+    /// Behaves exactly as [`ClientHandle::request`]: [`ClientError::Serialize`],
     /// [`ClientError::ConnectionClosed`], [`ClientError::OutboundClosed`], [`ClientError::OutboundOverloaded`],
     /// or [`ClientError::IdExhausted`] if the request never reaches the wire;
     /// [`ClientError::Remote`] if the client answers with a JSON-RPC error;
@@ -1339,7 +1341,7 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Behaves exactly as [`Client::request`]: [`ClientError::ConnectionClosed`],
+    /// Behaves exactly as [`ClientHandle::request`]: [`ClientError::ConnectionClosed`],
     /// [`ClientError::OutboundClosed`], [`ClientError::OutboundOverloaded`], or [`ClientError::IdExhausted`] if the
     /// request never reaches the wire; [`ClientError::Remote`] if the client
     /// answers with a JSON-RPC error; [`ClientError::Deserialize`] if the
@@ -1362,7 +1364,7 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Behaves exactly as [`Client::request`]: [`ClientError::ConnectionClosed`],
+    /// Behaves exactly as [`ClientHandle::request`]: [`ClientError::ConnectionClosed`],
     /// [`ClientError::OutboundClosed`], [`ClientError::OutboundOverloaded`], or [`ClientError::IdExhausted`] if the
     /// request never reaches the wire; [`ClientError::Remote`] if the client
     /// answers with a JSON-RPC error; [`ClientError::Deserialize`] if the
@@ -1384,7 +1386,7 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Behaves exactly as [`Client::request`]: [`ClientError::ConnectionClosed`],
+    /// Behaves exactly as [`ClientHandle::request`]: [`ClientError::ConnectionClosed`],
     /// [`ClientError::OutboundClosed`], [`ClientError::OutboundOverloaded`], or [`ClientError::IdExhausted`] if the
     /// request never reaches the wire; [`ClientError::Remote`] if the client
     /// answers with a JSON-RPC error; [`ClientError::Deserialize`] if the
@@ -1406,7 +1408,7 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Behaves exactly as [`Client::request`]: [`ClientError::ConnectionClosed`],
+    /// Behaves exactly as [`ClientHandle::request`]: [`ClientError::ConnectionClosed`],
     /// [`ClientError::OutboundClosed`], [`ClientError::OutboundOverloaded`], or [`ClientError::IdExhausted`] if the
     /// request never reaches the wire; [`ClientError::Remote`] if the client
     /// answers with a JSON-RPC error; [`ClientError::Deserialize`] if the
@@ -1428,7 +1430,7 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Behaves exactly as [`Client::request`]: [`ClientError::ConnectionClosed`],
+    /// Behaves exactly as [`ClientHandle::request`]: [`ClientError::ConnectionClosed`],
     /// [`ClientError::OutboundClosed`], [`ClientError::OutboundOverloaded`], or [`ClientError::IdExhausted`] if the
     /// request never reaches the wire; [`ClientError::Remote`] if the client
     /// answers with a JSON-RPC error; [`ClientError::Deserialize`] if the
@@ -1455,7 +1457,7 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Behaves exactly as [`Client::request`]: [`ClientError::ConnectionClosed`],
+    /// Behaves exactly as [`ClientHandle::request`]: [`ClientError::ConnectionClosed`],
     /// [`ClientError::OutboundClosed`], [`ClientError::OutboundOverloaded`], or [`ClientError::IdExhausted`] if the
     /// request never reaches the wire; [`ClientError::Remote`] if the client
     /// answers with a JSON-RPC error; [`ClientError::Deserialize`] if the
@@ -1485,7 +1487,7 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Behaves exactly as [`Client::request`]: [`ClientError::ConnectionClosed`],
+    /// Behaves exactly as [`ClientHandle::request`]: [`ClientError::ConnectionClosed`],
     /// [`ClientError::OutboundClosed`], [`ClientError::OutboundOverloaded`], or [`ClientError::IdExhausted`] if the
     /// request never reaches the wire; [`ClientError::Remote`] if the client
     /// answers with a JSON-RPC error; [`ClientError::Deserialize`] if the
@@ -1555,7 +1557,7 @@ impl Client {
 
     /// The connection's shared trace level, handed to the
     /// [`Workspace`](crate::Workspace) when the engine establishes it, so
-    /// `$/setTrace` writes and [`Client::log_trace`] reads observe one cell.
+    /// `$/setTrace` writes and [`ClientHandle::log_trace`] reads observe one cell.
     pub(crate) fn shared_trace(&self) -> SharedTrace {
         self.trace.clone()
     }
@@ -1615,9 +1617,9 @@ mod tests {
         const METHOD: &'static str = "test/fails-to-serialize";
     }
 
-    fn make_client() -> (Client, UnboundedReceiver<RawMessage>) {
+    fn make_client() -> (ClientHandle, UnboundedReceiver<RawMessage>) {
         let (outgoing, receiver) = OutboundQueue::new(crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD);
-        let client = Client::new(outgoing, OutboundRegistry::default(), None);
+        let client = ClientHandle::new(outgoing, OutboundRegistry::default(), None);
         (client, receiver)
     }
 
@@ -1625,7 +1627,7 @@ mod tests {
     fn serialization_failure_is_reported_without_enqueuing() {
         let (outgoing, mut receiver) =
             OutboundQueue::new(crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD);
-        let client = Client::new(outgoing, OutboundRegistry::default(), None);
+        let client = ClientHandle::new(outgoing, OutboundRegistry::default(), None);
 
         assert!(matches!(
             client.notify::<FailingNotification>(FailsToSerialize),
@@ -1638,7 +1640,7 @@ mod tests {
     fn closed_connection_is_reported_before_enqueue() {
         let (outgoing, mut receiver) =
             OutboundQueue::new(crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD);
-        let client = Client::new(outgoing, OutboundRegistry::default(), None);
+        let client = ClientHandle::new(outgoing, OutboundRegistry::default(), None);
         client.close_connection();
 
         assert!(matches!(
@@ -1652,7 +1654,7 @@ mod tests {
     fn outbound_closure_rejects_every_new_notification() {
         let (outgoing, mut receiver) =
             OutboundQueue::new(crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD);
-        let client = Client::new(outgoing, OutboundRegistry::default(), None);
+        let client = ClientHandle::new(outgoing, OutboundRegistry::default(), None);
         client.close_connection();
         client.close_outbound();
 
@@ -2075,7 +2077,7 @@ mod tests {
         // A client whose outbound queue is closed (receiver dropped, so all
         // sends fail).
         let (outgoing, receiver) = OutboundQueue::new(crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD);
-        let client = Client::new(outgoing, OutboundRegistry::default(), None);
+        let client = ClientHandle::new(outgoing, OutboundRegistry::default(), None);
         drop(receiver);
         let client2 = client.clone();
 
@@ -2238,7 +2240,7 @@ mod tests {
     #[test]
     fn ordinary_sends_fail_explicitly_when_the_message_budget_is_full() {
         let (queue, _rx) = OutboundQueue::bounded(1, usize::MAX);
-        let client = Client::new(queue.clone(), OutboundRegistry::default(), None);
+        let client = ClientHandle::new(queue.clone(), OutboundRegistry::default(), None);
 
         client
             .notify::<TestNotification>(json!({ "value": 1 }))
@@ -2292,7 +2294,7 @@ mod tests {
     #[tokio::test]
     async fn an_overloaded_request_fails_explicitly_without_leaking_its_registry_entry() {
         let (queue, _rx) = OutboundQueue::bounded(1, usize::MAX);
-        let client = Client::new(queue, OutboundRegistry::default(), None);
+        let client = ClientHandle::new(queue, OutboundRegistry::default(), None);
         client
             .notify::<TestNotification>(json!({ "value": 1 }))
             .unwrap();
@@ -2306,7 +2308,7 @@ mod tests {
     #[tokio::test]
     async fn cancellation_that_cannot_fit_requests_the_failure_close_path() {
         let (queue, _rx) = OutboundQueue::bounded(1, usize::MAX);
-        let client = Client::new(queue.clone(), OutboundRegistry::default(), None);
+        let client = ClientHandle::new(queue.clone(), OutboundRegistry::default(), None);
         {
             let pending = client.request::<TestRequest>(json!({}));
             futures_util::pin_mut!(pending);
