@@ -30,9 +30,19 @@ pub enum Error {
     RuntimeRequired,
 }
 
-/// A failure to enqueue a typed server-to-client operation.
+/// A typed peer operation or client-endpoint lifecycle transition failed.
 #[derive(Debug, Error)]
 pub enum ClientError {
+    /// The operation is not permitted in the client endpoint's current LSP
+    /// lifecycle state.
+    #[error("client operation `{operation}` is invalid while {state}")]
+    InvalidLifecycle {
+        /// The attempted LSP method or local lifecycle operation.
+        operation: &'static str,
+        /// The lifecycle state that rejected it.
+        state: &'static str,
+    },
+
     /// The typed parameters could not be encoded as JSON.
     #[error("failed to serialize client parameters: {0}")]
     Serialize(#[source] serde_json::Error),
