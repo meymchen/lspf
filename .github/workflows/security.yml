@@ -35,5 +35,7 @@ jobs:
         run: bash ci/test-release-artifacts-workflow.sh
       - name: Test Gate A evidence workflow contract
         run: bash ci/test-gate-a-evidence-workflow.sh
+      - name: Test Gate B evidence workflow contract
+        run: bash ci/test-gate-b-evidence-workflow.sh
       - name: Enforce Action pins and minimal job permissions
         run: bash ci/check-workflow-security.sh
