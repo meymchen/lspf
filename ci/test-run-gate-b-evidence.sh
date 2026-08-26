@@ -12,6 +12,10 @@ cat >"$fake_cargo" <<'EOF'
 set -euo pipefail
 
 test_name="${6:?missing exact test name}"
+if [[ ${LSPF_GATE_B_OBSERVATIONS:?missing observation path} != /* ]]; then
+    echo 'Gate B observation path must be absolute' >&2
+    exit 99
+fi
 if [[ $test_name == fixed_budget_floods_and_a_slow_reader_never_exceed_connection_limits ]]; then
     printf '%s\n' '{
       "resources": [
@@ -77,6 +81,11 @@ grep -F "Revision: [$revision](https://github.com/meymchen/lspf/commit/$revision
     "$output_dir/evidence.md" >/dev/null
 grep -F "Passing run: [CI run 4242]($run_url)" "$output_dir/evidence.md" >/dev/null
 grep -F '| `outbound_bytes` | 16384 | 12345 |' "$output_dir/evidence.md" >/dev/null
+
+relative_dir="$(realpath --relative-to="$PWD" "$test_root/relative-evidence")"
+CARGO_BIN="$fake_cargo" bash ci/run-gate-b-evidence.sh \
+    "$revision" "$run_url" "$relative_dir"
+jq -e '.overallResult == "success"' "$relative_dir/evidence.json" >/dev/null
 
 failure_dir="$test_root/failing-evidence"
 if FAIL_TEST=handler_timeout_completes_the_request_exactly_once \

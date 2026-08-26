@@ -25,6 +25,7 @@ if [[ -e $output_dir ]]; then
 fi
 
 mkdir -p "$output_dir"
+output_dir="$(cd "$output_dir" && pwd)"
 observations="$output_dir/observations.json"
 results="$output_dir/results.json"
 commands_log="$output_dir/commands.log"

@@ -83,7 +83,7 @@ jobs:
         run: bash ci/check-public-api.sh
       - name: Upload machine-readable compatibility report
         if: always()
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: public-api-compatibility-report
           path: target/public-api-compatibility/report.json
@@ -232,7 +232,7 @@ jobs:
         run: bash ci/check-test-coverage.sh
       - name: Upload test-coverage reports
         if: always()
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: test-coverage-report
           path: |
@@ -260,7 +260,7 @@ jobs:
           target/gate-b-evidence
       - name: Retain Gate B bounded-resource evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: gate-b-bounded-resource-evidence
           path: target/gate-b-evidence
@@ -298,7 +298,7 @@ jobs:
           target/gate-a-evidence
       - name: Retain Gate A release evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: gate-a-release-evidence
           path: target/gate-a-evidence
