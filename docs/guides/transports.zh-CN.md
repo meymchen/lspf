@@ -30,7 +30,7 @@ lspf = { version = "0.5.2", default-features = false, features = ["tcp"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
-该 crate 要求 Rust 1.96 或更高版本。上例只启用 TCP adapter；使用 stdio 时保留默认
+该 crate 要求 Rust 1.98 或更高版本。上例只启用 TCP adapter；使用 stdio 时保留默认
 feature 即可。
 
 | Feature | 默认启用 | 启用内容 | 公开效果 |

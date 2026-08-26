@@ -140,6 +140,10 @@ impl ConnectionTrace {
         }
     }
 
+    pub(crate) fn id(self) -> u64 {
+        self.id
+    }
+
     pub(crate) fn span(self) -> Span {
         info_span!("connection", connection_id = self.id)
     }

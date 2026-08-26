@@ -134,7 +134,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ```
 
-该 crate 要求 Rust 1.96 或更高版本。快速开始使用默认启用的 `stdio` feature；
+该 crate 要求 Rust 1.98 或更高版本。快速开始使用默认启用的 `stdio` feature；
 如需其他传输，请选择对应的 feature 组合。
 
 应用代码直接引用的 crate 都应列为直接依赖。上例中的 `tokio`、`tracing` 和
@@ -332,6 +332,34 @@ connection 与 call identity。
 默认 event 不会记录 request parameter、response result、Document text 或序列化后的
 wire envelope。应用可以在 handler 内添加自己的 event，但也应把这些 payload 视为
 敏感数据。
+
+如果 metrics 或 alerting 不应依赖 tracing 输出，可在 Server 上注册一个连接错误
+hook：
+
+```rust
+struct State;
+
+let _server = lspf::Server::builder(State)
+    .on_error(|failure| {
+        eprintln!(
+            "connection {}: {:?}",
+            failure.context.connection_id,
+            failure.category,
+        );
+    })
+    .build()
+    .expect("server configuration is valid");
+```
+
+`ConnectionFailureCategory` 区分 framing、protocol、Transport、panic-isolation、
+overload 与 close failure。context 包含 connection ID，以及已知的 direction、method
+与 request ID；不会包含 parameter、result、Document text、wire data、panic payload
+或底层 error message。numeric request ID 会保留原值；peer-controlled string ID
+只会显示为 `ConnectionRequestId::String`，不会暴露内容。method name 只有在它是
+framework-owned、已注册，或由 typed outbound request 在本地声明时才会包含；其他
+peer-controlled method name 会被省略。每个 failure 都在来源处
+报告一次。hook 内的 panic 会被捕获并记录，不能阻止 response 或中断连接清理。
+该 hook 在用户 Layer chain 外观察连接 failure；用户 Layer 仍然只包装用户 dispatch。
 
 服务器初始化后，`vscode-languageclient` 会自动注册 `executeCommandProvider` 宣告的
 四个 Command。扩展 manifest 在 Command Palette 的 `lspf hello` 分类下提供标题。

@@ -21,16 +21,16 @@ but this is not part of the support promise.
 
 ## Rust versions
 
-The minimum supported Rust version (MSRV) is **1.96.0**. The supported compiler
-range is Rust 1.96.0 through the latest stable Rust release. Nightly and beta
+The minimum supported Rust version (MSRV) is **1.98.0**. The supported compiler
+range is Rust 1.98.0 through the latest stable Rust release. Nightly and beta
 toolchains are useful for early warning, but are not supported toolchains.
 
-The workspace `rust-version` field is the source of truth. On Rust 1.96.0, CI
-`feature-contract` compiles every documented feature selection for the Linux
-host and `wasm32-unknown-unknown`. CI `msrv` checks the release-oriented native
-matrix and the whole workspace with default features on the same compiler.
-The other Rust jobs use stable, including CI `native-matrix`, `test`, and
-`wasm`.
+The workspace `rust-version` field is the source of truth. Development and all
+Rust CI jobs pin Rust 1.98.0 through `rust-toolchain.toml` and the shared setup
+action. CI `feature-contract` compiles every documented feature selection for
+the Linux host and `wasm32-unknown-unknown`. CI `msrv` checks the
+release-oriented native matrix and the whole workspace with default features
+on the same compiler.
 
 An MSRV increase is a breaking change. Before 1.0 it may happen only in a new
 minor release; after 1.0 it requires a new major release. The release notes
