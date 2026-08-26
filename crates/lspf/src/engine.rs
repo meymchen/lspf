@@ -458,15 +458,15 @@ where
     where
         Rd: TransportReader,
     {
-        let requested = self.protocol.close.requested();
-        let outbound_failed = self.protocol.out_tx.failure();
+        let requested = self.protocol.close_requested();
+        let outbound_failed = self.protocol.outbound_failed();
         loop {
             let msg = select_biased! {
                 // `biased`: an already-requested close wins over a message that
                 // happens to be ready, so the ending stays deterministic.
                 () = requested.cancelled().fuse() => break,
                 () = outbound_failed.cancelled().fuse() => {
-                    self.protocol.close.request(CloseCause::WriterFailed);
+                    self.protocol.request_close(CloseCause::WriterFailed);
                     break;
                 },
                 msg = reader.recv().fuse() => msg,
@@ -475,7 +475,7 @@ where
             // its task-owned admission permit before the next request tries to
             // reserve capacity. Finished handles cannot accumulate behind an
             // idle read loop.
-            self.protocol.tasks.reap_finished().await;
+            self.protocol.reap_finished().await;
 
             match msg {
                 Ok(msg) => {
@@ -483,14 +483,14 @@ where
                     match self.dispatch(msg).await {
                         Flow::Continue => {}
                         Flow::Close(cause) => {
-                            self.protocol.close.request(cause);
+                            self.protocol.request_close(cause);
                             break;
                         }
                     }
                 }
                 Err(TransportError::Closed) => {
                     warn!("transport closed by peer before exit notification");
-                    self.protocol.close.request(CloseCause::ReaderEof);
+                    self.protocol.request_close(CloseCause::ReaderEof);
                     break;
                 }
                 Err(error) => {
@@ -509,14 +509,22 @@ where
                         None,
                         None,
                     );
-                    self.protocol.close.request(CloseCause::ReaderFailed(error));
+                    self.protocol.request_close(CloseCause::ReaderFailed(error));
                     break;
                 }
             }
         }
 
         self.close().await;
-        let cause = final_close_cause(&self.protocol.close, &self.protocol.out_tx);
+        let recorded = self
+            .protocol
+            .take_close_cause()
+            .expect("every path out of the read-loop records its close cause");
+        let cause = if self.protocol.outbound_failed().is_cancelled() {
+            CloseCause::WriterFailed
+        } else {
+            recorded
+        };
         self.trace.connection_closed(cause.as_str());
         cause.into_result()
     }
@@ -530,12 +538,10 @@ where
                 // permit remains attached to the task handle until the engine
                 // reaps it, even if cancellation or close claims the response
                 // gate first.
-                let cancellation_parent =
-                    (method != "initialize").then_some(&self.protocol.cancellation);
-                let reserved = match self.protocol.inbound.reserve_method(
+                let reserved = match self.protocol.reserve_inbound(
                     id.clone(),
                     method.as_ref(),
-                    cancellation_parent,
+                    method != "initialize",
                 ) {
                     Ok(reserved) => reserved,
                     Err(InboundReserveError::DuplicateId) => {
@@ -551,7 +557,7 @@ where
                             Completion::Rejected,
                         );
                         enqueue_error(
-                            &self.protocol.out_tx,
+                            self.protocol.outbound(),
                             id,
                             LspError::invalid_request("duplicate request id"),
                         );
@@ -566,7 +572,7 @@ where
                             Completion::Rejected,
                         );
                         enqueue_error(
-                            &self.protocol.out_tx,
+                            self.protocol.outbound(),
                             id,
                             LspError::ServerError {
                                 code: SERVER_CANCELLED as i32,
@@ -592,11 +598,8 @@ where
                         ConnectionFailureCategory::Protocol,
                         Some(&reservation.id),
                     );
-                    self.protocol.inbound.complete(
-                        &self.protocol.out_tx,
-                        reservation,
-                        Err(LspError::ServerNotInitialized),
-                    );
+                    self.protocol
+                        .complete_inbound(reservation, Err(LspError::ServerNotInitialized));
                     return Flow::Continue;
                 }
                 // After `shutdown`, every request is invalid until `exit`.
@@ -605,8 +608,7 @@ where
                         ConnectionFailureCategory::Protocol,
                         Some(&reservation.id),
                     );
-                    self.protocol.inbound.complete(
-                        &self.protocol.out_tx,
+                    self.protocol.complete_inbound(
                         reservation,
                         Err(LspError::invalid_request("invalid request")),
                     );
@@ -628,11 +630,7 @@ where
                                 Some("shutdown"),
                                 Some(&reservation.id),
                             );
-                            self.protocol.inbound.complete(
-                                &self.protocol.out_tx,
-                                reservation,
-                                Err(err),
-                            );
+                            self.protocol.complete_inbound(reservation, Err(err));
                             return Flow::Continue;
                         }
                         if let Some(hook) = &self.on_shutdown {
@@ -650,11 +648,7 @@ where
                                 .instrument(span.clone())
                                 .await
                             {
-                                self.protocol.inbound.complete(
-                                    &self.protocol.out_tx,
-                                    reservation,
-                                    Err(err),
-                                );
+                                self.protocol.complete_inbound(reservation, Err(err));
                                 return Flow::Continue;
                             }
                         }
@@ -662,14 +656,9 @@ where
                         // so its own entry is gone before the sweep below; only
                         // then cancel the rest of the in-flight work and enter
                         // `ShuttingDown`.
-                        self.protocol.inbound.complete(
-                            &self.protocol.out_tx,
-                            reservation,
-                            encode_body(&serde_json::Value::Null),
-                        );
                         self.protocol
-                            .inbound
-                            .cancel_all_with_response(&self.protocol.out_tx);
+                            .complete_inbound(reservation, encode_body(&serde_json::Value::Null));
+                        self.protocol.cancel_all_inbound_with_response();
                         self.lifecycle = Lifecycle::ShuttingDown;
                     }
                     _other => {
@@ -677,8 +666,7 @@ where
                         let service = match &self.lifecycle {
                             Lifecycle::Running(service) => Arc::clone(service),
                             _ => {
-                                self.protocol.inbound.complete(
-                                    &self.protocol.out_tx,
+                                self.protocol.complete_inbound(
                                     reservation,
                                     Err(LspError::ServerNotInitialized),
                                 );
@@ -692,11 +680,7 @@ where
                                     ConnectionFailureCategory::Protocol,
                                     Some(&reservation.id),
                                 );
-                                self.protocol.inbound.complete(
-                                    &self.protocol.out_tx,
-                                    reservation,
-                                    Err(error),
-                                );
+                                self.protocol.complete_inbound(reservation, Err(error));
                                 return Flow::Continue;
                             }
                         };
@@ -707,7 +691,7 @@ where
                             method.into_owned(),
                             params,
                             cancellation.expect("non-initialize requests are cancellable"),
-                            self.protocol.handler_timeout,
+                            self.protocol.handler_timeout(),
                         );
                     }
                 }
@@ -754,11 +738,9 @@ where
                     let bytes: &[u8] = if params.is_empty() { b"{}" } else { &params };
                     match serde_json::from_slice::<CancelParams>(bytes) {
                         Ok(cancel) => {
-                            if let Some(reservation) =
-                                self.protocol.inbound.claim_cancellation(&cancel.id)
-                            {
+                            if let Some(reservation) = self.protocol.cancel_inbound(&cancel.id) {
                                 enqueue_encoded(
-                                    &self.protocol.out_tx,
+                                    self.protocol.outbound(),
                                     reservation.id,
                                     Err(LspError::RequestCancelled),
                                 );
@@ -928,7 +910,7 @@ where
                 );
                 let _ = self
                     .protocol
-                    .out_tx
+                    .outbound()
                     .send_required(RawMessage::ProtocolError { error });
             }
         }
@@ -1096,8 +1078,7 @@ where
                 Some("initialize"),
                 Some(&reservation.id),
             );
-            self.protocol.inbound.complete(
-                &self.protocol.out_tx,
+            self.protocol.complete_inbound(
                 reservation,
                 Err(LspError::ServerError {
                     code: -32600,
@@ -1119,9 +1100,7 @@ where
                     Some("initialize"),
                     Some(&reservation.id),
                 );
-                self.protocol
-                    .inbound
-                    .complete(&self.protocol.out_tx, reservation, Err(err));
+                self.protocol.complete_inbound(reservation, Err(err));
                 return Flow::Continue;
             }
         };
@@ -1162,8 +1141,7 @@ where
             Err(_err) => {
                 // ADR 0017's fixed error: configuration or combined-validation
                 // failure reports InternalError and enters the close path.
-                self.protocol.inbound.complete(
-                    &self.protocol.out_tx,
+                self.protocol.complete_inbound(
                     reservation,
                     Err(LspError::internal("initialization failed")),
                 );
@@ -1244,7 +1222,7 @@ where
                         Arc::clone(&self.state),
                         ctx,
                         params,
-                        self.protocol.cancellation.child_token(),
+                        self.protocol.cancellation_child(),
                     ))
                     .instrument(span.clone())
                     .await
@@ -1255,11 +1233,7 @@ where
                         // enters the close path; the frozen Router and
                         // established Workspace are never exposed to later
                         // dispatch.
-                        self.protocol.inbound.complete(
-                            &self.protocol.out_tx,
-                            reservation,
-                            Err(err),
-                        );
+                        self.protocol.complete_inbound(reservation, Err(err));
                         return Flow::Close(CloseCause::InitializeFailed);
                     }
                 }
@@ -1267,8 +1241,7 @@ where
             None => None,
         };
 
-        self.protocol.inbound.complete(
-            &self.protocol.out_tx,
+        self.protocol.complete_inbound(
             reservation,
             encode_body(&WireInitializeResult {
                 capabilities,
@@ -1310,12 +1283,11 @@ where
     ) {
         let state = Arc::clone(&self.state);
         let workspace = self.established_workspace();
-        let out_tx = self.protocol.out_tx.clone();
         let client = self.client.clone();
-        let inbound = self.protocol.inbound.clone();
+        let completion_gate = self.protocol.completion_gate();
         let permit = Arc::clone(&reservation._permit);
         let trace = self.trace;
-        self.protocol.tasks.spawn(
+        self.protocol.spawn(
             async move {
                 let id = reservation.id.clone();
                 let trace_id = id.clone();
@@ -1341,7 +1313,7 @@ where
                         Err(LspError::internal("request service returned no response"))
                     }
                 };
-                inbound.complete(&out_tx, reservation, result);
+                completion_gate.complete(reservation, result);
             },
             permit,
         );
@@ -1378,6 +1350,7 @@ enum Flow {
 
 /// Select the reported cause after close has quiesced every task that could
 /// fail a required outbound admission (ADR 0026).
+#[cfg(all(test, not(target_arch = "wasm32")))]
 fn final_close_cause(close: &CloseSignal<CloseCause>, out_tx: &OutboundQueue) -> CloseCause {
     let recorded = close
         .take_cause()

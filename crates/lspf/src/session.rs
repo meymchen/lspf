@@ -39,15 +39,27 @@ pub(crate) struct CloseSignal<C> {
 /// Endpoint engines retain lifecycle, registration, and domain state. This
 /// module owns the invariants that both directions of an LSP connection need.
 pub(crate) struct ProtocolSession<R, P, C> {
-    pub(crate) inbound: InboundRegistry,
-    pub(crate) handler_timeout: Duration,
-    pub(crate) tasks: TaskGroup<R>,
-    pub(crate) out_tx: OutboundQueue,
-    pub(crate) cancellation: CancellationToken,
-    pub(crate) close: CloseSignal<C>,
+    inbound: InboundRegistry,
+    handler_timeout: Duration,
+    tasks: TaskGroup<R>,
+    out_tx: OutboundQueue,
+    cancellation: CancellationToken,
+    close: CloseSignal<C>,
     peer: P,
     send_task: Option<TaskHandle>,
     closed: bool,
+}
+
+#[derive(Clone)]
+pub(crate) struct CompletionGate {
+    inbound: InboundRegistry,
+    outbound: OutboundQueue,
+}
+
+impl CompletionGate {
+    pub(crate) fn complete(&self, reservation: Reservation, result: Result<Bytes, LspError>) {
+        self.inbound.complete(&self.outbound, reservation, result);
+    }
 }
 
 impl<R: Runtime, P: SessionPeer, C> ProtocolSession<R, P, C> {
@@ -96,6 +108,78 @@ impl<R: Runtime, P: SessionPeer, C> ProtocolSession<R, P, C> {
         if let Some(send_task) = self.send_task.take() {
             send_task.join().await;
         }
+    }
+
+    pub(crate) fn close_requested(&self) -> CancellationToken {
+        self.close.requested()
+    }
+
+    pub(crate) fn outbound_failed(&self) -> CancellationToken {
+        self.out_tx.failure()
+    }
+
+    pub(crate) fn request_close(&self, cause: C) {
+        self.close.request(cause);
+    }
+
+    pub(crate) fn take_close_cause(&self) -> Option<C> {
+        self.close.take_cause()
+    }
+
+    pub(crate) fn outbound(&self) -> &OutboundQueue {
+        &self.out_tx
+    }
+
+    pub(crate) fn handler_timeout(&self) -> Duration {
+        self.handler_timeout
+    }
+
+    pub(crate) fn cancellation_child(&self) -> CancellationToken {
+        self.cancellation.child_token()
+    }
+
+    pub(crate) fn reserve_inbound(
+        &self,
+        id: RequestId,
+        method: &str,
+        cancellable: bool,
+    ) -> Result<ReservedRequest, InboundReserveError> {
+        let parent = cancellable.then_some(&self.cancellation);
+        self.inbound.reserve_method(id, method, parent)
+    }
+
+    pub(crate) fn complete_inbound(
+        &self,
+        reservation: Reservation,
+        result: Result<Bytes, LspError>,
+    ) {
+        self.inbound.complete(&self.out_tx, reservation, result);
+    }
+
+    pub(crate) fn cancel_inbound(&self, id: &RequestId) -> Option<Reservation> {
+        self.inbound.claim_cancellation(id)
+    }
+
+    pub(crate) fn cancel_all_inbound_with_response(&self) {
+        self.inbound.cancel_all_with_response(&self.out_tx);
+    }
+
+    pub(crate) fn completion_gate(&self) -> CompletionGate {
+        CompletionGate {
+            inbound: self.inbound.clone(),
+            outbound: self.out_tx.clone(),
+        }
+    }
+
+    pub(crate) fn spawn<F>(&mut self, future: F, permit: Arc<OwnedPermit>)
+    where
+        F: Future<Output = ()> + TaskSend + 'static,
+    {
+        self.tasks.spawn(future, permit);
+    }
+
+    pub(crate) async fn reap_finished(&mut self) {
+        self.tasks.reap_finished().await;
     }
 }
 
