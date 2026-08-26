@@ -23,15 +23,13 @@
 //! [`Outcome`] or a transport [`Error`]. The engine never terminates the
 //! process; the entry point decides what an [`Outcome`] means for a binary.
 
-use std::collections::HashMap;
-use std::future::Future;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
+#[cfg(all(test, not(target_arch = "wasm32")))]
 use futures_channel::mpsc::UnboundedReceiver;
 use futures_util::FutureExt;
-use futures_util::future::{Either, select};
 use futures_util::select_biased;
 use lsp_types::error_codes::SERVER_CANCELLED;
 use lsp_types::{
@@ -50,7 +48,7 @@ use crate::builder::{
     ProtocolNotification, Registrations, Server,
 };
 use crate::capability::GeneratedCapabilities;
-use crate::client::{ClientHandle, OutboundQueue, OutboundRegistry};
+use crate::client::ClientHandle;
 use crate::codec::{decode_params, decode_value, encode_body};
 use crate::context::ServerContext;
 use crate::documents::{DocumentMutationError, Documents};
@@ -58,17 +56,25 @@ use crate::error::Error;
 use crate::failure::{ConnectionDirection, ConnectionFailureCategory, FailureReporter};
 use crate::file_provider::SharedFileProvider;
 use crate::progress::{ProgressCancel, ProgressRegistry};
-use crate::raw::{JsonRpcError, RawMessage, RequestId};
-use crate::runtime::{Runtime, TaskHandle, TaskSend, default_runtime, ensure_runtime_available};
+use crate::raw::{RawMessage, RequestId};
+use crate::runtime::{Runtime, TaskHandle, default_runtime, ensure_runtime_available};
 use crate::service::{
     HandlerTimeout, IncomingCall, ServiceResult, UserLayer, UserService, build_service_stack,
 };
-use crate::sync::{OwnedPermit, Semaphore};
-use crate::telemetry::{
-    Completion, ConnectionTrace, DeadlineAction, Direction, Instant, Resource, ResourceAction,
+#[cfg(all(test, not(target_arch = "wasm32")))]
+use crate::session::send_loop as drive_send_loop;
+use crate::session::{
+    CloseSignal, INBOUND_CAPACITY_EXHAUSTED, InboundReserveError, OutboundQueue, OutboundRegistry,
+    ProtocolSession, Reservation, enqueue_encoded, error_response, run_handler_with_deadline,
+    send_loop_with_trace,
 };
-use crate::transport::{Transport, TransportError, TransportReader, TransportWriter};
+use crate::telemetry::{Completion, ConnectionTrace, Direction, Instant};
+#[cfg(all(test, not(target_arch = "wasm32")))]
+use crate::transport::TransportWriter;
+use crate::transport::{Transport, TransportError, TransportReader};
 use crate::workspace::Workspace;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+use std::sync::Mutex;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -173,6 +179,10 @@ enum CloseCause {
 }
 
 impl CloseCause {
+    fn writer_failed() -> Self {
+        Self::WriterFailed
+    }
+
     fn as_str(&self) -> &'static str {
         match self {
             Self::Exit { .. } => "exit",
@@ -195,73 +205,14 @@ impl CloseCause {
     }
 }
 
-/// The engine-owned request to close the session, shared with the writer task.
-///
-/// It performs no cleanup of its own: the writer and the read-loop only
-/// *request* closure through it, and [`ProtocolEngine::close`] remains the sole
-/// place that clears registries, cancels tasks, and closes the queue
-/// (ADR 0018).
-#[derive(Clone)]
-struct CloseSignal {
-    inner: Arc<CloseInner>,
-}
-
-struct CloseInner {
-    cause: Mutex<Option<CloseCause>>,
-    requested: CancellationToken,
-}
-
-impl CloseSignal {
-    fn new() -> Self {
-        Self {
-            inner: Arc::new(CloseInner {
-                cause: Mutex::new(None),
-                requested: CancellationToken::new(),
-            }),
-        }
-    }
-
-    /// Request the one close operation. The first caller records the
-    /// provisional `cause` and wakes the read-loop; a later caller leaves it
-    /// untouched and observes that same close rather than starting a second
-    /// one. Required outbound admission failure can override this provisional
-    /// cause when the final outcome is selected (ADR 0026).
-    fn request(&self, cause: CloseCause) {
-        {
-            let mut recorded = self.inner.cause.lock().unwrap();
-            if recorded.is_none() {
-                *recorded = Some(cause);
-            }
-        }
-        self.inner.requested.cancel();
-    }
-
-    /// The token that fires once any caller has requested closure.
-    fn requested(&self) -> CancellationToken {
-        self.inner.requested.clone()
-    }
-
-    /// Take the recorded cause. Called once, by the read-loop, after the close
-    /// operation has run.
-    fn take_cause(&self) -> Option<CloseCause> {
-        self.inner.cause.lock().unwrap().take()
-    }
-}
-
 /// Drive a [`Server`] over `transport` until the peer exits, the transport
 /// closes, a transport error ends the session, or a failed initialize
 /// transaction enters the terminal close path.
-///
-/// The writer half moves into a send-loop task draining an unbounded channel;
-/// the read-loop owns the reader and processes one envelope at a time.
 pub(crate) async fn run<S, T>(server: Server<S>, transport: T) -> Result<Outcome>
 where
     S: Send + Sync + 'static,
     T: Transport,
 {
-    // Serving must not begin before the target's executor exists: a missing
-    // Tokio runtime is reported as an error instead of panicking inside the
-    // first spawn (ADR 0020). The framework never starts a runtime implicitly.
     ensure_runtime_available()?;
     let connection_trace = ConnectionTrace::new();
     let failure_reporter = FailureReporter::new(server.error_hook.clone(), connection_trace.id());
@@ -286,6 +237,7 @@ where
             out_rx,
             client.clone(),
             close.clone(),
+            CloseCause::writer_failed,
             connection_trace,
             failure_reporter.clone(),
         )
@@ -304,368 +256,6 @@ where
     .serve(reader)
     .instrument(connection_span)
     .await
-}
-
-struct TaskGroup<R> {
-    runtime: R,
-    handles: Vec<InboundTask>,
-}
-
-struct InboundTask {
-    handle: TaskHandle,
-    _permit: Arc<OwnedPermit>,
-}
-
-#[derive(Clone, Copy, Default, Eq, PartialEq)]
-struct RequestGeneration(u64);
-
-impl RequestGeneration {
-    fn take_next(&mut self) -> Self {
-        let generation = *self;
-        self.0 += 1;
-        generation
-    }
-}
-
-impl<R: Runtime> TaskGroup<R> {
-    fn new(runtime: R) -> Self {
-        Self {
-            runtime,
-            handles: Vec::new(),
-        }
-    }
-
-    fn spawn<F>(&mut self, future: F, permit: Arc<OwnedPermit>)
-    where
-        F: Future<Output = ()> + TaskSend + 'static,
-    {
-        self.handles.push(InboundTask {
-            handle: self.runtime.spawn(future),
-            _permit: permit,
-        });
-    }
-
-    async fn reap_finished(&mut self) {
-        let mut running = Vec::with_capacity(self.handles.len());
-        for task in std::mem::take(&mut self.handles) {
-            if task.handle.is_finished() {
-                task.handle.join().await;
-            } else {
-                running.push(task);
-            }
-        }
-        self.handles = running;
-    }
-
-    async fn abort_and_join(&mut self) {
-        for task in &self.handles {
-            task.handle.abort();
-        }
-        self.join_all().await;
-    }
-
-    async fn join_all(&mut self) {
-        for task in std::mem::take(&mut self.handles) {
-            task.handle.join().await;
-        }
-    }
-}
-
-/// One accepted inbound request: its wire ID plus the generation that claimed
-/// that ID.
-///
-/// A peer may legitimately reuse a request ID once the previous request with
-/// that ID has been answered, so the ID alone does not identify a request for
-/// the lifetime of its task. The generation makes the completion gate
-/// identity-scoped: a task whose result arrives after its own entry was claimed
-/// — by `$/cancelRequest`, by `shutdown`, or by session close — cannot then
-/// claim the entry a later request has since reserved under the same ID.
-struct Reservation {
-    id: RequestId,
-    method: String,
-    started: Instant,
-    generation: RequestGeneration,
-    _permit: Arc<OwnedPermit>,
-}
-
-struct InboundEntry {
-    method: String,
-    started: Instant,
-    generation: RequestGeneration,
-    /// `None` for `initialize`, the one request that is not cancellable.
-    cancellation: Option<CancellationToken>,
-    _permit: Arc<OwnedPermit>,
-}
-
-struct InboundInner {
-    entries: HashMap<RequestId, InboundEntry>,
-    next_generation: RequestGeneration,
-}
-
-#[derive(Clone)]
-struct InboundRegistry {
-    inner: Arc<Mutex<InboundInner>>,
-    capacity: Arc<Semaphore>,
-    trace: ConnectionTrace,
-    failure_reporter: FailureReporter,
-    limit: usize,
-}
-
-#[derive(Debug)]
-enum InboundReserveError {
-    DuplicateId,
-    CapacityExhausted,
-}
-
-const INBOUND_CAPACITY_EXHAUSTED: &str = "inbound request capacity exhausted";
-const HANDLER_DEADLINE_EXPIRED: &str = "handler deadline expired";
-
-struct ReservedRequest {
-    reservation: Reservation,
-    cancellation: Option<CancellationToken>,
-}
-
-impl InboundRegistry {
-    #[cfg(all(test, not(target_arch = "wasm32")))]
-    fn new(capacity: usize) -> Self {
-        let trace = ConnectionTrace::new();
-        Self::new_with_reporter(capacity, trace, FailureReporter::new(None, trace.id()))
-    }
-
-    fn new_with_reporter(
-        capacity: usize,
-        trace: ConnectionTrace,
-        failure_reporter: FailureReporter,
-    ) -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(InboundInner {
-                entries: HashMap::new(),
-                next_generation: RequestGeneration::default(),
-            })),
-            capacity: Semaphore::shared(capacity),
-            trace,
-            failure_reporter,
-            limit: capacity,
-        }
-    }
-
-    /// Reserve capacity and `id` before allocating request-scoped cancellation
-    /// state. A duplicate never replaces or cancels the original (ADR 0018),
-    /// and an exhausted connection never grows its registry or task group.
-    #[cfg(all(test, not(target_arch = "wasm32")))]
-    fn reserve(
-        &self,
-        id: RequestId,
-        cancellation_parent: Option<&CancellationToken>,
-    ) -> std::result::Result<ReservedRequest, InboundReserveError> {
-        self.reserve_method(id, "test/request", cancellation_parent)
-    }
-
-    fn reserve_method(
-        &self,
-        id: RequestId,
-        method: &str,
-        cancellation_parent: Option<&CancellationToken>,
-    ) -> std::result::Result<ReservedRequest, InboundReserveError> {
-        let mut inner = self.inner.lock().unwrap();
-        if inner.entries.contains_key(&id) {
-            self.trace.resource_budget(
-                Resource::InboundRequests,
-                ResourceAction::Reject,
-                inner.entries.len(),
-                self.limit,
-                None,
-            );
-            return Err(InboundReserveError::DuplicateId);
-        }
-        let Some(permit) = self.capacity.try_acquire_owned() else {
-            let current = inner.entries.len();
-            self.trace.resource_budget(
-                Resource::InboundRequests,
-                ResourceAction::Reject,
-                current,
-                self.limit,
-                None,
-            );
-            drop(inner);
-            self.failure_reporter
-                .report_unvalidated_inbound_method(ConnectionFailureCategory::Overload, Some(&id));
-            return Err(InboundReserveError::CapacityExhausted);
-        };
-        let permit = Arc::new(permit);
-        let cancellation = cancellation_parent.map(CancellationToken::child_token);
-        let started = Instant::now();
-        let generation = inner.next_generation.take_next();
-        inner.entries.insert(
-            id.clone(),
-            InboundEntry {
-                method: method.to_string(),
-                started,
-                generation,
-                cancellation: cancellation.clone(),
-                _permit: Arc::clone(&permit),
-            },
-        );
-        let current = inner.entries.len();
-        drop(inner);
-        self.trace.resource_budget(
-            Resource::InboundRequests,
-            ResourceAction::Admit,
-            current,
-            self.limit,
-            None,
-        );
-        Ok(ReservedRequest {
-            reservation: Reservation {
-                id,
-                method: method.to_string(),
-                started,
-                generation,
-                _permit: permit,
-            },
-            cancellation,
-        })
-    }
-
-    /// Claim the completion gate for `reservation` and enqueue its one response.
-    /// Does nothing if some other path already claimed that entry.
-    fn complete(
-        &self,
-        out_tx: &OutboundQueue,
-        reservation: Reservation,
-        result: std::result::Result<Bytes, LspError>,
-    ) {
-        let current = {
-            let mut inner = self.inner.lock().unwrap();
-            match inner.entries.get(&reservation.id) {
-                Some(entry) if entry.generation == reservation.generation => {
-                    inner.entries.remove(&reservation.id);
-                    Some(inner.entries.len())
-                }
-                _ => None,
-            }
-        };
-        if let Some(current) = current {
-            self.trace.resource_budget(
-                Resource::InboundRequests,
-                ResourceAction::Release,
-                current,
-                self.limit,
-                None,
-            );
-            let completion = completion_kind(&result);
-            self.trace.request_completed(
-                &reservation.method,
-                &reservation.id,
-                reservation.started,
-                Direction::Inbound,
-                completion,
-            );
-            enqueue_encoded(out_tx, reservation.id, result);
-        }
-    }
-
-    fn claim_cancellation(&self, id: &RequestId) -> Option<Reservation> {
-        let claimed = {
-            let mut inner = self.inner.lock().unwrap();
-            let entry = match inner.entries.get(id) {
-                Some(entry) if entry.cancellation.is_some() => inner.entries.remove(id),
-                _ => None,
-            };
-            entry.map(|entry| (entry, inner.entries.len()))
-        };
-        claimed.map(|(entry, current)| {
-            self.trace.resource_budget(
-                Resource::InboundRequests,
-                ResourceAction::Release,
-                current,
-                self.limit,
-                None,
-            );
-            self.trace.request_completed(
-                &entry.method,
-                id,
-                entry.started,
-                Direction::Inbound,
-                Completion::Cancelled,
-            );
-            let token = entry
-                .cancellation
-                .expect("only cancellable entries are claimed");
-            token.cancel();
-            Reservation {
-                id: id.clone(),
-                method: entry.method,
-                started: entry.started,
-                generation: entry.generation,
-                _permit: entry._permit,
-            }
-        })
-    }
-
-    /// Cancel and answer every still-registered request, emptying the registry.
-    ///
-    /// Used by a successful `shutdown`, which leaves the connection alive long
-    /// enough to deliver each cancellation. Removing the entry also claims the
-    /// completion gate, so the handler's own late result is dropped and every
-    /// cancelled request still receives exactly one response.
-    fn cancel_all_with_response(&self, out_tx: &OutboundQueue) {
-        let entries = std::mem::take(&mut self.inner.lock().unwrap().entries);
-        if !entries.is_empty() {
-            self.trace.resource_budget(
-                Resource::InboundRequests,
-                ResourceAction::Release,
-                0,
-                self.limit,
-                None,
-            );
-        }
-        for (id, entry) in entries {
-            self.trace.request_completed(
-                &entry.method,
-                &id,
-                entry.started,
-                Direction::Inbound,
-                Completion::Cancelled,
-            );
-            if let Some(cancellation) = entry.cancellation {
-                cancellation.cancel();
-            }
-            enqueue_encoded(out_tx, id, Err(LspError::RequestCancelled));
-        }
-    }
-
-    /// Cancel every still-registered request and empty the registry without
-    /// answering.
-    ///
-    /// Used by session close, where the peer has either gone away or asked to
-    /// exit: there is no one left to receive a cancellation. `shutdown` is the
-    /// one ending that still answers, through
-    /// [`cancel_all_with_response`](Self::cancel_all_with_response).
-    fn close_all(&self) {
-        let entries = std::mem::take(&mut self.inner.lock().unwrap().entries);
-        if !entries.is_empty() {
-            self.trace.resource_budget(
-                Resource::InboundRequests,
-                ResourceAction::Release,
-                0,
-                self.limit,
-                None,
-            );
-        }
-        for (id, entry) in entries {
-            self.trace.request_completed(
-                &entry.method,
-                &id,
-                entry.started,
-                Direction::Inbound,
-                Completion::ConnectionClosed,
-            );
-            if let Some(cancellation) = entry.cancellation {
-                cancellation.cancel();
-            }
-        }
-    }
 }
 
 #[derive(serde::Deserialize)]
@@ -743,106 +333,9 @@ async fn send_loop<W: TransportWriter>(
     writer: W,
     out_rx: UnboundedReceiver<RawMessage>,
     client: ClientHandle,
-    close: CloseSignal,
+    close: CloseSignal<CloseCause>,
 ) {
-    let trace = ConnectionTrace::new();
-    send_loop_with_trace(
-        writer,
-        out_rx,
-        client,
-        close,
-        trace,
-        FailureReporter::new(None, trace.id()),
-    )
-    .await;
-}
-
-async fn send_loop_with_trace<W: TransportWriter>(
-    mut writer: W,
-    mut out_rx: UnboundedReceiver<RawMessage>,
-    client: ClientHandle,
-    close: CloseSignal,
-    trace: ConnectionTrace,
-    failure_reporter: FailureReporter,
-) {
-    let outbound_closing = client.outbound_closing();
-    loop {
-        let msg = select_biased! {
-            msg = out_rx.recv().fuse() => msg,
-            () = outbound_closing.cancelled().fuse() => {
-                out_rx.close();
-                break;
-            }
-        };
-        // A closed channel (its receiver half dropped) is a `RecvError`: the
-        // engine has shut the queue down, so nothing further can be enqueued.
-        let Ok(msg) = msg else {
-            client.close_outbound();
-            break;
-        };
-        // The depth counts what is still queued, so each message is decremented
-        // once its transport send has succeeded or failed — including the
-        // terminally failed send, after which the loop returns.
-        if let Err(e) = send_outbound(&mut writer, msg, &client, trace, &failure_reporter).await {
-            warn!(error = %e, "send_loop: transport write failed");
-            abandon_outbound(&mut out_rx, &client, &close);
-            // ADR 0018: the writer reports its terminal failure and performs no
-            // registry or task cleanup of its own; the engine runs the one
-            // close operation. Accounting is released here because the
-            // receiver is abandoning every message it retained.
-            return;
-        }
-    }
-    while let Ok(msg) = out_rx.recv().await {
-        if let Err(e) = send_outbound(&mut writer, msg, &client, trace, &failure_reporter).await {
-            warn!(error = %e, "send_loop: transport write failed while draining");
-            abandon_outbound(&mut out_rx, &client, &close);
-            return;
-        }
-    }
-    if let Err(e) = writer.shutdown().await {
-        failure_reporter.report(
-            ConnectionFailureCategory::Close,
-            Some(ConnectionDirection::Outbound),
-            None,
-            None,
-        );
-        warn!(error = %e, "send_loop: transport shutdown failed");
-        close.request(CloseCause::WriterFailed);
-    }
-}
-
-async fn send_outbound<W: TransportWriter>(
-    writer: &mut W,
-    message: RawMessage,
-    client: &ClientHandle,
-    trace: ConnectionTrace,
-    failure_reporter: &FailureReporter,
-) -> std::result::Result<(), TransportError> {
-    trace.message(Direction::Outbound, &message);
-    let method = message.method().map(str::to_owned);
-    let request_id = message.id().cloned();
-    let result = writer.send(message).await;
-    client.record_done();
-    if result.is_err() {
-        failure_reporter.report(
-            ConnectionFailureCategory::Transport,
-            Some(ConnectionDirection::Outbound),
-            method.as_deref(),
-            request_id.as_ref(),
-        );
-    }
-    result
-}
-
-fn abandon_outbound(
-    out_rx: &mut UnboundedReceiver<RawMessage>,
-    client: &ClientHandle,
-    close: &CloseSignal,
-) {
-    out_rx.close();
-    client.discard_outbound();
-    close.request(CloseCause::WriterFailed);
+    drive_send_loop(writer, out_rx, client, close, CloseCause::writer_failed).await;
 }
 
 /// The static registrations and lifecycle callbacks awaiting the initialize
@@ -894,21 +387,10 @@ struct ProtocolEngine<S, R> {
     /// of [`Pending`] when the initialize transaction succeeds; an `exit`
     /// received earlier closes without a Workspace to hand it.
     on_exit: Option<OnExit<S>>,
-    inbound: InboundRegistry,
-    handler_timeout: Duration,
-    tasks: TaskGroup<R>,
-    out_tx: OutboundQueue,
+    protocol: ProtocolSession<R, ClientHandle, CloseCause>,
     client: ClientHandle,
-    /// Cancelled once by [`close`](Self::close). Every request-scoped token is
-    /// a child of it, so closing the session cancels all outstanding user work
-    /// even where the completion gate has already claimed its registry entry.
-    session: CancellationToken,
-    close: CloseSignal,
     trace: ConnectionTrace,
     failure_reporter: FailureReporter,
-    /// The writer's send-loop task. Signalled by closing the outbound queue and
-    /// then joined by [`close`](Self::close), so it is never detached.
-    send_task: Option<TaskHandle>,
 }
 
 impl<S, R> ProtocolEngine<S, R>
@@ -921,7 +403,7 @@ where
         runtime: R,
         out_tx: OutboundQueue,
         client: ClientHandle,
-        close: CloseSignal,
+        close: CloseSignal<CloseCause>,
         send_task: TaskHandle,
         trace: ConnectionTrace,
         failure_reporter: FailureReporter,
@@ -949,20 +431,20 @@ where
             on_initialized: None,
             on_shutdown: None,
             on_exit: None,
-            inbound: InboundRegistry::new_with_reporter(
+            protocol: ProtocolSession::new(
+                runtime,
                 max_inbound_requests,
+                handler_timeout,
+                out_tx,
+                client.clone(),
+                close,
+                send_task,
                 trace,
                 failure_reporter.clone(),
             ),
-            handler_timeout,
-            tasks: TaskGroup::new(runtime),
-            out_tx,
             client,
-            session: CancellationToken::new(),
-            close,
             trace,
             failure_reporter,
-            send_task: Some(send_task),
         }
     }
 
@@ -976,15 +458,15 @@ where
     where
         Rd: TransportReader,
     {
-        let requested = self.close.requested();
-        let outbound_failed = self.out_tx.failure();
+        let requested = self.protocol.close.requested();
+        let outbound_failed = self.protocol.out_tx.failure();
         loop {
             let msg = select_biased! {
                 // `biased`: an already-requested close wins over a message that
                 // happens to be ready, so the ending stays deterministic.
                 () = requested.cancelled().fuse() => break,
                 () = outbound_failed.cancelled().fuse() => {
-                    self.close.request(CloseCause::WriterFailed);
+                    self.protocol.close.request(CloseCause::WriterFailed);
                     break;
                 },
                 msg = reader.recv().fuse() => msg,
@@ -993,7 +475,7 @@ where
             // its task-owned admission permit before the next request tries to
             // reserve capacity. Finished handles cannot accumulate behind an
             // idle read loop.
-            self.tasks.reap_finished().await;
+            self.protocol.tasks.reap_finished().await;
 
             match msg {
                 Ok(msg) => {
@@ -1001,14 +483,14 @@ where
                     match self.dispatch(msg).await {
                         Flow::Continue => {}
                         Flow::Close(cause) => {
-                            self.close.request(cause);
+                            self.protocol.close.request(cause);
                             break;
                         }
                     }
                 }
                 Err(TransportError::Closed) => {
                     warn!("transport closed by peer before exit notification");
-                    self.close.request(CloseCause::ReaderEof);
+                    self.protocol.close.request(CloseCause::ReaderEof);
                     break;
                 }
                 Err(error) => {
@@ -1027,14 +509,14 @@ where
                         None,
                         None,
                     );
-                    self.close.request(CloseCause::ReaderFailed(error));
+                    self.protocol.close.request(CloseCause::ReaderFailed(error));
                     break;
                 }
             }
         }
 
         self.close().await;
-        let cause = final_close_cause(&self.close, &self.out_tx);
+        let cause = final_close_cause(&self.protocol.close, &self.protocol.out_tx);
         self.trace.connection_closed(cause.as_str());
         cause.into_result()
     }
@@ -1048,8 +530,9 @@ where
                 // permit remains attached to the task handle until the engine
                 // reaps it, even if cancellation or close claims the response
                 // gate first.
-                let cancellation_parent = (method != "initialize").then_some(&self.session);
-                let reserved = match self.inbound.reserve_method(
+                let cancellation_parent =
+                    (method != "initialize").then_some(&self.protocol.cancellation);
+                let reserved = match self.protocol.inbound.reserve_method(
                     id.clone(),
                     method.as_ref(),
                     cancellation_parent,
@@ -1068,7 +551,7 @@ where
                             Completion::Rejected,
                         );
                         enqueue_error(
-                            &self.out_tx,
+                            &self.protocol.out_tx,
                             id,
                             LspError::invalid_request("duplicate request id"),
                         );
@@ -1083,7 +566,7 @@ where
                             Completion::Rejected,
                         );
                         enqueue_error(
-                            &self.out_tx,
+                            &self.protocol.out_tx,
                             id,
                             LspError::ServerError {
                                 code: SERVER_CANCELLED as i32,
@@ -1109,8 +592,8 @@ where
                         ConnectionFailureCategory::Protocol,
                         Some(&reservation.id),
                     );
-                    self.inbound.complete(
-                        &self.out_tx,
+                    self.protocol.inbound.complete(
+                        &self.protocol.out_tx,
                         reservation,
                         Err(LspError::ServerNotInitialized),
                     );
@@ -1122,8 +605,8 @@ where
                         ConnectionFailureCategory::Protocol,
                         Some(&reservation.id),
                     );
-                    self.inbound.complete(
-                        &self.out_tx,
+                    self.protocol.inbound.complete(
+                        &self.protocol.out_tx,
                         reservation,
                         Err(LspError::invalid_request("invalid request")),
                     );
@@ -1145,7 +628,11 @@ where
                                 Some("shutdown"),
                                 Some(&reservation.id),
                             );
-                            self.inbound.complete(&self.out_tx, reservation, Err(err));
+                            self.protocol.inbound.complete(
+                                &self.protocol.out_tx,
+                                reservation,
+                                Err(err),
+                            );
                             return Flow::Continue;
                         }
                         if let Some(hook) = &self.on_shutdown {
@@ -1163,7 +650,11 @@ where
                                 .instrument(span.clone())
                                 .await
                             {
-                                self.inbound.complete(&self.out_tx, reservation, Err(err));
+                                self.protocol.inbound.complete(
+                                    &self.protocol.out_tx,
+                                    reservation,
+                                    Err(err),
+                                );
                                 return Flow::Continue;
                             }
                         }
@@ -1171,12 +662,14 @@ where
                         // so its own entry is gone before the sweep below; only
                         // then cancel the rest of the in-flight work and enter
                         // `ShuttingDown`.
-                        self.inbound.complete(
-                            &self.out_tx,
+                        self.protocol.inbound.complete(
+                            &self.protocol.out_tx,
                             reservation,
                             encode_body(&serde_json::Value::Null),
                         );
-                        self.inbound.cancel_all_with_response(&self.out_tx);
+                        self.protocol
+                            .inbound
+                            .cancel_all_with_response(&self.protocol.out_tx);
                         self.lifecycle = Lifecycle::ShuttingDown;
                     }
                     _other => {
@@ -1184,8 +677,8 @@ where
                         let service = match &self.lifecycle {
                             Lifecycle::Running(service) => Arc::clone(service),
                             _ => {
-                                self.inbound.complete(
-                                    &self.out_tx,
+                                self.protocol.inbound.complete(
+                                    &self.protocol.out_tx,
                                     reservation,
                                     Err(LspError::ServerNotInitialized),
                                 );
@@ -1199,7 +692,11 @@ where
                                     ConnectionFailureCategory::Protocol,
                                     Some(&reservation.id),
                                 );
-                                self.inbound.complete(&self.out_tx, reservation, Err(error));
+                                self.protocol.inbound.complete(
+                                    &self.protocol.out_tx,
+                                    reservation,
+                                    Err(error),
+                                );
                                 return Flow::Continue;
                             }
                         };
@@ -1210,7 +707,7 @@ where
                             method.into_owned(),
                             params,
                             cancellation.expect("non-initialize requests are cancellable"),
-                            self.handler_timeout,
+                            self.protocol.handler_timeout,
                         );
                     }
                 }
@@ -1257,9 +754,11 @@ where
                     let bytes: &[u8] = if params.is_empty() { b"{}" } else { &params };
                     match serde_json::from_slice::<CancelParams>(bytes) {
                         Ok(cancel) => {
-                            if let Some(reservation) = self.inbound.claim_cancellation(&cancel.id) {
+                            if let Some(reservation) =
+                                self.protocol.inbound.claim_cancellation(&cancel.id)
+                            {
                                 enqueue_encoded(
-                                    &self.out_tx,
+                                    &self.protocol.out_tx,
                                     reservation.id,
                                     Err(LspError::RequestCancelled),
                                 );
@@ -1428,6 +927,7 @@ where
                     None,
                 );
                 let _ = self
+                    .protocol
                     .out_tx
                     .send_required(RawMessage::ProtocolError { error });
             }
@@ -1596,8 +1096,8 @@ where
                 Some("initialize"),
                 Some(&reservation.id),
             );
-            self.inbound.complete(
-                &self.out_tx,
+            self.protocol.inbound.complete(
+                &self.protocol.out_tx,
                 reservation,
                 Err(LspError::ServerError {
                     code: -32600,
@@ -1619,7 +1119,9 @@ where
                     Some("initialize"),
                     Some(&reservation.id),
                 );
-                self.inbound.complete(&self.out_tx, reservation, Err(err));
+                self.protocol
+                    .inbound
+                    .complete(&self.protocol.out_tx, reservation, Err(err));
                 return Flow::Continue;
             }
         };
@@ -1660,8 +1162,8 @@ where
             Err(_err) => {
                 // ADR 0017's fixed error: configuration or combined-validation
                 // failure reports InternalError and enters the close path.
-                self.inbound.complete(
-                    &self.out_tx,
+                self.protocol.inbound.complete(
+                    &self.protocol.out_tx,
                     reservation,
                     Err(LspError::internal("initialization failed")),
                 );
@@ -1742,7 +1244,7 @@ where
                         Arc::clone(&self.state),
                         ctx,
                         params,
-                        self.session.child_token(),
+                        self.protocol.cancellation.child_token(),
                     ))
                     .instrument(span.clone())
                     .await
@@ -1753,7 +1255,11 @@ where
                         // enters the close path; the frozen Router and
                         // established Workspace are never exposed to later
                         // dispatch.
-                        self.inbound.complete(&self.out_tx, reservation, Err(err));
+                        self.protocol.inbound.complete(
+                            &self.protocol.out_tx,
+                            reservation,
+                            Err(err),
+                        );
                         return Flow::Close(CloseCause::InitializeFailed);
                     }
                 }
@@ -1761,8 +1267,8 @@ where
             None => None,
         };
 
-        self.inbound.complete(
-            &self.out_tx,
+        self.protocol.inbound.complete(
+            &self.protocol.out_tx,
             reservation,
             encode_body(&WireInitializeResult {
                 capabilities,
@@ -1804,12 +1310,12 @@ where
     ) {
         let state = Arc::clone(&self.state);
         let workspace = self.established_workspace();
-        let out_tx = self.out_tx.clone();
+        let out_tx = self.protocol.out_tx.clone();
         let client = self.client.clone();
-        let inbound = self.inbound.clone();
+        let inbound = self.protocol.inbound.clone();
         let permit = Arc::clone(&reservation._permit);
         let trace = self.trace;
-        self.tasks.spawn(
+        self.protocol.tasks.spawn(
             async move {
                 let id = reservation.id.clone();
                 let trace_id = id.clone();
@@ -1825,54 +1331,9 @@ where
                 );
                 let call =
                     IncomingCall::request(method, id, params, ctx, state, handler_timeout.clone());
-                let handler = service.call(call);
-                let completion = select(Box::pin(handler), Box::pin(cancellation.cancelled()));
-                let result = match select(
-                    Box::pin(completion),
-                    Box::pin(handler_timeout.wait_until_armed()),
-                )
-                .await
-                {
-                    Either::Left((Either::Left((result, _)), _)) => result,
-                    Either::Left((Either::Right(((), handler)), _)) => {
-                        cooperatively_cancelled_result(handler)
-                    }
-                    Either::Right(((), completion)) => {
-                        match select(
-                            Box::pin(completion),
-                            Box::pin(crate::runtime::sleep(handler_timeout.get())),
-                        )
-                        .await
-                        {
-                            Either::Left((Either::Left((result, _)), _)) => result,
-                            Either::Left((Either::Right(((), handler)), _)) => {
-                                cooperatively_cancelled_result(handler)
-                            }
-                            Either::Right(((), completion)) => {
-                                handler_timeout.finish(DeadlineAction::Expired);
-                                cancellation.cancel();
-                                // Match peer cancellation's cooperative final poll: code
-                                // awaiting the token observes expiry before its future is
-                                // dropped, while the timeout remains the selected result.
-                                let _ = completion.now_or_never();
-                                ServiceResult::Error(LspError::ServerError {
-                                    code: SERVER_CANCELLED as i32,
-                                    message: HANDLER_DEADLINE_EXPIRED.to_string(),
-                                    data: None,
-                                })
-                            }
-                        }
-                    }
-                };
-                handler_timeout.finish(match &result {
-                    ServiceResult::Error(LspError::RequestCancelled) => DeadlineAction::Cancelled,
-                    ServiceResult::Error(LspError::ServerError { message, .. })
-                        if message == HANDLER_DEADLINE_EXPIRED =>
-                    {
-                        DeadlineAction::Expired
-                    }
-                    _ => DeadlineAction::Completed,
-                });
+                let result =
+                    run_handler_with_deadline(service.call(call), cancellation, handler_timeout)
+                        .await;
                 let result = match result {
                     ServiceResult::Response(value) => encode_body(&value),
                     ServiceResult::Error(error) => Err(error),
@@ -1900,49 +1361,10 @@ where
             return;
         }
         self.lifecycle = Lifecycle::Exited;
-        self.client.close_connection();
-        self.session.cancel();
-        // Complete all pending outbound requests before cancelling inbound
-        // tasks, so handler futures awaiting a client response observe
-        // `ClientError::Cancelled`, allowing them to unblock and exit cleanly.
-        self.client.outbound_registry().close_all();
-        self.inbound.close_all();
-        // The progress registry is connection state too: clearing it leaves no
-        // stale tokens behind, so a handle that outlives the session observes
-        // `ProgressError::UnknownToken` rather than a still-active token. Each
-        // connection owns its registry through its own `ClientHandle`, so clearing
-        // cannot touch another connection.
-        self.client.progress_registry().clear();
-        self.tasks.abort_and_join().await;
-        // A DocumentsView may outlive its ServerContext when user code retains the
-        // cloneable handle. Empty the shared store explicitly so connection
-        // shutdown releases every snapshot and its count/byte accounting even
-        // while such a view remains alive.
+        self.protocol.close().await;
+        // Documents are Server endpoint state, so their lifecycle stays out of
+        // the shared session even though close releases retained snapshots.
         self.documents.clear();
-        // Closing the queue is the writer's stop signal: it drains what is
-        // already enqueued, shuts the writer half down, and ends. Joining it
-        // rather than aborting it is what lets those last responses reach the
-        // peer, and joining is what keeps it from being detached.
-        self.client.close_outbound();
-        if let Some(send_task) = self.send_task.take() {
-            send_task.join().await;
-        }
-    }
-}
-
-/// Serving normally ends through [`ProtocolEngine::close`], which has already
-/// joined every task by the time the engine drops. Dropping the serve future
-/// before that — the caller abandoning the connection — leaves no one able to
-/// join them, so abort here rather than detach a task that would keep running
-/// against a connection nobody owns.
-impl<S, R> Drop for ProtocolEngine<S, R> {
-    fn drop(&mut self) {
-        for task in &self.tasks.handles {
-            task.handle.abort();
-        }
-        if let Some(send_task) = &self.send_task {
-            send_task.abort();
-        }
     }
 }
 
@@ -1956,7 +1378,7 @@ enum Flow {
 
 /// Select the reported cause after close has quiesced every task that could
 /// fail a required outbound admission (ADR 0026).
-fn final_close_cause(close: &CloseSignal, out_tx: &OutboundQueue) -> CloseCause {
+fn final_close_cause(close: &CloseSignal<CloseCause>, out_tx: &OutboundQueue) -> CloseCause {
     let recorded = close
         .take_cause()
         .expect("every path out of the read-loop records its close cause");
@@ -1967,64 +1389,16 @@ fn final_close_cause(close: &CloseSignal, out_tx: &OutboundQueue) -> CloseCause 
     }
 }
 
-/// Enqueue a success response after the protocol engine's final wire encoding,
-/// or enqueue the mapped wire error.
-fn enqueue_encoded(
-    out_tx: &OutboundQueue,
-    id: RequestId,
-    result: std::result::Result<Bytes, LspError>,
-) {
-    let response = match result {
-        Ok(bytes) => RawMessage::Response {
-            id,
-            result: Ok(bytes),
-        },
-        Err(err) => error_response(id, &err),
-    };
-    let _ = out_tx.send_required(response);
-}
-
-fn completion_kind(result: &std::result::Result<Bytes, LspError>) -> Completion {
-    match result {
-        Ok(_) => Completion::Success,
-        Err(LspError::RequestCancelled) => Completion::Cancelled,
-        Err(LspError::ServerError { message, .. }) if message == HANDLER_DEADLINE_EXPIRED => {
-            Completion::DeadlineExpired
-        }
-        Err(_) => Completion::Error,
-    }
-}
-
-fn error_response(id: RequestId, err: &LspError) -> RawMessage {
-    RawMessage::Response {
-        id,
-        result: Err(JsonRpcError {
-            code: err.code(),
-            message: err.message(),
-            data: err.data().cloned(),
-        }),
-    }
-}
-
 fn enqueue_error(out_tx: &OutboundQueue, id: RequestId, err: LspError) {
     let _ = out_tx.send_required(error_response(id, &err));
-}
-
-fn cooperatively_cancelled_result<F>(handler: F) -> ServiceResult
-where
-    F: Future<Output = ServiceResult>,
-{
-    // CancellationToken wakes every waiter, but an executor yield does not
-    // guarantee this handler is polled before a separate abort. Poll it here,
-    // in its own task, then finish without relying on scheduler fairness.
-    let _ = handler.now_or_never();
-    ServiceResult::Error(LspError::RequestCancelled)
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use lsp_types::ProgressToken;
     use tracing_subscriber::layer::SubscriberExt;
+
+    use crate::session::{InboundRegistry, TaskGroup};
 
     use super::*;
 

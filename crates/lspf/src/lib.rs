@@ -61,6 +61,7 @@ mod raw;
 mod resource_policy;
 mod runtime;
 mod service;
+mod session;
 mod sync;
 mod telemetry;
 mod transport;
