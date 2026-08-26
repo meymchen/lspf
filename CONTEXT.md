@@ -55,7 +55,7 @@ close release registry ownership immediately; the admission permit remains
 attached to admitted handler tasks until completion or abort and is released
 when the engine reaps the finished task handle.
 Outbound admission charges one message and its exact encoded JSON-RPC envelope
-bytes until the transport attempt finishes. Ordinary `Client` sends fail with
+bytes until the transport attempt finishes. Ordinary `ClientHandle` sends fail with
 `ClientError::OutboundOverloaded` when either budget is full. Required
 responses, protocol errors, and `$/cancelRequest` use the connection's single
 failure-close path if admission fails; normal close stops admission and drains
@@ -87,7 +87,7 @@ The framework-owned, concurrency-safe store of all tracked [[Document]]s
 for a connection — users never construct it, store it in their state
 struct, or hand it back through a getter. Mutations happen only through
 the protocol engine's built-in document-sync handlers; user code reads it
-through a read-only `DocumentsView` from the [[Context]] parameter
+through a read-only `DocumentsView` from the [[ServerContext]] parameter
 (`ctx.documents()`), and post-mutation hooks observe the updated state.
 Identity is one normalized URI key (ADR 0021): equivalent spellings —
 scheme and host case, percent-encoding, Windows drive-letter case —
@@ -97,7 +97,7 @@ _Avoid_: Document store (correct but verbose).
 
 **Workspace**:
 The cloneable handle to the connection's workspace state, exposed
-through [[Context]] (ADR 0017). The protocol engine establishes it from
+through [[ServerContext]] (ADR 0017). The protocol engine establishes it from
 `InitializeParams` during initialization — client info, capabilities,
 initialization options, root URI, and workspace folders, all verbatim
 and order-preserving (ADR 0021) — and owns its later mutation
@@ -109,9 +109,9 @@ announced folders and falls back to one synthetic root derived from
 `rootUri`, named for its final path segment or `"workspace"`.
 _Avoid_: Project, root (the LSP `rootUri` is only an input to it).
 
-**Client**:
+**ClientHandle**:
 The cloneable typed handle for server-to-client requests and notifications,
-exposed through [[Context]] (`ctx.client()`). A typed notification is
+exposed through [[ServerContext]] (`ctx.client()`). A typed notification is
 encoded and enqueued without allocating an ID; a typed request reserves a
 connection-local, never-reused ID and awaits its correlated response
 (ADR 0018). A finite default deadline bounds each request unless the resource
@@ -181,9 +181,9 @@ malformed, ended, and non-cancellable tokens are logged at debug level and
 ignored; a registered notification hook runs after a successful decode and
 observes the updated cancellation state. Session close clears the registry,
 so a handle that outlives the connection observes an unknown token.
-`Client` is only a handle — the outbound queue, ID allocator, and pending
+`ClientHandle` is only a handle — the outbound queue, ID allocator, and pending
 registry are owned by the connection's protocol engine and covered by the
-connection's [[Resource policy]]. `Client` itself neither owns nor configures
+connection's [[Resource policy]]. `ClientHandle` itself neither owns nor configures
 those resources. An ordinary send that would exceed the policy returns
 `ClientError::OutboundOverloaded` without retaining the message or leaking a
 pending request entry.
@@ -198,16 +198,16 @@ Distinct from a [[Handler]] in that one [[Handler]] (the built-in for
 _Avoid_: Action (LSP uses "code action" for something different),
 custom request (a separate extension mechanism, see below).
 
-**Context**:
+**ServerContext**:
 The cheap-to-clone framework-state handle passed by value to every
-[[Handler]] (ADR 0017, revising ADR 0009's borrowed `&Context`). Through
+[[Handler]] (ADR 0017, revising ADR 0009's borrowed `&ServerContext`). Through
 it handlers reach the established [[Workspace]] — initialization
 metadata, roots, workspace folders, and the read-only [[Documents]]
-view — and the [[Client]] handle for outgoing requests and
+view — and the [[ClientHandle]] for outgoing requests and
 notifications, plus the current request's scope (id, tracing span).
 It is the only way a handler reaches framework state — the user's own
 struct holds only user-owned state, and user code never constructs a
-`Context`.
+`ServerContext`.
 _Avoid_: Session, server-state.
 
 **Transport**:

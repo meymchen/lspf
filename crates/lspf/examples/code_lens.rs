@@ -10,7 +10,7 @@ use lspf::types::{
     ApplyWorkspaceEditParams, CodeLens, CodeLensOptions, CodeLensParams, Command, TextEdit,
     WorkspaceEdit,
 };
-use lspf::{CancellationToken, Context, LspError, Server};
+use lspf::{CancellationToken, LspError, Server, ServerContext};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -26,7 +26,7 @@ struct EvaluateSumArgs {
 
 async fn code_lens(
     _: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     params: CodeLensParams,
     _: CancellationToken,
 ) -> Result<Option<Vec<CodeLens>>, LspError> {
@@ -52,7 +52,7 @@ async fn code_lens(
 
 async fn resolve(
     _: Arc<State>,
-    _: Context,
+    _: ServerContext,
     mut lens: CodeLens,
     _: CancellationToken,
 ) -> Result<CodeLens, LspError> {
@@ -86,7 +86,7 @@ async fn resolve(
 
 async fn evaluate_sum(
     _: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     (args,): (EvaluateSumArgs,),
     _: CancellationToken,
 ) -> Result<(), LspError> {

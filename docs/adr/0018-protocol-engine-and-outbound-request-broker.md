@@ -27,7 +27,7 @@ post-validation hooks.
 ADR 0017 makes `Router<S>` immutable after initialization and identifies
 `ProtocolEngine` as the owner of JSON-RPC and LSP lifecycle behavior. It does
 not place the mutable connection state that coordinates the reader, Writer,
-user handlers, and `Client`. Leaving that state split among the Router,
+user handlers, and `ClientHandle`. Leaving that state split among the Router,
 Layers, and Transport adapters would make close races, cancellation, and
 request ID correlation depend on adapter-specific choices.
 
@@ -35,12 +35,12 @@ The server also needs one outbound request broker. A server-to-client request
 must reserve an ID before it is sent, remain pending while unrelated responses
 arrive, and complete when its matching response arrives. The broker has the
 same lifetime and failure boundary as the connection, so it cannot be a
-process-global facility or state privately owned by each `Client` clone.
+process-global facility or state privately owned by each `ClientHandle` clone.
 
 This decision fixes the connection-owned protocol module, its invariants, and
 the boundary between non-replaceable protocol behavior and user handlers.
 The public registration vocabulary remains that of ADR 0017:
-`ServerBuilder<S>`, `Server<S>`, `Router<S>`, `Context`, `Client`,
+`ServerBuilder<S>`, `Server<S>`, `Router<S>`, `ServerContext`, `ClientHandle`,
 `Workspace`, `Service`, `Layer`, and the typed handler forms.
 
 ## Decision
@@ -79,7 +79,7 @@ Router freeze state. A Transport adapter frames and moves messages. A
 `Runtime` executes engine-requested spawning and cancellation primitives, but
 does not own the connection task group or its cancellation policy.
 
-`Context`, `Client`, and `Workspace` are cloneable, capability-limited handles
+`ServerContext`, `ClientHandle`, and `Workspace` are cloneable, capability-limited handles
 into engine-owned facilities. Cloning a handle does not create or transfer
 ownership of the underlying queue, registry, allocator, or workspace state.
 Only `ProtocolEngine` creates, mutates, closes, and destroys those facilities.
@@ -126,7 +126,7 @@ the dedicated builder methods defined below.
 
 The reader gives each decoded JSON-RPC envelope to `ProtocolEngine`, not
 directly to the Router. The engine classifies responses before requests and
-notifications so a response can complete a `Client` operation without
+notifications so a response can complete a `ClientHandle` operation without
 entering user dispatch.
 
 For each valid inbound request, the engine reserves its ID in the inbound
@@ -145,10 +145,10 @@ document mutations ahead of user dispatch. Layer composition and handler
 concurrency cannot bypass this ordering. Notifications still have no response,
 but decode and built-in validation failures are logged consistently.
 
-### Outbound request broker and Client
+### Outbound request broker and ClientHandle
 
-`Client` is the typed server-to-client request and notification handle exposed
-through `Context`. It is not the protocol owner. A typed notification is
+`ClientHandle` is the typed server-to-client request and notification handle exposed
+through `ServerContext`. It is not the protocol owner. A typed notification is
 encoded and offered to the engine-owned outbound queue without allocating an
 ID or a pending entry.
 
@@ -158,7 +158,7 @@ For a typed request, `ProtocolEngine` performs these steps in order:
 2. allocate the next connection-local outbound request ID;
 3. insert a pending completion under that ID;
 4. encode and enqueue the request carrying that ID; and
-5. await the typed completion through `Client`.
+5. await the typed completion through `ClientHandle`.
 
 The pending entry exists before enqueue, so a fast response cannot outrun
 registration. If encoding or enqueue fails, the engine removes and completes
@@ -169,7 +169,7 @@ connection, even after its request completes or is abandoned. The positive
 `i32` ID space bounds the sequence; if it were ever exhausted, a new outbound
 request fails with `ClientError::IdExhausted`.
 
-When a pending request is abandoned — the awaiting `Client` future is dropped
+When a pending request is abandoned — the awaiting `ClientHandle` future is dropped
 without a response — the engine removes the pending entry and, if the request
 had been enqueued, emits exactly one typed `$/cancelRequest` notification
 carrying the abandoned request's ID. Requests dropped before enqueue emit
@@ -195,7 +195,7 @@ cancellation, closes the outbound queue, completes every outbound pending
 request with `ClientError::Cancelled`, cancels every remaining task in the
 engine-owned task group, and then joins every task. This cancel-then-join
 policy is identical for every close cause; no task is detached. No pending
-`Client` future remains unresolved after close. Completing the outbound
+`ClientHandle` future remains unresolved after close. Completing the outbound
 pending requests *before* cancelling inbound tasks is what lets a handler
 awaiting a client response observe `ClientError::Cancelled` and unwind, rather
 than be left hanging. (The legacy concurrent dispatcher behind the
@@ -219,7 +219,7 @@ ordering:
 3. invoke the user notification hook.
 
 The hook runs after validation. If the built-in mutates state, the hook
-observes the post-mutation `Context`; `willSave` and `didSave` instead observe
+observes the post-mutation `ServerContext`; `willSave` and `didSave` instead observe
 the unchanged [[Documents]]. If decoding or built-in validation fails, the hook
 does not run. A hook cannot suppress, roll back, or reorder built-in behavior.
 In particular, open/change/close hooks observe the updated [[Documents]],
@@ -228,18 +228,18 @@ trace hooks observe the updated protocol state.
 
 The three lifecycle hooks have dedicated builder methods:
 
-- `on_initialize` has the request-handler state, `Context`, params, and
+- `on_initialize` has the request-handler state, `ServerContext`, params, and
   `CancellationToken` shape fixed by ADR 0017. It runs after the `Workspace`
   has been established and before capabilities are returned. It returns
   `Result<Option<ServerInfo>, LspError>`. It cannot register routes, mutate
   `Router<S>`, contribute capabilities, or replace the framework-generated
   `ServerCapabilities`.
-- `on_shutdown` has the request-handler state, `Context`, params, and
+- `on_shutdown` has the request-handler state, `ServerContext`, params, and
   `CancellationToken` shape. It runs before the engine enters
   shutting-down. The engine enters shutting-down only when the hook returns
   success; on `LspError`, it remains in the initialized state and sends that
   error response.
-- `on_exit` has the notification-handler state, `Context`, and params shape.
+- `on_exit` has the notification-handler state, `ServerContext`, and params shape.
   It runs before the engine computes the exit outcome. The outcome is then
   determined from protocol-owned lifecycle state, including whether shutdown
   completed; the hook cannot choose or replace it.
@@ -286,9 +286,9 @@ We rejected putting lifecycle state or either request registry in
 connection progress and request completion are mutable protocol concerns.
 Mixing them would weaken the permanent-freeze guarantee from ADR 0017.
 
-We rejected giving each `Client` clone its own allocator or pending map.
+We rejected giving each `ClientHandle` clone its own allocator or pending map.
 Responses are connection-wide and may arrive out of order, so split brokers
-could allocate duplicate IDs or consume one another's responses. A `Client`
+could allocate duplicate IDs or consume one another's responses. A `ClientHandle`
 is a typed handle into the single engine-owned broker.
 
 We rejected allowing Transport adapters or the Writer task to clean up
@@ -332,7 +332,7 @@ outside this framework boundary.
 
 The engine becomes a deep internal module with substantial responsibility,
 but its surface is smaller than distributing registries and close logic
-across multiple objects. `Client`, `Context`, and `Workspace` remain cheap
+across multiple objects. `ClientHandle`, `ServerContext`, and `Workspace` remain cheap
 public handles without exposing protocol storage.
 
 ## Migration impact
@@ -355,14 +355,14 @@ post-validation hook. Initialization-dependent feature registration remains in
 `configure_initialize`; non-registration initialization work and optional
 `ServerInfo` move to `on_initialize`.
 
-`Client` implementations must route every typed request through the
+`ClientHandle` implementations must route every typed request through the
 connection's engine-owned ID allocator and pending registry. A direct
 request-write helper that waits on the Transport or owns a private response
 map is incompatible with this decision.
 
 ## Tests required by downstream milestones
 
-The protocol-engine, Router, Client, and Transport milestones must add
+The protocol-engine, Router, ClientHandle, and Transport milestones must add
 public-interface or protocol-boundary tests proving:
 
 - every valid inbound request reaches exactly one terminal response across
@@ -370,7 +370,7 @@ public-interface or protocol-boundary tests proving:
   rejection;
 - duplicate inbound IDs receive an invalid-request response without
   replacing or cancelling the original in-flight task;
-- concurrent typed `Client` requests receive unique IDs and correlate by ID
+- concurrent typed `ClientHandle` requests receive unique IDs and correlate by ID
   when responses arrive in reverse and mixed order;
 - unknown, duplicate, and late outbound response IDs do not complete another
   request;

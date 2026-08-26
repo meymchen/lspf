@@ -19,8 +19,8 @@ use tokio::sync::mpsc;
 
 use lspf::types::{CompletionItem, CompletionOptions, CompletionParams, CompletionResponse};
 use lspf::{
-    CancellationToken, Context, LspError, RawMessage, RequestId, Server, Transport, TransportError,
-    TransportReader, TransportWriter,
+    CancellationToken, LspError, RawMessage, RequestId, Server, ServerContext, Transport,
+    TransportError, TransportReader, TransportWriter,
 };
 
 /// Application state shared as `Arc<S>` by every handler on the connection.
@@ -28,7 +28,7 @@ struct AppState;
 
 async fn completion(
     _state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     _params: CompletionParams,
     _ct: CancellationToken,
 ) -> Result<Option<CompletionResponse>, LspError> {
@@ -39,7 +39,7 @@ async fn completion(
 
 async fn resolve(
     _state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     mut item: CompletionItem,
     _ct: CancellationToken,
 ) -> Result<CompletionItem, LspError> {

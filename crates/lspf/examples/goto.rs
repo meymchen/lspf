@@ -13,7 +13,7 @@ use lspf::types::{
     DeclarationOptions, DefinitionOptions, GotoDefinitionParams, GotoDefinitionResponse, Location,
     Position, ReferenceParams, ReferencesOptions, StaticTextDocumentRegistrationOptions,
 };
-use lspf::{CancellationToken, Context, LspError, Server};
+use lspf::{CancellationToken, LspError, Server, ServerContext};
 
 struct State;
 
@@ -37,7 +37,7 @@ fn definition_location(
 }
 
 fn selected(
-    ctx: &Context,
+    ctx: &ServerContext,
     uri: &lspf::types::Uri,
     position: Position,
 ) -> Result<(String, String), LspError> {
@@ -50,7 +50,7 @@ fn selected(
 
 async fn declaration(
     _: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     params: GotoDeclarationParams,
     _: CancellationToken,
 ) -> Result<Option<GotoDeclarationResponse>, LspError> {
@@ -61,7 +61,7 @@ async fn declaration(
 
 async fn definition(
     _: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     params: GotoDefinitionParams,
     _: CancellationToken,
 ) -> Result<Option<GotoDefinitionResponse>, LspError> {
@@ -72,7 +72,7 @@ async fn definition(
 
 async fn implementation(
     _: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     params: GotoImplementationParams,
     _: CancellationToken,
 ) -> Result<Option<GotoImplementationResponse>, LspError> {
@@ -83,7 +83,7 @@ async fn implementation(
 
 async fn type_definition(
     _: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     params: GotoTypeDefinitionParams,
     _: CancellationToken,
 ) -> Result<Option<GotoTypeDefinitionResponse>, LspError> {
@@ -103,7 +103,7 @@ async fn type_definition(
 
 async fn references(
     _: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     params: ReferenceParams,
     _: CancellationToken,
 ) -> Result<Option<Vec<Location>>, LspError> {

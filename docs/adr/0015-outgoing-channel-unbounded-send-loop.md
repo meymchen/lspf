@@ -10,13 +10,13 @@ unbounded, dedicated-send-loop behavior while superseding the concrete
 `tokio::sync::mpsc::unbounded_channel` selection: the queue primitive must
 compile on `wasm32-unknown-unknown` and pass the pre-0.5 compile spike.
 
-[[Context]]'s outgoing helpers (`publish_diagnostics`, `show_message`,
+[[ServerContext]]'s outgoing helpers (`publish_diagnostics`, `show_message`,
 `apply_edit`, …) push [[RawMessage]]s onto a single
 `tokio::sync::mpsc::unbounded_channel`. A dedicated task, spawned by
 the dispatcher at startup, owns the receiver and writes each message
 to the [[Transport]]. The read-loop and the send-loop run concurrently
 and never coordinate beyond the channel itself. The sync helpers on
-[[Context]] keep their non-`async` signatures: a handler emits a
+[[ServerContext]] keep their non-`async` signatures: a handler emits a
 notification with one statement, no `.await`.
 
 We rejected `tokio::sync::mpsc::channel(N)` paired with `async fn
@@ -24,7 +24,7 @@ publish_diagnostics(&self, ...)` (the tower-lsp shape): it propagates
 back-pressure into handler code, which sounds clean but means a slow
 or wedged LSP client can stall arbitrary handlers — including handlers
 unrelated to the publish, because the channel is shared. It also
-breaks the [[Context]] glossary entry's "fire-and-forget" framing of
+breaks the [[ServerContext]] glossary entry's "fire-and-forget" framing of
 the outgoing helpers and forces every call site to `.await`. We
 rejected `try_send` with a drop-on-full fallback: dropping
 `publishDiagnostics` frames is technically safe under LSP semantics

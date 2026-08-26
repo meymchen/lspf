@@ -18,3 +18,13 @@ readonly -a WASM_FEATURE_SELECTIONS=(
     wasm
     worker-channel
 )
+
+# Representative public API surfaces. The exhaustive compile and rustdoc
+# matrices above own feature-combination correctness; semver checking needs
+# only the core surface and the additive maximal surface for each target.
+readonly -a PUBLIC_API_SURFACES=(
+    'native|none'
+    'native|stdio,tcp,websocket,proposed'
+    'wasm32-unknown-unknown|wasm,proposed'
+    'wasm32-unknown-unknown|worker-channel,proposed'
+)

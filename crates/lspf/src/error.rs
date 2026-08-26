@@ -82,7 +82,7 @@ pub enum ClientError {
 }
 
 /// A failure of the connection-scoped work-done progress lifecycle
-/// ([`Client::begin_progress`](crate::Client::begin_progress) and the
+/// ([`ClientHandle::begin_progress`](crate::ClientHandle::begin_progress) and the
 /// resulting [`ProgressHandle`](crate::ProgressHandle)).
 ///
 /// These failures describe the handle's own state, not transport or remote

@@ -4,7 +4,7 @@
 //! language and the architectural decisions that shape this crate.
 //!
 //! The default documentation is the stable LSP 3.17 surface. APIs in the
-//! `proposed` module and proposed-only [`Client`] methods are explicitly
+//! `proposed` module and proposed-only [`ClientHandle`] methods are explicitly
 //! marked unstable and appear only when the `proposed` feature is enabled.
 
 #![deny(missing_docs)]
@@ -109,8 +109,8 @@ mod markdown {
 #[doc(hidden)]
 pub use builder::SharedHandler;
 pub use builder::{InitializeRegistrar, Server, ServerBuilder};
-pub use client::{Client, TelemetryEventParams};
-pub use context::Context;
+pub use client::{ClientHandle, TelemetryEventParams};
+pub use context::ServerContext;
 pub use documents::{Document, DocumentsView, PositionEncoding};
 #[cfg(any(feature = "runtime-tokio", target_arch = "wasm32"))]
 pub use engine::Outcome;

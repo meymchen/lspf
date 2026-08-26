@@ -19,9 +19,9 @@ The [[Workspace]] established during the initialize transaction therefore
 stores the **complete client-supplied snapshot** — client info, capabilities,
 initialization options, root URI, and workspace folders, all verbatim, folder
 order included — and owns the connection's [[Documents]] handle, handing out
-only the read-only `DocumentsView`. [[Context]] exposes that established
+only the read-only `DocumentsView`. [[ServerContext]] exposes that established
 Workspace directly: there is no workspace-less dispatch, so
-`Context::workspace()` returns the Workspace itself and `Context::documents()`
+`ServerContext::workspace()` returns the Workspace itself and `ServerContext::documents()`
 is the same view `Workspace::documents()` hands out. `Workspace::roots()`
 prefers the announced folders and falls back to one synthetic root derived
 from `rootUri`, named for its final path segment — percent-decoded, since the
@@ -54,7 +54,7 @@ this for its own caches). It merges files that differ only in case on
 case-sensitive filesystems — wrong for a server that must address the file
 the client means.
 
-We rejected **keeping `Option<Workspace>` in [[Context]]**. The engine
+We rejected **keeping `Option<Workspace>` in [[ServerContext]]**. The engine
 rejects every request and drops every notification before the initialize
 transaction establishes the Workspace, so the `None` case was unobservable
 by user code; making the Workspace non-optional removes an unwrap-or-ignore

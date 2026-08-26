@@ -14,8 +14,8 @@ use bytes::Bytes;
 use lspf::types::notification::Notification;
 use lspf::types::request::Request;
 use lspf::{
-    CancellationToken, Client, ClientError, Context, LspError, Outcome, RawMessage, RequestId,
-    Server, Transport, TransportError, TransportReader, TransportWriter,
+    CancellationToken, ClientError, ClientHandle, LspError, Outcome, RawMessage, RequestId, Server,
+    ServerContext, Transport, TransportError, TransportReader, TransportWriter,
 };
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
@@ -82,17 +82,17 @@ struct AppState {
     started: Mutex<Option<mpsc::UnboundedSender<()>>>,
     /// Set once the in-flight `test/slow` future is dropped.
     handler_dropped: Arc<AtomicBool>,
-    /// A `Client` handle lifted out of a handler, so a test can hold an
+    /// A `ClientHandle` handle lifted out of a handler, so a test can hold an
     /// outbound request pending from outside the engine's task group. A handler
     /// cannot return one through its result, which crosses the wire.
-    client: Arc<Mutex<Option<Client>>>,
+    client: Arc<Mutex<Option<ClientHandle>>>,
     /// Set if the `test/ping` notification ever reaches user dispatch.
     notification_dispatched: Arc<AtomicBool>,
 }
 
 async fn slow(
     state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     _params: Value,
     _ct: CancellationToken,
 ) -> Result<Value, LspError> {
@@ -107,7 +107,7 @@ async fn slow(
 
 async fn capture(
     state: Arc<AppState>,
-    ctx: Context,
+    ctx: ServerContext,
     _params: Value,
     _ct: CancellationToken,
 ) -> Result<Value, LspError> {
@@ -117,14 +117,14 @@ async fn capture(
 
 async fn echo(
     _state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     params: Value,
     _ct: CancellationToken,
 ) -> Result<Value, LspError> {
     Ok(params)
 }
 
-async fn ping(state: Arc<AppState>, _ctx: Context, _params: Value) {
+async fn ping(state: Arc<AppState>, _ctx: ServerContext, _params: Value) {
     state.notification_dispatched.store(true, Ordering::SeqCst);
 }
 
@@ -374,7 +374,7 @@ async fn simultaneous_eof_and_writer_failure_report_one_close_cause() {
 }
 
 /// Session close resolves every pending server-to-client request with the
-/// framework-owned session-closed error, so no `Client` caller is left waiting.
+/// framework-owned session-closed error, so no `ClientHandle` caller is left waiting.
 ///
 /// The caller here lives outside the engine's task group, so the resolution is
 /// observed directly rather than inferred from the absence of a hang.
@@ -388,7 +388,7 @@ async fn close_resolves_every_pending_client_request() {
     let (in_tx, mut out_rx, serving) = start(state, ALWAYS_WRITES);
     initialized(&in_tx, &mut out_rx).await;
 
-    // Lift a Client handle out of a handler so the pending request survives
+    // Lift a ClientHandle out of a handler so the pending request survives
     // independently of the engine's task group. The response proves the handler
     // ran, so the handle is already stored.
     in_tx.send(request(2, "test/capture", json!(null))).unwrap();

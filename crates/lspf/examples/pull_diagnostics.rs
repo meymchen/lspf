@@ -15,7 +15,7 @@ use lspf::types::{
     WorkspaceDocumentDiagnosticReport, WorkspaceFullDocumentDiagnosticReport,
     WorkspaceUnchangedDocumentDiagnosticReport,
 };
-use lspf::{CancellationToken, Context, LspError, Server};
+use lspf::{CancellationToken, LspError, Server, ServerContext};
 
 type Report = (Option<i32>, Vec<Diagnostic>);
 
@@ -24,7 +24,7 @@ struct State {
     reports: Mutex<HashMap<Uri, Report>>,
 }
 
-fn update(state: &State, ctx: &Context, uri: &Uri) {
+fn update(state: &State, ctx: &ServerContext, uri: &Uri) {
     let Some(document) = ctx.documents().get(uri) else {
         return;
     };
@@ -37,11 +37,11 @@ fn update(state: &State, ctx: &Context, uri: &Uri) {
     );
 }
 
-async fn did_open(state: Arc<State>, ctx: Context, params: DidOpenTextDocumentParams) {
+async fn did_open(state: Arc<State>, ctx: ServerContext, params: DidOpenTextDocumentParams) {
     update(&state, &ctx, &params.text_document.uri);
 }
 
-async fn did_change(state: Arc<State>, ctx: Context, params: DidChangeTextDocumentParams) {
+async fn did_change(state: Arc<State>, ctx: ServerContext, params: DidChangeTextDocumentParams) {
     update(&state, &ctx, &params.text_document.uri);
 }
 
@@ -51,7 +51,7 @@ fn result_id(uri: &Uri, version: Option<i32>) -> String {
 
 async fn document_diagnostic(
     state: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     params: DocumentDiagnosticParams,
     _: CancellationToken,
 ) -> Result<DocumentDiagnosticReportResult, LspError> {
@@ -83,7 +83,7 @@ async fn document_diagnostic(
 
 async fn workspace_diagnostic(
     state: Arc<State>,
-    _: Context,
+    _: ServerContext,
     params: WorkspaceDiagnosticParams,
     _: CancellationToken,
 ) -> Result<WorkspaceDiagnosticReportResult, LspError> {

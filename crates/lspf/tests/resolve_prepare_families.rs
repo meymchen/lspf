@@ -25,8 +25,8 @@ use lspf::types::{
     RenameOptions, RenameParams, TextDocumentPositionParams, WorkspaceEdit,
 };
 use lspf::{
-    BuildError, CancellationToken, Context, LspError, RawMessage, RequestId, Server, Transport,
-    TransportError, TransportReader, TransportWriter,
+    BuildError, CancellationToken, LspError, RawMessage, RequestId, Server, ServerContext,
+    Transport, TransportError, TransportReader, TransportWriter,
 };
 
 /// Application state shared as `Arc<S>` by every handler on the connection.
@@ -34,7 +34,7 @@ struct AppState;
 
 async fn rename(
     _state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     _params: RenameParams,
     _ct: CancellationToken,
 ) -> Result<Option<WorkspaceEdit>, LspError> {
@@ -43,7 +43,7 @@ async fn rename(
 
 async fn prepare_rename(
     _state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     params: TextDocumentPositionParams,
     _ct: CancellationToken,
 ) -> Result<Option<PrepareRenameResponse>, LspError> {
@@ -64,7 +64,7 @@ fn rename_options() -> RenameOptions {
 
 async fn code_action(
     _state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     _params: CodeActionParams,
     _ct: CancellationToken,
 ) -> Result<Option<CodeActionResponse>, LspError> {
@@ -79,7 +79,7 @@ async fn code_action(
 
 async fn code_action_resolve(
     _state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     mut action: CodeAction,
     _ct: CancellationToken,
 ) -> Result<CodeAction, LspError> {
@@ -96,7 +96,7 @@ fn code_action_options() -> CodeActionOptions {
 
 async fn code_lens(
     _state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     _params: CodeLensParams,
     _ct: CancellationToken,
 ) -> Result<Option<Vec<CodeLens>>, LspError> {
@@ -112,7 +112,7 @@ async fn code_lens(
 
 async fn code_lens_resolve(
     _state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     mut lens: CodeLens,
     _ct: CancellationToken,
 ) -> Result<CodeLens, LspError> {
@@ -132,7 +132,7 @@ fn code_lens_options() -> CodeLensOptions {
 
 async fn document_link(
     _state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     _params: DocumentLinkParams,
     _ct: CancellationToken,
 ) -> Result<Option<Vec<DocumentLink>>, LspError> {
@@ -149,7 +149,7 @@ async fn document_link(
 
 async fn document_link_resolve(
     _state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     mut link: DocumentLink,
     _ct: CancellationToken,
 ) -> Result<DocumentLink, LspError> {
@@ -166,7 +166,7 @@ fn document_link_options() -> DocumentLinkOptions {
 
 async fn inlay_hint(
     _state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     _params: InlayHintParams,
     _ct: CancellationToken,
 ) -> Result<Option<Vec<InlayHint>>, LspError> {
@@ -184,7 +184,7 @@ async fn inlay_hint(
 
 async fn inlay_hint_resolve(
     _state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     mut hint: InlayHint,
     _ct: CancellationToken,
 ) -> Result<InlayHint, LspError> {

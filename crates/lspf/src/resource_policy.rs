@@ -52,7 +52,7 @@ impl fmt::Display for ResourcePolicyField {
 /// `inbound request capacity exhausted`.
 /// Outbound admission counts one slot and the exact JSON-RPC envelope bytes
 /// for each accepted message until its transport send finishes. Ordinary
-/// [`Client`](crate::Client) operations return
+/// [`ClientHandle`](crate::ClientHandle) operations return
 /// [`ClientError::OutboundOverloaded`](crate::ClientError::OutboundOverloaded)
 /// when either budget is full. Responses, protocol errors, and
 /// `$/cancelRequest` use the engine's failure-close path if they cannot fit;

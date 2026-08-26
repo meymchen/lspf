@@ -11,7 +11,7 @@ use lspf::types::{
     CompletionItem, CompletionOptions, CompletionParams, CompletionResponse,
     DidOpenTextDocumentParams, Hover, HoverParams,
 };
-use lspf::{CancellationToken, Context, LspError, Server};
+use lspf::{CancellationToken, LspError, Server, ServerContext};
 
 /// Application state used unchanged by every host example.
 pub(crate) struct State {
@@ -29,7 +29,7 @@ impl State {
 /// The typed `textDocument/hover` handler.
 async fn hover(
     state: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     _params: HoverParams,
     _ct: CancellationToken,
 ) -> Result<Option<Hover>, LspError> {
@@ -45,7 +45,7 @@ async fn hover(
 /// The typed `textDocument/completion` handler.
 async fn completion(
     _state: Arc<State>,
-    _ctx: Context,
+    _ctx: ServerContext,
     _params: CompletionParams,
     _ct: CancellationToken,
 ) -> Result<Option<CompletionResponse>, LspError> {
@@ -67,7 +67,7 @@ impl lspf::types::request::Request for SharedPing {
 
 async fn ping(
     state: Arc<State>,
-    _ctx: Context,
+    _ctx: ServerContext,
     params: String,
     _ct: CancellationToken,
 ) -> Result<String, LspError> {
@@ -75,7 +75,7 @@ async fn ping(
 }
 
 /// The post-mutation hook for the built-in `textDocument/didOpen`.
-async fn on_did_open(_state: Arc<State>, _ctx: Context, _params: DidOpenTextDocumentParams) {}
+async fn on_did_open(_state: Arc<State>, _ctx: ServerContext, _params: DidOpenTextDocumentParams) {}
 
 /// Build the one handler set used by stdio, TCP, WebSocket, and
 /// worker-channel serving.

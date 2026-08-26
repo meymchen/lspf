@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use bytes::Bytes;
 use lspf::types::Uri;
 use lspf::{
-    Context, MemoryFileProvider, OsFileProvider, RawMessage, RequestId, Server, Transport,
+    MemoryFileProvider, OsFileProvider, RawMessage, RequestId, Server, ServerContext, Transport,
     TransportError, TransportReader, TransportWriter,
 };
 use tokio::sync::mpsc;
@@ -283,7 +283,7 @@ async fn builder_provider_is_used_by_the_established_workspace() {
     let hook_uri = requested.clone();
     let server = Server::builder(())
         .file_provider(provider)
-        .on_initialize(move |_state, ctx: Context, _params, _ct| {
+        .on_initialize(move |_state, ctx: ServerContext, _params, _ct| {
             let observed = Arc::clone(&hook_observed);
             let uri = hook_uri.clone();
             async move {
@@ -337,7 +337,7 @@ async fn builder_os_provider_serves_unopened_files_outside_any_root() {
     // file proves the provider does not restrict reads to workspace roots.
     let server = Server::builder(())
         .file_provider(OsFileProvider::new())
-        .on_initialize(move |_state, ctx: Context, _params, _ct| {
+        .on_initialize(move |_state, ctx: ServerContext, _params, _ct| {
             let observed = Arc::clone(&hook_observed);
             let uri = hook_uri.clone();
             async move {

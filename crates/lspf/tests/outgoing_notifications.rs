@@ -1,7 +1,7 @@
-//! Typed outgoing notification helpers on `Client` (issue #102).
+//! Typed outgoing notification helpers on `ClientHandle` (issue #102).
 //!
 //! These tests exercise the helpers over an in-memory transport, capturing the
-//! connection's `Client` from inside a handler and observing the exact wire
+//! connection's `ClientHandle` from inside a handler and observing the exact wire
 //! method and parameter shape against the fixtures under `tests/fixtures/`.
 
 use std::borrow::Cow;
@@ -19,8 +19,9 @@ use lspf::types::{
     WorkDoneProgressBegin,
 };
 use lspf::{
-    CancellationToken, Client, ClientError, Context, LspError, RawMessage, RequestId, Server,
-    TelemetryEventParams, Transport, TransportError, TransportReader, TransportWriter,
+    CancellationToken, ClientError, ClientHandle, LspError, RawMessage, RequestId, Server,
+    ServerContext, TelemetryEventParams, Transport, TransportError, TransportReader,
+    TransportWriter,
 };
 use serde_json::json;
 use tokio::sync::mpsc;
@@ -37,7 +38,7 @@ const PROGRESS_FIXTURE: &str = include_str!("fixtures/progress_notification.json
 // --- Registrations -----------------------------------------------------------
 
 struct AppState {
-    client: Arc<Mutex<Option<Client>>>,
+    client: Arc<Mutex<Option<ClientHandle>>>,
 }
 
 enum CaptureClient {}
@@ -66,7 +67,7 @@ impl Request for CtxPublish {
 
 async fn capture_client(
     state: Arc<AppState>,
-    ctx: Context,
+    ctx: ServerContext,
     _params: String,
     _ct: CancellationToken,
 ) -> Result<String, LspError> {
@@ -76,7 +77,7 @@ async fn capture_client(
 
 async fn trace_level(
     _state: Arc<AppState>,
-    ctx: Context,
+    ctx: ServerContext,
     _params: String,
     _ct: CancellationToken,
 ) -> Result<String, LspError> {
@@ -90,7 +91,7 @@ async fn trace_level(
 
 async fn ctx_publish(
     _state: Arc<AppState>,
-    ctx: Context,
+    ctx: ServerContext,
     params: PublishDiagnosticsParams,
     _ct: CancellationToken,
 ) -> Result<String, LspError> {
@@ -101,11 +102,17 @@ async fn ctx_publish(
     Ok("published".to_string())
 }
 
-async fn noop_open(_state: Arc<AppState>, _ctx: Context, _params: DidOpenTextDocumentParams) {}
+async fn noop_open(_state: Arc<AppState>, _ctx: ServerContext, _params: DidOpenTextDocumentParams) {
+}
 
-async fn noop_close(_state: Arc<AppState>, _ctx: Context, _params: DidCloseTextDocumentParams) {}
+async fn noop_close(
+    _state: Arc<AppState>,
+    _ctx: ServerContext,
+    _params: DidCloseTextDocumentParams,
+) {
+}
 
-fn server(state: &Arc<Mutex<Option<Client>>>) -> Server<AppState> {
+fn server(state: &Arc<Mutex<Option<ClientHandle>>>) -> Server<AppState> {
     Server::builder(AppState {
         client: Arc::clone(state),
     })
@@ -220,7 +227,7 @@ fn result_string(response: &RawMessage) -> String {
 }
 
 /// The connection's current trace level, observed through a handler's
-/// workspace — proof of what `Client::log_trace` gates on.
+/// workspace — proof of what `ClientHandle::log_trace` gates on.
 async fn trace_level_probe(session: &mut Session, id: i32) -> String {
     let response = request_and_sync(session, request(id, TraceLevel::METHOD, json!("probe"))).await;
     result_string(&response)
@@ -234,8 +241,8 @@ async fn set_trace(session: &mut Session, id: i32, value: &str) {
     assert_eq!(trace_level_probe(session, id).await, value);
 }
 
-/// A session that ran initialize and captured its connection `Client`.
-async fn initialized_session() -> (Session, Arc<Mutex<Option<Client>>>) {
+/// A session that ran initialize and captured its connection `ClientHandle`.
+async fn initialized_session() -> (Session, Arc<Mutex<Option<ClientHandle>>>) {
     let captured = Arc::new(Mutex::new(None));
     let mut session = start(server(&captured)).await;
     request_and_sync(
@@ -251,12 +258,12 @@ async fn initialized_session() -> (Session, Arc<Mutex<Option<Client>>>) {
     (session, captured)
 }
 
-fn take_client(captured: &Arc<Mutex<Option<Client>>>) -> Client {
+fn take_client(captured: &Arc<Mutex<Option<ClientHandle>>>) -> ClientHandle {
     captured
         .lock()
         .unwrap()
         .clone()
-        .expect("the handler captured its connection Client")
+        .expect("the handler captured its connection ClientHandle")
 }
 
 async fn finish(session: Session) {

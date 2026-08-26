@@ -17,7 +17,7 @@ use lspf::{
 };
 
 mod conformance_support {
-    pub(crate) use lspf::{Context, LspError, Outcome, Result, Server, TaskSend};
+    pub(crate) use lspf::{LspError, Outcome, Result, Server, ServerContext, TaskSend};
 }
 
 #[path = "../src/transport/conformance.rs"]

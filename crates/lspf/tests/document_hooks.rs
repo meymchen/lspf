@@ -32,8 +32,8 @@ use lspf::types::{
     WillSaveTextDocumentParams,
 };
 use lspf::{
-    BuildError, CancellationToken, Context, LspError, RawMessage, RequestId, ResourcePolicy,
-    Server, Transport, TransportError, TransportReader, TransportWriter,
+    BuildError, CancellationToken, LspError, RawMessage, RequestId, ResourcePolicy, Server,
+    ServerContext, Transport, TransportError, TransportReader, TransportWriter,
 };
 
 // --- What each hook observed -------------------------------------------------
@@ -73,7 +73,7 @@ fn uri(s: &str) -> Uri {
     Uri::from_str(s).expect("test URIs are valid")
 }
 
-async fn on_did_open(state: Arc<AppState>, ctx: Context, params: DidOpenTextDocumentParams) {
+async fn on_did_open(state: Arc<AppState>, ctx: ServerContext, params: DidOpenTextDocumentParams) {
     let doc = ctx.documents().get(&params.text_document.uri);
     state.seen.lock().unwrap().push(Seen::Open {
         text: doc.as_ref().map(|d| d.text()),
@@ -81,7 +81,11 @@ async fn on_did_open(state: Arc<AppState>, ctx: Context, params: DidOpenTextDocu
     });
 }
 
-async fn on_did_change(state: Arc<AppState>, ctx: Context, params: DidChangeTextDocumentParams) {
+async fn on_did_change(
+    state: Arc<AppState>,
+    ctx: ServerContext,
+    params: DidChangeTextDocumentParams,
+) {
     let doc = ctx.documents().get(&params.text_document.uri);
     state.seen.lock().unwrap().push(Seen::Change {
         text: doc.as_ref().map(|d| d.text()),
@@ -89,7 +93,11 @@ async fn on_did_change(state: Arc<AppState>, ctx: Context, params: DidChangeText
     });
 }
 
-async fn on_did_close(state: Arc<AppState>, ctx: Context, params: DidCloseTextDocumentParams) {
+async fn on_did_close(
+    state: Arc<AppState>,
+    ctx: ServerContext,
+    params: DidCloseTextDocumentParams,
+) {
     let still_present = ctx.documents().get(&params.text_document.uri).is_some();
     state
         .seen
@@ -98,7 +106,7 @@ async fn on_did_close(state: Arc<AppState>, ctx: Context, params: DidCloseTextDo
         .push(Seen::Close { still_present });
 }
 
-async fn on_did_save(state: Arc<AppState>, ctx: Context, params: DidSaveTextDocumentParams) {
+async fn on_did_save(state: Arc<AppState>, ctx: ServerContext, params: DidSaveTextDocumentParams) {
     let still_present = ctx.documents().get(&params.text_document.uri).is_some();
     state.seen.lock().unwrap().push(Seen::Save {
         still_present,
@@ -106,7 +114,11 @@ async fn on_did_save(state: Arc<AppState>, ctx: Context, params: DidSaveTextDocu
     });
 }
 
-async fn on_will_save(state: Arc<AppState>, ctx: Context, params: WillSaveTextDocumentParams) {
+async fn on_will_save(
+    state: Arc<AppState>,
+    ctx: ServerContext,
+    params: WillSaveTextDocumentParams,
+) {
     let still_present = ctx.documents().get(&params.text_document.uri).is_some();
     state
         .seen
@@ -117,7 +129,7 @@ async fn on_will_save(state: Arc<AppState>, ctx: Context, params: WillSaveTextDo
 
 async fn on_will_save_wait_until(
     _state: Arc<AppState>,
-    _ctx: Context,
+    _ctx: ServerContext,
     _params: WillSaveTextDocumentParams,
     _ct: CancellationToken,
 ) -> Result<Option<Vec<TextEdit>>, LspError> {
@@ -155,7 +167,7 @@ impl Request for Probe {
 
 async fn probe(
     _state: Arc<AppState>,
-    ctx: Context,
+    ctx: ServerContext,
     params: ProbeParams,
     _ct: CancellationToken,
 ) -> Result<ProbeResult, LspError> {
@@ -703,7 +715,7 @@ async fn the_built_in_mutation_runs_without_any_registered_hook() {
 async fn a_panicking_hook_cannot_suppress_or_roll_back_the_mutation() {
     async fn panicking_hook(
         _state: Arc<AppState>,
-        _ctx: Context,
+        _ctx: ServerContext,
         _params: DidOpenTextDocumentParams,
     ) {
         panic!("a hook must not be able to undo the built-in mutation");

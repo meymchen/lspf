@@ -32,13 +32,13 @@ use lspf::types::{
     MessageType, Position, PublishDiagnosticsParams, Range, Registration, RegistrationParams,
     ShowMessageParams, TextEdit, Uri, WorkspaceEdit,
 };
-use lspf::{CancellationToken, Context, LspError, OsFileProvider, ProgressOptions, Server};
+use lspf::{CancellationToken, LspError, OsFileProvider, ProgressOptions, Server, ServerContext};
 use tracing::{debug, warn};
 
 /// This server's own application state, shared by every handler as `Arc<State>`.
 ///
 /// The framework's documents, workspace, and client are reached through the
-/// `Context` parameter, never stored here; a real server would keep its
+/// `ServerContext` parameter, never stored here; a real server would keep its
 /// analysis results, caches, or configuration in this struct instead. This one
 /// has none, so it is empty.
 struct State;
@@ -55,7 +55,7 @@ impl State {
 /// document by the time this runs, so the hook observes the retained
 /// [`Document`](lspf::Document) through `ctx.documents()` rather than trusting
 /// the wire parameters, and reports on the state every later handler will see.
-async fn on_did_open(_state: Arc<State>, ctx: Context, params: DidOpenTextDocumentParams) {
+async fn on_did_open(_state: Arc<State>, ctx: ServerContext, params: DidOpenTextDocumentParams) {
     let uri = params.text_document.uri;
     let Some(document) = ctx.documents().get(&uri) else {
         // The built-in mutation runs before the hook, so a missing document
@@ -104,7 +104,7 @@ async fn on_did_open(_state: Arc<State>, ctx: Context, params: DidOpenTextDocume
 /// this request was dispatched.
 async fn hover(
     _state: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     params: HoverParams,
     _ct: CancellationToken,
 ) -> Result<Option<Hover>, LspError> {
@@ -130,7 +130,7 @@ async fn hover(
 /// exactly the supplied options as `completionProvider`.
 async fn completion(
     _state: Arc<State>,
-    _ctx: Context,
+    _ctx: ServerContext,
     _params: CompletionParams,
     _ct: CancellationToken,
 ) -> Result<Option<CompletionResponse>, LspError> {
@@ -156,7 +156,7 @@ async fn completion(
 /// would fail the build with a dangling `resolveProvider`.
 async fn resolve_completion(
     _state: Arc<State>,
-    _ctx: Context,
+    _ctx: ServerContext,
     item: CompletionItem,
     _ct: CancellationToken,
 ) -> Result<CompletionItem, LspError> {
@@ -174,7 +174,7 @@ async fn resolve_completion(
 /// `executeCommandProvider` (in registration order, ADR 0022).
 async fn workspace_roots(
     _state: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     _args: Vec<String>,
     _ct: CancellationToken,
 ) -> Result<Vec<(String, String)>, LspError> {
@@ -194,7 +194,7 @@ async fn workspace_roots(
 /// seen still resolves.
 async fn read_file(
     _state: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     args: Vec<String>,
     _ct: CancellationToken,
 ) -> Result<String, LspError> {
@@ -242,7 +242,7 @@ fn record(steps: &mut Vec<Step>, name: &str, outcome: Result<String, lspf::Clien
 }
 
 /// A typed Command running the complete outgoing-helper journey against the
-/// real client — every step goes through a named [`Client`](lspf::Client)
+/// real client — every step goes through a named [`ClientHandle`](lspf::ClientHandle)
 /// helper with native LSP types and no handwritten JSON.
 ///
 /// In wire order: a `workspace/configuration` lookup whose result is reported
@@ -254,7 +254,7 @@ fn record(steps: &mut Vec<Step>, name: &str, outcome: Result<String, lspf::Clien
 /// request with an error watches the rest of the journey complete regardless.
 async fn outgoing_journey(
     _state: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     args: Vec<String>,
     _ct: CancellationToken,
 ) -> Result<Vec<Step>, LspError> {
@@ -395,7 +395,7 @@ async fn outgoing_journey(
 /// work that only ends when it is cancelled or finished.
 async fn cancellable_progress(
     _state: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     _args: Vec<String>,
     _ct: CancellationToken,
 ) -> Result<Vec<Step>, LspError> {

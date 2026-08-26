@@ -1,4 +1,4 @@
-//! Client cancellation of work-done progress (issue #110).
+//! ClientHandle cancellation of work-done progress (issue #110).
 //!
 //! `window/workDoneProgress/cancel` is a protocol-owned built-in: the engine
 //! decodes it, resolves the token against the connection's progress registry,
@@ -19,8 +19,8 @@ use lspf::types::WorkDoneProgressCancelParams;
 use lspf::types::notification::{Notification, WorkDoneProgressCancel};
 use lspf::types::request::Request;
 use lspf::{
-    ClientError, Context, LspError, ProgressError, ProgressHandle, ProgressOptions, RawMessage,
-    RequestId, Server, Transport, TransportError, TransportReader, TransportWriter,
+    ClientError, LspError, ProgressError, ProgressHandle, ProgressOptions, RawMessage, RequestId,
+    Server, ServerContext, Transport, TransportError, TransportReader, TransportWriter,
 };
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
@@ -127,25 +127,27 @@ fn server(state: Arc<AppState>, with_hook: bool) -> Server<()> {
     let report_state = Arc::clone(&state);
     let end_state = Arc::clone(&state);
     let builder = Server::builder(())
-        .request::<BeginProgress, _, _>(move |_state: Arc<()>, ctx: Context, params: Value, _ct| {
-            let state = Arc::clone(&begin_state);
-            async move {
-                let cancellable = params
-                    .get("cancellable")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                let handle = ctx
-                    .client()
-                    .begin_progress(ProgressOptions::new("Indexing").cancellable(cancellable))
-                    .await
-                    .map_err(LspError::internal)?;
-                let token = serde_json::to_value(handle.token()).unwrap();
-                *state.handle.lock().unwrap() = Some(handle);
-                Ok(json!({ "token": token }))
-            }
-        })
+        .request::<BeginProgress, _, _>(
+            move |_state: Arc<()>, ctx: ServerContext, params: Value, _ct| {
+                let state = Arc::clone(&begin_state);
+                async move {
+                    let cancellable = params
+                        .get("cancellable")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    let handle = ctx
+                        .client()
+                        .begin_progress(ProgressOptions::new("Indexing").cancellable(cancellable))
+                        .await
+                        .map_err(LspError::internal)?;
+                    let token = serde_json::to_value(handle.token()).unwrap();
+                    *state.handle.lock().unwrap() = Some(handle);
+                    Ok(json!({ "token": token }))
+                }
+            },
+        )
         .request::<ProbeProgress, _, _>(
-            move |_state: Arc<()>, _ctx: Context, _params: Value, _ct| {
+            move |_state: Arc<()>, _ctx: ServerContext, _params: Value, _ct| {
                 let state = Arc::clone(&probe_state);
                 async move {
                     let guard = state.handle.lock().unwrap();
@@ -161,7 +163,7 @@ fn server(state: Arc<AppState>, with_hook: bool) -> Server<()> {
             },
         )
         .request::<ReportProgress, _, _>(
-            move |_state: Arc<()>, _ctx: Context, _params: Value, _ct| {
+            move |_state: Arc<()>, _ctx: ServerContext, _params: Value, _ct| {
                 let state = Arc::clone(&report_state);
                 async move {
                     let guard = state.handle.lock().unwrap();
@@ -172,24 +174,26 @@ fn server(state: Arc<AppState>, with_hook: bool) -> Server<()> {
                 }
             },
         )
-        .request::<EndProgress, _, _>(move |_state: Arc<()>, _ctx: Context, params: Value, _ct| {
-            let state = Arc::clone(&end_state);
-            async move {
-                let handle = state.handle.lock().unwrap().take().expect("progress begun");
-                let message = params
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .map(str::to_string);
-                handle.end(message).map_err(LspError::internal)?;
-                Ok(json!({ "end": "ok" }))
-            }
-        });
+        .request::<EndProgress, _, _>(
+            move |_state: Arc<()>, _ctx: ServerContext, params: Value, _ct| {
+                let state = Arc::clone(&end_state);
+                async move {
+                    let handle = state.handle.lock().unwrap().take().expect("progress begun");
+                    let message = params
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    handle.end(message).map_err(LspError::internal)?;
+                    Ok(json!({ "end": "ok" }))
+                }
+            },
+        );
     if !with_hook {
         return builder.build().expect("server builds");
     }
     builder
         .notification::<WorkDoneProgressCancel, _, _>(
-            move |_state: Arc<()>, _ctx: Context, params: WorkDoneProgressCancelParams| {
+            move |_state: Arc<()>, _ctx: ServerContext, params: WorkDoneProgressCancelParams| {
                 let state = Arc::clone(&state);
                 async move {
                     let cancelled = state

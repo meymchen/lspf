@@ -9,13 +9,13 @@ use lspf::types::{
     InlayHint, InlayHintKind, InlayHintLabel, InlayHintOptions, InlayHintParams, InlayHintTooltip,
     Position,
 };
-use lspf::{CancellationToken, Context, LspError, Server};
+use lspf::{CancellationToken, LspError, Server, ServerContext};
 
 struct State;
 
 async fn inlay_hints(
     _: Arc<State>,
-    ctx: Context,
+    ctx: ServerContext,
     params: InlayHintParams,
     _: CancellationToken,
 ) -> Result<Option<Vec<InlayHint>>, LspError> {
@@ -60,7 +60,7 @@ async fn inlay_hints(
 
 async fn resolve(
     _: Arc<State>,
-    _: Context,
+    _: ServerContext,
     mut hint: InlayHint,
     _: CancellationToken,
 ) -> Result<InlayHint, LspError> {

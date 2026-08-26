@@ -3,8 +3,8 @@
 [English](./outgoing-client.md) | [简体中文](./outgoing-client.zh-CN.md)
 
 This guide covers the server-to-client half of a connection: the typed
-[`Client`] handle a handler reaches through [`Context`], the named helpers it
-offers for every standard outgoing notification and request, dynamic
+[`ClientHandle`] a handler reaches through [`ServerContext`], the named helpers
+it offers for every standard outgoing notification and request, dynamic
 capability registration, work-done progress, and the escape hatches for
 custom methods. Nothing here is handwritten JSON — every helper takes native
 `lsp-types` parameters and returns native results, and every wire shape is
@@ -22,18 +22,18 @@ allocates no ID, and returns `ClientError::OutboundOverloaded` if the
 connection's message-count or encoded-byte budget is full. It can also fail if
 the connection is closing or the params cannot be encoded. The named helpers
 cover the stable outgoing surface —
-[`publish_diagnostics`](lspf::Client::publish_diagnostics),
-[`show_message`](lspf::Client::show_message),
-[`log_message`](lspf::Client::log_message),
-[`log_trace`](lspf::Client::log_trace),
-[`telemetry_event`](lspf::Client::telemetry_event), and
-[`progress`](lspf::Client::progress) — each sending its params exactly as
+[`publish_diagnostics`](lspf::ClientHandle::publish_diagnostics),
+[`show_message`](lspf::ClientHandle::show_message),
+[`log_message`](lspf::ClientHandle::log_message),
+[`log_trace`](lspf::ClientHandle::log_trace),
+[`telemetry_event`](lspf::ClientHandle::telemetry_event), and
+[`progress`](lspf::ClientHandle::progress) — each sending its params exactly as
 provided:
 
 ```rust
 # use lspf::types::{MessageType, ShowMessageParams};
-# use lspf::{Client, ClientError};
-# fn announce(client: &Client) {
+# use lspf::{ClientHandle, ClientError};
+# fn announce(client: &ClientHandle) {
 // The message goes to the client only; it is never echoed into the server's
 // local tracing stream.
 if let Err(error) = client.show_message(ShowMessageParams {
@@ -51,7 +51,7 @@ the client sends `$/setTrace` — it enqueues nothing and returns `Ok(())`, and
 sending never changes the level. `publish_diagnostics` sends the params
 verbatim, caller-provided `version` included; the framework neither caches
 nor deduplicates diagnostics, and closing a document never clears them
-automatically. [`Context::publish_diagnostics`](lspf::Context::publish_diagnostics)
+automatically. [`ServerContext::publish_diagnostics`](lspf::ServerContext::publish_diagnostics)
 is a convenience forward to the client helper and returns the same
 `Result<(), ClientError>`.
 
@@ -59,11 +59,11 @@ is a convenience forward to the client helper and returns the same
 
 A request reserves a connection-local, never-reused ID and asynchronously
 awaits its correlated response. The named helpers cover the standard window
-interactions — [`show_document`](lspf::Client::show_document),
-[`show_message_request`](lspf::Client::show_message_request) — and the
-workspace interactions — [`apply_edit`](lspf::Client::apply_edit),
-[`configuration`](lspf::Client::configuration),
-[`workspace_folders`](lspf::Client::workspace_folders). All of them are thin
+interactions — [`show_document`](lspf::ClientHandle::show_document),
+[`show_message_request`](lspf::ClientHandle::show_message_request) — and the
+workspace interactions — [`apply_edit`](lspf::ClientHandle::apply_edit),
+[`configuration`](lspf::ClientHandle::configuration),
+[`workspace_folders`](lspf::ClientHandle::workspace_folders). All of them are thin
 wrappers over the same typed request broker: params go out verbatim, results
 come back verbatim, and no helper adds UI, message-selection, or edit policy.
 
@@ -74,8 +74,8 @@ which stays under `workspace/didChangeConfiguration` notification sync:
 
 ```rust
 # use lspf::types::{ConfigurationItem, ConfigurationParams};
-# use lspf::{Client, ClientError};
-async fn tab_size(client: &Client) -> Result<Option<u64>, ClientError> {
+# use lspf::{ClientHandle, ClientError};
+async fn tab_size(client: &ClientHandle) -> Result<Option<u64>, ClientError> {
     let values = client
         .configuration(ConfigurationParams {
             items: vec![ConfigurationItem {
@@ -93,8 +93,8 @@ and the client's verdict comes back verbatim:
 
 ```rust
 # use lspf::types::{ApplyWorkspaceEditParams, Position, Range, TextEdit, Uri, WorkspaceEdit};
-# use lspf::{Client, ClientError};
-async fn insert_header(client: &Client, uri: Uri) -> Result<bool, ClientError> {
+# use lspf::{ClientHandle, ClientError};
+async fn insert_header(client: &ClientHandle, uri: Uri) -> Result<bool, ClientError> {
     let edit = WorkspaceEdit {
         changes: Some(
             [(
@@ -121,8 +121,8 @@ async fn insert_header(client: &Client, uri: Uri) -> Result<bool, ClientError> {
 
 ## Dynamic registration
 
-[`register_capability`](lspf::Client::register_capability) and
-[`unregister_capability`](lspf::Client::unregister_capability) announce
+[`register_capability`](lspf::ClientHandle::register_capability) and
+[`unregister_capability`](lspf::ClientHandle::unregister_capability) announce
 capability changes to the client at runtime. They are pure announcements:
 the permanently frozen [`Router`](lspf::Server) and the computed initialize
 capabilities stay untouched, the framework retains no second list of
@@ -132,8 +132,8 @@ initialize-conditional registration.
 
 ```rust
 # use lspf::types::{Registration, RegistrationParams};
-# use lspf::{Client, ClientError};
-async fn watch_files(client: &Client) -> Result<(), ClientError> {
+# use lspf::{ClientHandle, ClientError};
+async fn watch_files(client: &ClientHandle) -> Result<(), ClientError> {
     client
         .register_capability(RegistrationParams {
             registrations: vec![Registration {
@@ -149,18 +149,18 @@ async fn watch_files(client: &Client) -> Result<(), ClientError> {
 ## Workspace refresh
 
 Five helpers ask the client to re-pull a stable workspace feature —
-[`code_lens_refresh`](lspf::Client::code_lens_refresh),
-[`diagnostic_refresh`](lspf::Client::diagnostic_refresh),
-[`inlay_hint_refresh`](lspf::Client::inlay_hint_refresh),
-[`inline_value_refresh`](lspf::Client::inline_value_refresh), and
-[`semantic_tokens_refresh`](lspf::Client::semantic_tokens_refresh). Each
+[`code_lens_refresh`](lspf::ClientHandle::code_lens_refresh),
+[`diagnostic_refresh`](lspf::ClientHandle::diagnostic_refresh),
+[`inlay_hint_refresh`](lspf::ClientHandle::inlay_hint_refresh),
+[`inline_value_refresh`](lspf::ClientHandle::inline_value_refresh), and
+[`semantic_tokens_refresh`](lspf::ClientHandle::semantic_tokens_refresh). Each
 takes no parameters and returns the client's `null` acknowledgement as `()`;
 the helper owns no recomputation policy, and the framework keeps no lens,
 diagnostic, hint, value, or token state for it to touch.
 
 With the non-default `proposed` Cargo feature,
-[`refresh_folding_ranges`](lspf::Client::refresh_folding_ranges) and
-[`refresh_text_document_content`](lspf::Client::refresh_text_document_content)
+[`refresh_folding_ranges`](lspf::ClientHandle::refresh_folding_ranges) and
+[`refresh_text_document_content`](lspf::ClientHandle::refresh_text_document_content)
 join the surface, using request markers from
 [`lspf::proposed`](lspf::proposed) because `lsp-types` 0.97.x lacks them.
 Enabling the feature only adds API; it never changes the advertised
@@ -169,7 +169,7 @@ method.
 
 ## Work-done progress
 
-[`begin_progress`](lspf::Client::begin_progress) runs the connection-scoped
+[`begin_progress`](lspf::ClientHandle::begin_progress) runs the connection-scoped
 work-done lifecycle as one failure-safe operation: it allocates a
 connection-local numeric token from a monotonic sequence, completes
 `window/workDoneProgress/create`, registers the token only after the remote
@@ -179,8 +179,8 @@ the handle and removes the token whether the enqueue succeeded or failed, so
 a lifecycle never leaks its token.
 
 ```rust
-# use lspf::{Client, ClientError, ProgressOptions};
-async fn index_workspace(client: &Client) -> Result<(), ClientError> {
+# use lspf::{ClientHandle, ClientError, ProgressOptions};
+async fn index_workspace(client: &ClientHandle) -> Result<(), ClientError> {
     let progress = client
         .begin_progress(
             ProgressOptions::new("Indexing")
@@ -214,12 +214,12 @@ always call `end` deliberately.
 Non-standard outgoing methods need no new machinery: define a marker type
 implementing [`lsp_types::request::Request`](lspf::types::request::Request)
 or [`lsp_types::notification::Notification`](lspf::types::notification::Notification),
-then call the generic [`request`](lspf::Client::request) or
-[`notify`](lspf::Client::notify):
+then call the generic [`request`](lspf::ClientHandle::request) or
+[`notify`](lspf::ClientHandle::notify):
 
 ```rust
 use lspf::types::request::Request;
-use lspf::{Client, ClientError};
+use lspf::{ClientHandle, ClientError};
 
 enum SyntaxTree {}
 
@@ -229,7 +229,7 @@ impl Request for SyntaxTree {
     const METHOD: &'static str = "rust-analyzer/syntaxTree";
 }
 
-async fn syntax_tree(client: &Client, params: serde_json::Value) -> Result<String, ClientError> {
+async fn syntax_tree(client: &ClientHandle, params: serde_json::Value) -> Result<String, ClientError> {
     client.request::<SyntaxTree>(params).await
 }
 ```
@@ -257,28 +257,28 @@ return `Result<(), ClientError>`; request helpers return
 
 | Rust method | Wire method | Parameters | Result | Status |
 | --- | --- | --- | --- | --- |
-| `Client::publish_diagnostics` | `textDocument/publishDiagnostics` | `PublishDiagnosticsParams` | `()` | stable |
-| `Client::show_message` | `window/showMessage` | `ShowMessageParams` | `()` | stable |
-| `Client::log_message` | `window/logMessage` | `LogMessageParams` | `()` | stable |
-| `Client::log_trace` | `$/logTrace` | `LogTraceParams` | `()` | stable |
-| `Client::telemetry_event` | `telemetry/event` | `TelemetryEventParams` | `()` | stable |
-| `Client::progress` | `$/progress` | `ProgressParams` | `()` | stable |
-| `Context::publish_diagnostics` | `textDocument/publishDiagnostics` | `PublishDiagnosticsParams` | `()` | stable |
-| `Client::show_document` | `window/showDocument` | `ShowDocumentParams` | `ShowDocumentResult` | stable |
-| `Client::show_message_request` | `window/showMessageRequest` | `ShowMessageRequestParams` | `Option<MessageActionItem>` | stable |
-| `Client::apply_edit` | `workspace/applyEdit` | `ApplyWorkspaceEditParams` | `ApplyWorkspaceEditResponse` | stable |
-| `Client::configuration` | `workspace/configuration` | `ConfigurationParams` | `Vec<serde_json::Value>` | stable |
-| `Client::workspace_folders` | `workspace/workspaceFolders` | none (`null`) | `Option<Vec<WorkspaceFolder>>` | stable |
-| `Client::register_capability` | `client/registerCapability` | `RegistrationParams` | `()` | stable |
-| `Client::unregister_capability` | `client/unregisterCapability` | `UnregistrationParams` | `()` | stable |
-| `Client::code_lens_refresh` | `workspace/codeLens/refresh` | none (`null`) | `()` | stable |
-| `Client::diagnostic_refresh` | `workspace/diagnostic/refresh` | none (`null`) | `()` | stable |
-| `Client::inlay_hint_refresh` | `workspace/inlayHint/refresh` | none (`null`) | `()` | stable |
-| `Client::inline_value_refresh` | `workspace/inlineValue/refresh` | none (`null`) | `()` | stable |
-| `Client::semantic_tokens_refresh` | `workspace/semanticTokens/refresh` | none (`null`) | `()` | stable |
-| `Client::refresh_folding_ranges` | `workspace/foldingRange/refresh` | none (`null`) | `()` | proposed |
-| `Client::refresh_text_document_content` | `workspace/textDocumentContent/refresh` | `TextDocumentContentRefreshParams` | `()` | proposed |
-| `Client::begin_progress` | `window/workDoneProgress/create`, then `$/progress` begin | `ProgressOptions` | `ProgressHandle` | stable |
+| `ClientHandle::publish_diagnostics` | `textDocument/publishDiagnostics` | `PublishDiagnosticsParams` | `()` | stable |
+| `ClientHandle::show_message` | `window/showMessage` | `ShowMessageParams` | `()` | stable |
+| `ClientHandle::log_message` | `window/logMessage` | `LogMessageParams` | `()` | stable |
+| `ClientHandle::log_trace` | `$/logTrace` | `LogTraceParams` | `()` | stable |
+| `ClientHandle::telemetry_event` | `telemetry/event` | `TelemetryEventParams` | `()` | stable |
+| `ClientHandle::progress` | `$/progress` | `ProgressParams` | `()` | stable |
+| `ServerContext::publish_diagnostics` | `textDocument/publishDiagnostics` | `PublishDiagnosticsParams` | `()` | stable |
+| `ClientHandle::show_document` | `window/showDocument` | `ShowDocumentParams` | `ShowDocumentResult` | stable |
+| `ClientHandle::show_message_request` | `window/showMessageRequest` | `ShowMessageRequestParams` | `Option<MessageActionItem>` | stable |
+| `ClientHandle::apply_edit` | `workspace/applyEdit` | `ApplyWorkspaceEditParams` | `ApplyWorkspaceEditResponse` | stable |
+| `ClientHandle::configuration` | `workspace/configuration` | `ConfigurationParams` | `Vec<serde_json::Value>` | stable |
+| `ClientHandle::workspace_folders` | `workspace/workspaceFolders` | none (`null`) | `Option<Vec<WorkspaceFolder>>` | stable |
+| `ClientHandle::register_capability` | `client/registerCapability` | `RegistrationParams` | `()` | stable |
+| `ClientHandle::unregister_capability` | `client/unregisterCapability` | `UnregistrationParams` | `()` | stable |
+| `ClientHandle::code_lens_refresh` | `workspace/codeLens/refresh` | none (`null`) | `()` | stable |
+| `ClientHandle::diagnostic_refresh` | `workspace/diagnostic/refresh` | none (`null`) | `()` | stable |
+| `ClientHandle::inlay_hint_refresh` | `workspace/inlayHint/refresh` | none (`null`) | `()` | stable |
+| `ClientHandle::inline_value_refresh` | `workspace/inlineValue/refresh` | none (`null`) | `()` | stable |
+| `ClientHandle::semantic_tokens_refresh` | `workspace/semanticTokens/refresh` | none (`null`) | `()` | stable |
+| `ClientHandle::refresh_folding_ranges` | `workspace/foldingRange/refresh` | none (`null`) | `()` | proposed |
+| `ClientHandle::refresh_text_document_content` | `workspace/textDocumentContent/refresh` | `TextDocumentContentRefreshParams` | `()` | proposed |
+| `ClientHandle::begin_progress` | `window/workDoneProgress/create`, then `$/progress` begin | `ProgressOptions` | `ProgressHandle` | stable |
 | `ProgressHandle::report` | `$/progress` report | `Option<String>` message, `Option<u32>` percentage | `()` | stable |
 | `ProgressHandle::end` | `$/progress` end | `Option<String>` message | `()` | stable |
 
@@ -303,6 +303,6 @@ implicit behavior:
 - **No implicit progress end.** Dropping a [`ProgressHandle`] removes its
   token with a warning but sends nothing; only `end` ends a progress.
 
-[`Client`]: https://docs.rs/lspf/latest/lspf/struct.Client.html
-[`Context`]: https://docs.rs/lspf/latest/lspf/struct.Context.html
+[`ClientHandle`]: https://docs.rs/lspf/latest/lspf/struct.ClientHandle.html
+[`ServerContext`]: https://docs.rs/lspf/latest/lspf/struct.ServerContext.html
 [`ProgressHandle`]: https://docs.rs/lspf/latest/lspf/struct.ProgressHandle.html

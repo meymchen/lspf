@@ -22,7 +22,7 @@ order. The framework also needs a boundary that cannot let a Layer disable
 protocol validity, observe serialized bytes, or escape panic isolation.
 
 This decision uses the type names fixed by ADRs 0017 and 0018:
-`ServerBuilder<S>`, `Server<S>`, `Router<S>`, `ProtocolEngine`, `Context`,
+`ServerBuilder<S>`, `Server<S>`, `Router<S>`, `ProtocolEngine`, `ServerContext`,
 `Service`, `Layer`, `LspError`, and the typed handler forms. `RouterService`
 is the terminal `Service<State>` adapter over the frozen `Router<State>`.
 
@@ -85,7 +85,7 @@ constructing an `IncomingCall`. Each field has one meaning:
   for a notification.
 - `params` is the decoded parameter value. It is not a byte buffer or
   serialized JSON string.
-- `context` is the request- or notification-scoped `Context` backed by the
+- `context` is the request- or notification-scoped `ServerContext` backed by the
   current connection's `ProtocolEngine`.
 - `handler_timeout` is the connection resource policy's finite default for a
   request and is absent for a notification. A Layer may replace the duration

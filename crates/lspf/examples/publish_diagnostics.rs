@@ -8,11 +8,11 @@ use lspf::types::notification::{DidChangeTextDocument, DidOpenTextDocument};
 use lspf::types::{
     DidChangeTextDocumentParams, DidOpenTextDocumentParams, PublishDiagnosticsParams,
 };
-use lspf::{Context, Server};
+use lspf::{Server, ServerContext};
 
 struct State;
 
-async fn publish(ctx: Context, uri: lspf::types::Uri) {
+async fn publish(ctx: ServerContext, uri: lspf::types::Uri) {
     let Some(document) = ctx.documents().get(&uri) else {
         return;
     };
@@ -23,11 +23,11 @@ async fn publish(ctx: Context, uri: lspf::types::Uri) {
     });
 }
 
-async fn did_open(_: Arc<State>, ctx: Context, params: DidOpenTextDocumentParams) {
+async fn did_open(_: Arc<State>, ctx: ServerContext, params: DidOpenTextDocumentParams) {
     publish(ctx, params.text_document.uri).await;
 }
 
-async fn did_change(_: Arc<State>, ctx: Context, params: DidChangeTextDocumentParams) {
+async fn did_change(_: Arc<State>, ctx: ServerContext, params: DidChangeTextDocumentParams) {
     publish(ctx, params.text_document.uri).await;
 }
 

@@ -28,6 +28,7 @@ job="$(jq -c '.jobs["gate-b-evidence"]' <<<"$ci_json")"
 
 jq -e '
   .name == "Gate B bounded-resource evidence"
+  and .if == "${{ github.event_name == '\''push'\'' }}"
   and .["runs-on"] == "ubuntu-latest"
   and .permissions == {"contents": "read"}
   and any(.steps[];

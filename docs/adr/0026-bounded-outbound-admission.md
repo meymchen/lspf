@@ -18,10 +18,10 @@ charged.
 The channel primitive remains unbounded because it is a runtime-neutral wake-up
 mechanism shared by native and WASM targets. Admission happens under the
 queue's accounting lock before a message enters that channel, so accepted work
-cannot exceed either policy budget. This keeps `Client::notify` synchronous and
+cannot exceed either policy budget. This keeps `ClientHandle::notify` synchronous and
 does not introduce transport back-pressure into handlers.
 
-Ordinary `Client` notifications and requests return
+Ordinary `ClientHandle` notifications and requests return
 `ClientError::OutboundOverloaded` when either budget is full. A rejected
 request removes the pending broker entry allocated before enqueue. Callers can
 therefore distinguish overload from a closed transport and decide whether to

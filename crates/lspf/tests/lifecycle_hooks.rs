@@ -23,7 +23,7 @@ use lspf::{
     TransportReader, TransportWriter,
 };
 
-/// A client-bound notification a hook can emit, proving its `Context` client
+/// A client-bound notification a hook can emit, proving its `ServerContext` client
 /// handle is live.
 enum HookNotice {}
 
@@ -207,7 +207,7 @@ fn hook_notices(outbox: &[RawMessage]) -> usize {
 // --- Tests -------------------------------------------------------------------
 
 /// A successful shutdown hook runs before the built-in transition, receives
-/// the request-handler arguments, and can use its live `Context` before the
+/// the request-handler arguments, and can use its live `ServerContext` before the
 /// shutdown response is sent.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn shutdown_hook_runs_before_a_successful_transition() {
@@ -359,7 +359,7 @@ async fn initialized_hook_runs_once_after_successful_initialize() {
     assert_eq!(hook_notices(&outbox), 0);
 }
 
-/// The initialized hook receives typed params and a live `Context`: its client
+/// The initialized hook receives typed params and a live `ServerContext`: its client
 /// handle can send a notification that reaches the wire.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn initialized_hook_receives_typed_params_and_a_live_context() {
@@ -485,7 +485,7 @@ async fn malformed_initialized_params_skip_the_hook_but_valid_empty_ones_run_it(
 }
 
 /// The exit hook runs before the engine records the close cause and observes
-/// a live `Context`, yet the reported exit code stays engine-owned: 1 without
+/// a live `ServerContext`, yet the reported exit code stays engine-owned: 1 without
 /// a preceding `shutdown`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exit_hook_runs_with_a_live_context_and_cannot_change_the_outcome() {
