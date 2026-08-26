@@ -40,18 +40,28 @@ case ${1:-} in
             echo 'test fixture requires deterministic, uncolored output' >&2
             exit 101
         fi
-        if [[ " $* " != *' --features '* \
-            && ${RUSTFLAGS:-} != *'target_arch="wasm32"'* ]]; then
+        if [[ " $* " == *websocket* ]]; then
             cat <<OUTPUT
 --- failure enum_marked_non_exhaustive: enum marked non-exhaustive ---
        reference: https://example.invalid/enum_marked_non_exhaustive
 Failed in:
+  struct Context in ${FAKE_CHECKOUT_ROOT:?}/crates/lspf/src/context.rs:18
   enum BuildError in ${FAKE_CHECKOUT_ROOT:?}/crates/lspf/src/error.rs:113
+  struct Client in ${FAKE_CHECKOUT_ROOT:?}/crates/lspf/src/client.rs:826
     Finished [   1.000s] lspf
 OUTPUT
-            exit 100
+        else
+            cat <<OUTPUT
+--- failure enum_marked_non_exhaustive: enum marked non-exhaustive ---
+       reference: https://example.invalid/enum_marked_non_exhaustive
+Failed in:
+  struct Client in ${FAKE_CHECKOUT_ROOT:?}/crates/lspf/src/client.rs:826
+  enum BuildError in ${FAKE_CHECKOUT_ROOT:?}/crates/lspf/src/error.rs:113
+  struct Context in ${FAKE_CHECKOUT_ROOT:?}/crates/lspf/src/context.rs:18
+    Finished [   1.000s] lspf
+OUTPUT
         fi
-        echo 'Completed [   1.000s] lspf'
+        exit 100
         ;;
     *)
         exit 101
@@ -96,14 +106,16 @@ assert_report '
     and .success == false
     and .releaseType == "minor"
     and .intentionalPre1BreakingChanges == false
-    and (.rows | length == 22)
-    and ([.rows[] | select(.result == "breaking-changes")] | length == 1)
+    and (.rows | length == 4)
+    and ([.rows[] | select(.result == "breaking-changes")] | length == 4)
+    and ([.rows[].findingsSha256] | unique | length == 1)
     and (.rows[] | select(.target == "native" and .features == "none")
         | .toolExitCode == 100 and .exitCode == 100
           and (.command | contains("--color never"))
           and (.findingsSha256 | test("^[0-9a-f]{64}$")))
     and (.rows[] | select(
-            .target == "wasm32-unknown-unknown" and .features == "wasm")
+            .target == "wasm32-unknown-unknown"
+            and .features == "wasm,proposed")
         | (.command | contains("RUSTDOCFLAGS="))
           and ((.command | contains("RUSTFLAGS=")) | not))
 '
@@ -115,7 +127,7 @@ fi
 jq -e '
     .success == false
     and .baselineVersion == "0.5.2"
-    and (.rows | length == 22)
+    and (.rows | length == 4)
 ' "$test_root/target/automatic-baseline-report.json" >/dev/null
 
 findings_hash=$(jq -r \
@@ -136,7 +148,7 @@ assert_report '
     .success == true
     and .intentionalPre1BreakingChanges == true
     and ([.rows[] | select(.result == "approved-breaking-changes")]
-        | length == 1)
+        | length == 4)
     and (.rows[] | select(.target == "native" and .features == "none")
         | .toolExitCode == 100 and .exitCode == 0)
 '
@@ -150,7 +162,7 @@ assert_report '
     .success == false
     and .releaseType == "patch"
     and .intentionalPre1BreakingChanges == false
-    and ([.rows[] | select(.result == "breaking-changes")] | length == 1)
+    and ([.rows[] | select(.result == "breaking-changes")] | length == 4)
 '
 
 echo '{"schemaVersion":1,"approvals":"invalid"}' \

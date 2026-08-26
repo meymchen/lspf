@@ -37,5 +37,7 @@ jobs:
         run: bash ci/test-gate-a-evidence-workflow.sh
       - name: Test Gate B evidence workflow contract
         run: bash ci/test-gate-b-evidence-workflow.sh
+      - name: Test CI pull-request fast-path contract
+        run: bash ci/test-ci-fast-path.sh
       - name: Enforce Action pins and minimal job permissions
         run: bash ci/check-workflow-security.sh

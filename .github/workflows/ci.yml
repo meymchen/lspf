@@ -11,9 +11,14 @@ env:
 
 permissions: {}
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   feature-matrix:
     name: load native feature matrix
+    if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -92,6 +97,7 @@ jobs:
 
   msrv:
     name: msrv
+    if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -131,6 +137,7 @@ jobs:
 
   native-matrix:
     name: native ${{ matrix.name }}
+    if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -207,6 +214,7 @@ jobs:
 
   test-coverage:
     name: test coverage
+    if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -246,6 +254,7 @@ jobs:
 
   gate-b-evidence:
     name: Gate B bounded-resource evidence
+    if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -269,7 +278,7 @@ jobs:
 
   gate-a-evidence:
     name: Gate A release evidence
-    if: ${{ always() }}
+    if: ${{ always() && github.event_name == 'push' }}
     needs:
       - markdownlint
       - public-docs

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- [**breaking**] Rename the handler context to `ServerContext` and the
+  server-to-client peer handle to `ClientHandle`, without compatibility aliases.
+
 ## [0.8.1](https://github.com/meymchen/lspf/compare/v0.8.0...v0.8.1) - 2026-08-26
 
 ### Other
@@ -19,8 +24,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- [**breaking**] Rename the handler context to `ServerContext` and the
-  server-to-client peer handle to `ClientHandle`, without compatibility aliases.
 - [**breaking**] Raise the MSRV from Rust 1.96 to 1.98 and pin development and
   CI to the exact Rust 1.98.0 toolchain.
 

@@ -126,7 +126,6 @@ overall_exit=0
 check_surface() {
     local target=$1
     local features=$2
-    local proposed=$3
     local selected_features=$features
     local surface_features=$features
     local target_name=native
@@ -145,14 +144,6 @@ check_surface() {
         --only-explicit-features
     )
 
-    if [[ $proposed == true ]]; then
-        if [[ $selected_features == none ]]; then
-            selected_features=proposed
-        else
-            selected_features+=,proposed
-        fi
-        surface_features+=,proposed
-    fi
     if [[ $selected_features != none ]]; then
         command+=(--features "$selected_features")
     fi
@@ -189,7 +180,20 @@ check_surface() {
                     -e '/^    Finished /d' \
                     -e 's#[^[:space:]]*/lspf-'"$baseline_version"'/#<baseline>/#g' \
                     -e 's#[^[:space:]]*/crates/lspf/#<current>/#g')
-            findings_hash=$(printf '%s' "$findings" | sha256sum | cut -d' ' -f1)
+            # cargo-semver-checks does not guarantee finding or item ordering.
+            # Sort lines inside each failure block, then sort the blocks, so
+            # equivalent findings have one fingerprint without losing which
+            # lint reported each item.
+            canonical_findings=$(printf '%s\n' "$findings" \
+                | jq -Rrs '
+                    [splits("(?m)(?=^--- failure )")
+                     | select(length > 0)
+                     | split("\n") | sort | join("\n")]
+                    | sort | join("\n")
+                ')
+            findings_hash=$(printf '%s' "$canonical_findings" \
+                | sha256sum \
+                | cut -d' ' -f1)
             approved_hash=$(jq -er \
                 --arg baseline "$baseline_version" \
                 --arg current "$current_version" \
@@ -236,13 +240,9 @@ check_surface() {
     printf '%-28s %s\n' "$target_name/$surface_features" "$result"
 }
 
-for features in "${NATIVE_FEATURE_SELECTIONS[@]}"; do
-    check_surface native "$features" false
-    check_surface native "$features" true
-done
-for features in "${WASM_FEATURE_SELECTIONS[@]}"; do
-    check_surface wasm32-unknown-unknown "$features" false
-    check_surface wasm32-unknown-unknown "$features" true
+for surface in "${PUBLIC_API_SURFACES[@]}"; do
+    IFS='|' read -r target features <<<"$surface"
+    check_surface "$target" "$features"
 done
 
 jq -s \
@@ -260,4 +260,26 @@ jq -s \
     "$rows_file" >"$report_path"
 
 echo "Public API compatibility report: $report_path"
+if ((overall_exit != 0)); then
+    if [[ $breaking_approvals_allowed != true ]] \
+        && jq -s -e 'any(.[]; .result == "breaking-changes")' "$rows_file" >/dev/null
+    then
+        echo "public-api error: breaking changes require a new pre-1.0 minor version; current version is $current_version" >&2
+    fi
+    jq -rs --arg baseline "$baseline_version" --arg current "$current_version" '
+        [ .[] | select(.result == "breaking-changes") ] as $breaks
+        | if ($breaks | length) > 0
+            and ([$breaks[].findingsSha256] | unique | length) == 1
+          then [{baselineVersion: $baseline, currentVersion: $current,
+                 target: "*", features: "*",
+                 findingsSha256: $breaks[0].findingsSha256}]
+          else [$breaks[]
+                | {baselineVersion: $baseline, currentVersion: $current,
+                   target, features, findingsSha256}]
+          end
+        | unique
+        | .[]
+        | "approval candidate: " + (@json)
+    ' "$rows_file" >&2
+fi
 exit "$overall_exit"
