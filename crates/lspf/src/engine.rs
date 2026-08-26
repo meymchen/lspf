@@ -57,16 +57,17 @@ use crate::failure::{ConnectionDirection, ConnectionFailureCategory, FailureRepo
 use crate::file_provider::SharedFileProvider;
 use crate::progress::{ProgressCancel, ProgressRegistry};
 use crate::raw::{RawMessage, RequestId};
-use crate::runtime::{Runtime, TaskHandle, default_runtime, ensure_runtime_available};
+use crate::runtime::{Runtime, default_runtime, ensure_runtime_available};
 use crate::service::{
     HandlerTimeout, IncomingCall, ServiceResult, UserLayer, UserService, build_service_stack,
 };
 #[cfg(all(test, not(target_arch = "wasm32")))]
 use crate::session::send_loop as drive_send_loop;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+use crate::session::{CloseSignal, OutboundQueue, OutboundRegistry, enqueue_encoded};
 use crate::session::{
-    CloseSignal, INBOUND_CAPACITY_EXHAUSTED, InboundReserveError, OutboundQueue, OutboundRegistry,
-    ProtocolSession, Reservation, enqueue_encoded, error_response, run_handler_with_deadline,
-    send_loop_with_trace,
+    INBOUND_CAPACITY_EXHAUSTED, InboundReserveError, ProtocolSession, Reservation,
+    run_handler_with_deadline,
 };
 use crate::telemetry::{Completion, ConnectionTrace, Direction, Instant};
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -218,44 +219,20 @@ where
     let failure_reporter = FailureReporter::new(server.error_hook.clone(), connection_trace.id());
     let connection_span = connection_trace.span();
     let (reader, writer) = transport.split();
-    let (out_tx, out_rx) = OutboundQueue::bounded_with_reporter(
-        server.resource_policy.max_outbound_messages,
-        server.resource_policy.max_outbound_bytes,
+    let runtime = default_runtime();
+    let (protocol, client) = ProtocolSession::start(
+        runtime,
+        server.resource_policy,
+        writer,
         connection_trace,
         failure_reporter.clone(),
+        CloseCause::writer_failed,
+        ClientHandle::new,
     );
-    let client = ClientHandle::new(
-        out_tx.clone(),
-        OutboundRegistry::default(),
-        server.resource_policy.outbound_request_timeout,
-    );
-    let close = CloseSignal::new();
-    let runtime = default_runtime();
-    let send_task = runtime.spawn(
-        send_loop_with_trace(
-            writer,
-            out_rx,
-            client.clone(),
-            close.clone(),
-            CloseCause::writer_failed,
-            connection_trace,
-            failure_reporter.clone(),
-        )
-        .instrument(connection_span.clone()),
-    );
-    ProtocolEngine::new(
-        server,
-        runtime,
-        out_tx,
-        client,
-        close,
-        send_task,
-        connection_trace,
-        failure_reporter,
-    )
-    .serve(reader)
-    .instrument(connection_span)
-    .await
+    ProtocolEngine::new(server, protocol, client, connection_trace, failure_reporter)
+        .serve(reader)
+        .instrument(connection_span)
+        .await
 }
 
 #[derive(serde::Deserialize)]
@@ -400,16 +377,12 @@ where
 {
     fn new(
         server: Server<S>,
-        runtime: R,
-        out_tx: OutboundQueue,
+        protocol: ProtocolSession<R, ClientHandle, CloseCause>,
         client: ClientHandle,
-        close: CloseSignal<CloseCause>,
-        send_task: TaskHandle,
         trace: ConnectionTrace,
         failure_reporter: FailureReporter,
     ) -> Self {
         let max_inbound_requests = server.resource_policy.max_inbound_requests;
-        let handler_timeout = server.resource_policy.handler_timeout;
         Self {
             state: server.state,
             documents: Documents::with_resource_policy(server.resource_policy, trace),
@@ -431,17 +404,7 @@ where
             on_initialized: None,
             on_shutdown: None,
             on_exit: None,
-            protocol: ProtocolSession::new(
-                runtime,
-                max_inbound_requests,
-                handler_timeout,
-                out_tx,
-                client.clone(),
-                close,
-                send_task,
-                trace,
-                failure_reporter.clone(),
-            ),
+            protocol,
             client,
             trace,
             failure_reporter,
@@ -556,11 +519,8 @@ where
                             Direction::Inbound,
                             Completion::Rejected,
                         );
-                        enqueue_error(
-                            self.protocol.outbound(),
-                            id,
-                            LspError::invalid_request("duplicate request id"),
-                        );
+                        self.protocol
+                            .reject_inbound(id, LspError::invalid_request("duplicate request id"));
                         return Flow::Continue;
                     }
                     Err(InboundReserveError::CapacityExhausted) => {
@@ -571,8 +531,7 @@ where
                             Direction::Inbound,
                             Completion::Rejected,
                         );
-                        enqueue_error(
-                            self.protocol.outbound(),
+                        self.protocol.reject_inbound(
                             id,
                             LspError::ServerError {
                                 code: SERVER_CANCELLED as i32,
@@ -739,11 +698,7 @@ where
                     match serde_json::from_slice::<CancelParams>(bytes) {
                         Ok(cancel) => {
                             if let Some(reservation) = self.protocol.cancel_inbound(&cancel.id) {
-                                enqueue_encoded(
-                                    self.protocol.outbound(),
-                                    reservation.id,
-                                    Err(LspError::RequestCancelled),
-                                );
+                                self.protocol.complete_cancelled(reservation);
                             }
                         }
                         Err(error) => {
@@ -908,10 +863,7 @@ where
                     None,
                     None,
                 );
-                let _ = self
-                    .protocol
-                    .outbound()
-                    .send_required(RawMessage::ProtocolError { error });
+                self.protocol.send_protocol_error(error);
             }
         }
 
@@ -1360,10 +1312,6 @@ fn final_close_cause(close: &CloseSignal<CloseCause>, out_tx: &OutboundQueue) ->
     } else {
         recorded
     }
-}
-
-fn enqueue_error(out_tx: &OutboundQueue, id: RequestId, err: LspError) {
-    let _ = out_tx.send_required(error_response(id, &err));
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

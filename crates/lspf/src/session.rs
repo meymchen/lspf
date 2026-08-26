@@ -17,13 +17,14 @@ use futures_util::future::{Either, select};
 use futures_util::select_biased;
 use lsp_types::error_codes::SERVER_CANCELLED;
 use tokio_util::sync::CancellationToken;
-use tracing::warn;
+use tracing::{Instrument, warn};
 
 use crate::LspError;
 use crate::client::ClientHandle;
 pub(crate) use crate::client::{OutboundQueue, OutboundRegistry};
 use crate::failure::{ConnectionDirection, ConnectionFailureCategory, FailureReporter};
 use crate::raw::{JsonRpcError, RawMessage, RequestId};
+use crate::resource_policy::ResourcePolicy;
 use crate::runtime::{Runtime, TaskHandle, TaskSend};
 use crate::service::{HandlerTimeout, ServiceResult};
 use crate::sync::{OwnedPermit, Semaphore};
@@ -63,33 +64,62 @@ impl CompletionGate {
 }
 
 impl<R: Runtime, P: SessionPeer, C> ProtocolSession<R, P, C> {
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new(
+    /// Create every piece of mutable protocol machinery for one connection.
+    pub(crate) fn start<W, F>(
         runtime: R,
-        max_inbound_requests: usize,
-        handler_timeout: Duration,
-        out_tx: OutboundQueue,
-        peer: P,
-        close: CloseSignal<C>,
-        send_task: TaskHandle,
+        policy: ResourcePolicy,
+        writer: W,
         trace: ConnectionTrace,
         failure_reporter: FailureReporter,
-    ) -> Self {
-        Self {
+        writer_failed: fn() -> C,
+        make_peer: F,
+    ) -> (Self, P)
+    where
+        W: TransportWriter + 'static,
+        P: TaskSend + 'static,
+        C: TaskSend + 'static,
+        F: FnOnce(OutboundQueue, OutboundRegistry, Option<Duration>) -> P,
+    {
+        let (out_tx, out_rx) = OutboundQueue::bounded_with_reporter(
+            policy.max_outbound_messages,
+            policy.max_outbound_bytes,
+            trace,
+            failure_reporter.clone(),
+        );
+        let peer = make_peer(
+            out_tx.clone(),
+            OutboundRegistry::default(),
+            policy.outbound_request_timeout,
+        );
+        let close = CloseSignal::new();
+        let send_task = runtime.spawn(
+            send_loop_with_trace(
+                writer,
+                out_rx,
+                peer.clone(),
+                close.clone(),
+                writer_failed,
+                trace,
+                failure_reporter.clone(),
+            )
+            .instrument(trace.span()),
+        );
+        let session = Self {
             inbound: InboundRegistry::new_with_reporter(
-                max_inbound_requests,
+                policy.max_inbound_requests,
                 trace,
                 failure_reporter,
             ),
-            handler_timeout,
+            handler_timeout: policy.handler_timeout,
             tasks: TaskGroup::new(runtime),
             out_tx,
             cancellation: CancellationToken::new(),
             close,
-            peer,
+            peer: peer.clone(),
             send_task: Some(send_task),
             closed: false,
-        }
+        };
+        (session, peer)
     }
 
     /// Run the one idempotent protocol close operation.
@@ -126,8 +156,22 @@ impl<R: Runtime, P: SessionPeer, C> ProtocolSession<R, P, C> {
         self.close.take_cause()
     }
 
-    pub(crate) fn outbound(&self) -> &OutboundQueue {
-        &self.out_tx
+    pub(crate) fn reject_inbound(&self, id: RequestId, error: LspError) {
+        let _ = self.out_tx.send_required(error_response(id, &error));
+    }
+
+    pub(crate) fn complete_cancelled(&self, reservation: Reservation) {
+        enqueue_encoded(
+            &self.out_tx,
+            reservation.id,
+            Err(LspError::RequestCancelled),
+        );
+    }
+
+    pub(crate) fn send_protocol_error(&self, error: JsonRpcError) {
+        let _ = self
+            .out_tx
+            .send_required(RawMessage::ProtocolError { error });
     }
 
     pub(crate) fn handler_timeout(&self) -> Duration {
@@ -760,7 +804,9 @@ pub(crate) async fn send_loop_with_trace<W: TransportWriter, P: SessionPeer, C>(
         // The depth counts what is still queued, so each message is decremented
         // once its transport send has succeeded or failed — including the
         // terminally failed send, after which the loop returns.
-        if let Err(e) = send_outbound(&mut writer, msg, &peer, trace, &failure_reporter).await {
+        if let Err(e) =
+            send_outbound(&mut writer, msg, peer.clone(), trace, &failure_reporter).await
+        {
             warn!(error = %e, "send_loop: transport write failed");
             abandon_outbound(&mut out_rx, &peer, &close, writer_failed);
             // ADR 0018: the writer reports its terminal failure and performs no
@@ -771,7 +817,9 @@ pub(crate) async fn send_loop_with_trace<W: TransportWriter, P: SessionPeer, C>(
         }
     }
     while let Ok(msg) = out_rx.recv().await {
-        if let Err(e) = send_outbound(&mut writer, msg, &peer, trace, &failure_reporter).await {
+        if let Err(e) =
+            send_outbound(&mut writer, msg, peer.clone(), trace, &failure_reporter).await
+        {
             warn!(error = %e, "send_loop: transport write failed while draining");
             abandon_outbound(&mut out_rx, &peer, &close, writer_failed);
             return;
@@ -792,7 +840,7 @@ pub(crate) async fn send_loop_with_trace<W: TransportWriter, P: SessionPeer, C>(
 async fn send_outbound<W: TransportWriter, P: SessionPeer>(
     writer: &mut W,
     message: RawMessage,
-    peer: &P,
+    peer: P,
     trace: ConnectionTrace,
     failure_reporter: &FailureReporter,
 ) -> std::result::Result<(), TransportError> {
