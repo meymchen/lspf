@@ -259,6 +259,13 @@ with it.
 _Avoid_: Middleware (less precise; "layer" is the trait name and the
 canonical term), interceptor.
 
+**Error hook**:
+The connection-level observer for framing, protocol, Transport,
+panic-isolation, overload, and close failures. It receives only stable
+categories and non-sensitive connection identity, runs outside user Layers,
+and cannot alter responses, cleanup, or the connection outcome (ADR 0027).
+_Avoid_: Error Layer, failure handler (it observes rather than handles).
+
 **Service**:
 The internal abstraction (`Service<State>`) that consumes one normalized
 `IncomingCall` and asynchronously returns exactly one `ServiceResult`

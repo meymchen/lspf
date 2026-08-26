@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- [**breaking**] Raise the MSRV from Rust 1.96 to 1.98 and pin development and
+  CI to the exact Rust 1.98.0 toolchain.
+
 ### Added
 
 - [**breaking**] Bound outbound queues by message count and encoded bytes,

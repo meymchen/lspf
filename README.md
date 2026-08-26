@@ -143,7 +143,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ```
 
-The crate requires Rust 1.96 or newer. The quickstart uses the default `stdio`
+The crate requires Rust 1.98 or newer. The quickstart uses the default `stdio`
 feature; select a different feature set for another Transport.
 
 List every crate your application names directly. In this example, `tokio`,
@@ -377,6 +377,37 @@ current span.
 The default events never record request parameters, response results,
 Document text, or a serialized wire envelope. Applications may add their own
 events inside handlers, but should treat those payloads as sensitive too.
+
+For metrics or alerting that should not depend on tracing output, register one
+connection error hook on the server:
+
+```rust
+struct State;
+
+let _server = lspf::Server::builder(State)
+    .on_error(|failure| {
+        eprintln!(
+            "connection {}: {:?}",
+            failure.context.connection_id,
+            failure.category,
+        );
+    })
+    .build()
+    .expect("server configuration is valid");
+```
+
+`ConnectionFailureCategory` distinguishes framing, protocol, Transport,
+panic-isolation, overload, and close failures. The context contains the
+connection ID and, when known, direction, method, and request ID. It never
+contains parameters, results, document text, wire data, panic payloads, or
+underlying error messages. Numeric request IDs retain their value;
+peer-controlled string IDs are exposed only as `ConnectionRequestId::String`,
+with their contents redacted. Method names are included only when they are
+framework-owned, registered, or locally declared by a typed outbound request;
+other peer-controlled method names are omitted. Each failure is reported at its
+source. A panic in the hook is caught and logged; it cannot suppress a response
+or interrupt the connection's cleanup. The hook observes connection failures
+outside the user Layer chain, which still wraps user dispatch only.
 
 After the server initializes, `vscode-languageclient` automatically registers
 the four Commands advertised through `executeCommandProvider`. The extension

@@ -12,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, error, info_span};
 
 use crate::builder::Router;
+use crate::failure::{ConnectionDirection, ConnectionFailureCategory, FailureReporter};
 use crate::sync::Semaphore;
 use crate::telemetry::{Deadline, DeadlineAction, Direction, Instant};
 use crate::{Context, LspError, RequestId, TaskFuture, TaskSend};
@@ -417,12 +418,16 @@ impl<S: Send + Sync + 'static> Service<S> for TracingService<S> {
 
 struct PanicIsolationService<S> {
     inner: UserService<S>,
+    failure_reporter: FailureReporter,
 }
 
 impl<S: Send + Sync + 'static> Service<S> for PanicIsolationService<S> {
     fn call(&self, call: IncomingCall<S>) -> ServiceFuture {
         let inner = Arc::clone(&self.inner);
         let kind = call.kind;
+        let method = call.method.clone();
+        let request_id = call.request_id.clone();
+        let failure_reporter = self.failure_reporter.clone();
         Box::pin(async move {
             match AssertUnwindSafe(async move { inner.call(call).await })
                 .catch_unwind()
@@ -430,10 +435,22 @@ impl<S: Send + Sync + 'static> Service<S> for PanicIsolationService<S> {
             {
                 Ok(result) => result,
                 Err(_) if kind == CallKind::Request => {
+                    failure_reporter.report(
+                        ConnectionFailureCategory::PanicIsolation,
+                        Some(ConnectionDirection::Inbound),
+                        Some(&method),
+                        request_id.as_ref(),
+                    );
                     error!("panic isolated while dispatching request");
                     ServiceResult::Error(LspError::internal("user dispatch panicked"))
                 }
                 Err(_) => {
+                    failure_reporter.report(
+                        ConnectionFailureCategory::PanicIsolation,
+                        Some(ConnectionDirection::Inbound),
+                        Some(&method),
+                        None,
+                    );
                     error!("panic isolated while dispatching notification");
                     ServiceResult::NoResponse
                 }
@@ -446,6 +463,7 @@ pub(crate) fn build_service_stack<S>(
     router: Arc<Router<S>>,
     layers: Vec<UserLayer<S>>,
     concurrency_limit: usize,
+    failure_reporter: FailureReporter,
 ) -> UserService<S>
 where
     S: Send + Sync + 'static,
@@ -462,5 +480,8 @@ where
         permits: Semaphore::shared(concurrency_limit),
     });
     service = Arc::new(TracingService { inner: service });
-    Arc::new(PanicIsolationService { inner: service })
+    Arc::new(PanicIsolationService {
+        inner: service,
+        failure_reporter,
+    })
 }

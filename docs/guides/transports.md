@@ -32,7 +32,7 @@ lspf = { version = "0.5.2", default-features = false, features = ["tcp"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
-The crate requires Rust 1.96 or newer. The example selects only the TCP
+The crate requires Rust 1.98 or newer. The example selects only the TCP
 adapter; keep the default features when using stdio.
 
 | Feature | Default | Enables | Public effect |

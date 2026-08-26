@@ -53,8 +53,9 @@ use crate::capability::GeneratedCapabilities;
 use crate::client::{Client, OutboundQueue, OutboundRegistry};
 use crate::codec::{decode_params, decode_value, encode_body};
 use crate::context::Context;
-use crate::documents::Documents;
+use crate::documents::{DocumentMutationError, Documents};
 use crate::error::Error;
+use crate::failure::{ConnectionDirection, ConnectionFailureCategory, FailureReporter};
 use crate::file_provider::SharedFileProvider;
 use crate::progress::{ProgressCancel, ProgressRegistry};
 use crate::raw::{JsonRpcError, RawMessage, RequestId};
@@ -263,12 +264,14 @@ where
     // first spawn (ADR 0020). The framework never starts a runtime implicitly.
     ensure_runtime_available()?;
     let connection_trace = ConnectionTrace::new();
+    let failure_reporter = FailureReporter::new(server.error_hook.clone(), connection_trace.id());
     let connection_span = connection_trace.span();
     let (reader, writer) = transport.split();
-    let (out_tx, out_rx) = OutboundQueue::bounded_with_trace(
+    let (out_tx, out_rx) = OutboundQueue::bounded_with_reporter(
         server.resource_policy.max_outbound_messages,
         server.resource_policy.max_outbound_bytes,
         connection_trace,
+        failure_reporter.clone(),
     );
     let client = Client::new(
         out_tx.clone(),
@@ -284,6 +287,7 @@ where
             client.clone(),
             close.clone(),
             connection_trace,
+            failure_reporter.clone(),
         )
         .instrument(connection_span.clone()),
     );
@@ -295,6 +299,7 @@ where
         close,
         send_task,
         connection_trace,
+        failure_reporter,
     )
     .serve(reader)
     .instrument(connection_span)
@@ -402,6 +407,7 @@ struct InboundRegistry {
     inner: Arc<Mutex<InboundInner>>,
     capacity: Arc<Semaphore>,
     trace: ConnectionTrace,
+    failure_reporter: FailureReporter,
     limit: usize,
 }
 
@@ -422,10 +428,15 @@ struct ReservedRequest {
 impl InboundRegistry {
     #[cfg(all(test, not(target_arch = "wasm32")))]
     fn new(capacity: usize) -> Self {
-        Self::new_with_trace(capacity, ConnectionTrace::new())
+        let trace = ConnectionTrace::new();
+        Self::new_with_reporter(capacity, trace, FailureReporter::new(None, trace.id()))
     }
 
-    fn new_with_trace(capacity: usize, trace: ConnectionTrace) -> Self {
+    fn new_with_reporter(
+        capacity: usize,
+        trace: ConnectionTrace,
+        failure_reporter: FailureReporter,
+    ) -> Self {
         Self {
             inner: Arc::new(Mutex::new(InboundInner {
                 entries: HashMap::new(),
@@ -433,6 +444,7 @@ impl InboundRegistry {
             })),
             capacity: Semaphore::shared(capacity),
             trace,
+            failure_reporter,
             limit: capacity,
         }
     }
@@ -467,13 +479,17 @@ impl InboundRegistry {
             return Err(InboundReserveError::DuplicateId);
         }
         let Some(permit) = self.capacity.try_acquire_owned() else {
+            let current = inner.entries.len();
             self.trace.resource_budget(
                 Resource::InboundRequests,
                 ResourceAction::Reject,
-                inner.entries.len(),
+                current,
                 self.limit,
                 None,
             );
+            drop(inner);
+            self.failure_reporter
+                .report_unvalidated_inbound_method(ConnectionFailureCategory::Overload, Some(&id));
             return Err(InboundReserveError::CapacityExhausted);
         };
         let permit = Arc::new(permit);
@@ -661,13 +677,33 @@ struct CancelParams {
 ///
 /// Most built-ins gate their hook on the `Result` of
 /// [`ProtocolEngine::process_protocol_notification`]; the work-done progress
-/// cancel built-in reports its own non-error rejections (malformed params) at
-/// debug level and signals the gate directly instead.
+/// cancel built-in reports its own non-error registry misses at debug level
+/// and signals malformed parameters through the gate directly instead.
 enum BuiltInGate {
     /// Decode — and any mutation — succeeded: dispatch the registered hook.
     RunHook,
-    /// The notification was dropped before decode completed: no hook runs.
-    SkipHook,
+    /// Parameters violated the protocol contract: report and skip the hook.
+    ProtocolFailure,
+}
+
+enum BuiltInError {
+    Protocol(LspError),
+    Overload(LspError),
+}
+
+impl From<LspError> for BuiltInError {
+    fn from(error: LspError) -> Self {
+        Self::Protocol(error)
+    }
+}
+
+impl From<DocumentMutationError> for BuiltInError {
+    fn from(error: DocumentMutationError) -> Self {
+        match error {
+            DocumentMutationError::Capacity(error) => Self::Overload(error),
+            DocumentMutationError::Protocol(error) => Self::Protocol(error),
+        }
+    }
 }
 
 /// Decode and apply one `window/workDoneProgress/cancel` notification against
@@ -685,7 +721,7 @@ fn gate_progress_cancel(registry: &ProgressRegistry, raw_params: &Bytes) -> Buil
         Ok(params) => params,
         Err(error) => {
             debug!(%error, "ignoring malformed window/workDoneProgress/cancel");
-            return BuiltInGate::SkipHook;
+            return BuiltInGate::ProtocolFailure;
         }
     };
     match registry.cancel(&params.token) {
@@ -709,7 +745,16 @@ async fn send_loop<W: TransportWriter>(
     client: Client,
     close: CloseSignal,
 ) {
-    send_loop_with_trace(writer, out_rx, client, close, ConnectionTrace::new()).await;
+    let trace = ConnectionTrace::new();
+    send_loop_with_trace(
+        writer,
+        out_rx,
+        client,
+        close,
+        trace,
+        FailureReporter::new(None, trace.id()),
+    )
+    .await;
 }
 
 async fn send_loop_with_trace<W: TransportWriter>(
@@ -718,6 +763,7 @@ async fn send_loop_with_trace<W: TransportWriter>(
     client: Client,
     close: CloseSignal,
     trace: ConnectionTrace,
+    failure_reporter: FailureReporter,
 ) {
     let outbound_closing = client.outbound_closing();
     loop {
@@ -737,37 +783,66 @@ async fn send_loop_with_trace<W: TransportWriter>(
         // The depth counts what is still queued, so each message is decremented
         // once its transport send has succeeded or failed — including the
         // terminally failed send, after which the loop returns.
-        trace.message(Direction::Outbound, &msg);
-        let sent = writer.send(msg).await;
-        client.record_done();
-        if let Err(e) = sent {
+        if let Err(e) = send_outbound(&mut writer, msg, &client, trace, &failure_reporter).await {
             warn!(error = %e, "send_loop: transport write failed");
-            out_rx.close();
-            client.discard_outbound();
+            abandon_outbound(&mut out_rx, &client, &close);
             // ADR 0018: the writer reports its terminal failure and performs no
             // registry or task cleanup of its own; the engine runs the one
             // close operation. Accounting is released here because the
             // receiver is abandoning every message it retained.
-            close.request(CloseCause::WriterFailed);
             return;
         }
     }
     while let Ok(msg) = out_rx.recv().await {
-        trace.message(Direction::Outbound, &msg);
-        let sent = writer.send(msg).await;
-        client.record_done();
-        if let Err(e) = sent {
+        if let Err(e) = send_outbound(&mut writer, msg, &client, trace, &failure_reporter).await {
             warn!(error = %e, "send_loop: transport write failed while draining");
-            out_rx.close();
-            client.discard_outbound();
-            close.request(CloseCause::WriterFailed);
+            abandon_outbound(&mut out_rx, &client, &close);
             return;
         }
     }
     if let Err(e) = writer.shutdown().await {
+        failure_reporter.report(
+            ConnectionFailureCategory::Close,
+            Some(ConnectionDirection::Outbound),
+            None,
+            None,
+        );
         warn!(error = %e, "send_loop: transport shutdown failed");
         close.request(CloseCause::WriterFailed);
     }
+}
+
+async fn send_outbound<W: TransportWriter>(
+    writer: &mut W,
+    message: RawMessage,
+    client: &Client,
+    trace: ConnectionTrace,
+    failure_reporter: &FailureReporter,
+) -> std::result::Result<(), TransportError> {
+    trace.message(Direction::Outbound, &message);
+    let method = message.method().map(str::to_owned);
+    let request_id = message.id().cloned();
+    let result = writer.send(message).await;
+    client.record_done();
+    if result.is_err() {
+        failure_reporter.report(
+            ConnectionFailureCategory::Transport,
+            Some(ConnectionDirection::Outbound),
+            method.as_deref(),
+            request_id.as_ref(),
+        );
+    }
+    result
+}
+
+fn abandon_outbound(
+    out_rx: &mut UnboundedReceiver<RawMessage>,
+    client: &Client,
+    close: &CloseSignal,
+) {
+    out_rx.close();
+    client.discard_outbound();
+    close.request(CloseCause::WriterFailed);
 }
 
 /// The static registrations and lifecycle callbacks awaiting the initialize
@@ -830,6 +905,7 @@ struct ProtocolEngine<S, R> {
     session: CancellationToken,
     close: CloseSignal,
     trace: ConnectionTrace,
+    failure_reporter: FailureReporter,
     /// The writer's send-loop task. Signalled by closing the outbound queue and
     /// then joined by [`close`](Self::close), so it is never detached.
     send_task: Option<TaskHandle>,
@@ -848,6 +924,7 @@ where
         close: CloseSignal,
         send_task: TaskHandle,
         trace: ConnectionTrace,
+        failure_reporter: FailureReporter,
     ) -> Self {
         let max_inbound_requests = server.resource_policy.max_inbound_requests;
         let handler_timeout = server.resource_policy.handler_timeout;
@@ -872,7 +949,11 @@ where
             on_initialized: None,
             on_shutdown: None,
             on_exit: None,
-            inbound: InboundRegistry::new_with_trace(max_inbound_requests, trace),
+            inbound: InboundRegistry::new_with_reporter(
+                max_inbound_requests,
+                trace,
+                failure_reporter.clone(),
+            ),
             handler_timeout,
             tasks: TaskGroup::new(runtime),
             out_tx,
@@ -880,6 +961,7 @@ where
             session: CancellationToken::new(),
             close,
             trace,
+            failure_reporter,
             send_task: Some(send_task),
         }
     }
@@ -930,6 +1012,21 @@ where
                     break;
                 }
                 Err(error) => {
+                    let category = match &error {
+                        TransportError::Malformed(_) | TransportError::OversizedMessage { .. } => {
+                            ConnectionFailureCategory::Framing
+                        }
+                        TransportError::Io(_) | TransportError::Serde(_) => {
+                            ConnectionFailureCategory::Transport
+                        }
+                        TransportError::Closed => unreachable!("closed is handled above"),
+                    };
+                    self.failure_reporter.report(
+                        category,
+                        Some(ConnectionDirection::Inbound),
+                        None,
+                        None,
+                    );
                     self.close.request(CloseCause::ReaderFailed(error));
                     break;
                 }
@@ -959,6 +1056,10 @@ where
                 ) {
                     Ok(reserved) => reserved,
                     Err(InboundReserveError::DuplicateId) => {
+                        self.failure_reporter.report_unvalidated_inbound_method(
+                            ConnectionFailureCategory::Protocol,
+                            Some(&id),
+                        );
                         self.trace.request_completed(
                             method.as_ref(),
                             &id,
@@ -1004,6 +1105,10 @@ where
                         Lifecycle::Uninitialized(_) | Lifecycle::Initializing
                     )
                 {
+                    self.failure_reporter.report_unvalidated_inbound_method(
+                        ConnectionFailureCategory::Protocol,
+                        Some(&reservation.id),
+                    );
                     self.inbound.complete(
                         &self.out_tx,
                         reservation,
@@ -1013,6 +1118,10 @@ where
                 }
                 // After `shutdown`, every request is invalid until `exit`.
                 if matches!(self.lifecycle, Lifecycle::ShuttingDown | Lifecycle::Exited) {
+                    self.failure_reporter.report_unvalidated_inbound_method(
+                        ConnectionFailureCategory::Protocol,
+                        Some(&reservation.id),
+                    );
                     self.inbound.complete(
                         &self.out_tx,
                         reservation,
@@ -1030,6 +1139,12 @@ where
                             decode_params::<()>(&params)
                         };
                         if let Err(err) = params_result {
+                            self.failure_reporter.report(
+                                ConnectionFailureCategory::Protocol,
+                                Some(ConnectionDirection::Inbound),
+                                Some("shutdown"),
+                                Some(&reservation.id),
+                            );
                             self.inbound.complete(&self.out_tx, reservation, Err(err));
                             return Flow::Continue;
                         }
@@ -1080,6 +1195,10 @@ where
                         let params = match decode_value(&params) {
                             Ok(params) => params,
                             Err(error) => {
+                                self.failure_reporter.report_unvalidated_inbound_method(
+                                    ConnectionFailureCategory::Protocol,
+                                    Some(&reservation.id),
+                                );
                                 self.inbound.complete(&self.out_tx, reservation, Err(error));
                                 return Flow::Continue;
                             }
@@ -1105,11 +1224,19 @@ where
                     // outcome — the LSP exit code below derives from
                     // protocol-owned lifecycle state alone, and the hook
                     // receives only the shared state and a live `Context`.
-                    if matches!(
+                    let established = matches!(
                         self.lifecycle,
                         Lifecycle::Running(_) | Lifecycle::ShuttingDown
-                    ) && let Some(hook) = self.on_exit.take()
-                    {
+                    );
+                    if !established {
+                        self.failure_reporter.report(
+                            ConnectionFailureCategory::Protocol,
+                            Some(ConnectionDirection::Inbound),
+                            Some("exit"),
+                            None,
+                        );
+                    }
+                    if established && let Some(hook) = self.on_exit.take() {
                         let span = self.trace.notification_span("exit");
                         let ctx = Context::for_notification(
                             span,
@@ -1139,6 +1266,12 @@ where
                             }
                         }
                         Err(error) => {
+                            self.failure_reporter.report(
+                                ConnectionFailureCategory::Protocol,
+                                Some(ConnectionDirection::Inbound),
+                                Some("$/cancelRequest"),
+                                None,
+                            );
                             debug!(%error, "ignoring malformed $/cancelRequest");
                         }
                     }
@@ -1152,12 +1285,24 @@ where
                     // decoded before the hook is taken, so a malformed
                     // notification leaves it in place too.
                     let Lifecycle::Running(_) = &self.lifecycle else {
+                        self.failure_reporter.report(
+                            ConnectionFailureCategory::Protocol,
+                            Some(ConnectionDirection::Inbound),
+                            Some("initialized"),
+                            None,
+                        );
                         debug!("initialized notification outside the running state ignored");
                         return Flow::Continue;
                     };
                     let params = match decode_initialized_params(&params) {
                         Ok(params) => params,
                         Err(error) => {
+                            self.failure_reporter.report(
+                                ConnectionFailureCategory::Protocol,
+                                Some(ConnectionDirection::Inbound),
+                                Some("initialized"),
+                                None,
+                            );
                             warn!(%error, "dropping initialized notification with malformed params");
                             return Flow::Continue;
                         }
@@ -1179,6 +1324,10 @@ where
                     // before `initialize` there is no Router, and after
                     // `shutdown` the connection accepts no further user work.
                     let Lifecycle::Running(service) = &self.lifecycle else {
+                        self.failure_reporter.report_unvalidated_inbound_method(
+                            ConnectionFailureCategory::Protocol,
+                            None,
+                        );
                         debug!(method = other, "notification outside running state ignored");
                         return Flow::Continue;
                     };
@@ -1203,8 +1352,30 @@ where
                         }
                         match self.process_protocol_notification(built_in, &params) {
                             Ok(BuiltInGate::RunHook) => {}
-                            Ok(BuiltInGate::SkipHook) => return Flow::Continue,
+                            Ok(BuiltInGate::ProtocolFailure) => {
+                                self.failure_reporter.report(
+                                    ConnectionFailureCategory::Protocol,
+                                    Some(ConnectionDirection::Inbound),
+                                    Some(other),
+                                    None,
+                                );
+                                return Flow::Continue;
+                            }
                             Err(error) => {
+                                let (category, error) = match error {
+                                    BuiltInError::Protocol(error) => {
+                                        (ConnectionFailureCategory::Protocol, error)
+                                    }
+                                    BuiltInError::Overload(error) => {
+                                        (ConnectionFailureCategory::Overload, error)
+                                    }
+                                };
+                                self.failure_reporter.report(
+                                    category,
+                                    Some(ConnectionDirection::Inbound),
+                                    Some(other),
+                                    None,
+                                );
                                 warn!(method = other, %error, "protocol validation skipped its hook");
                                 return Flow::Continue;
                             }
@@ -1217,6 +1388,10 @@ where
                     let params = match decode_value(&params) {
                         Ok(params) => params,
                         Err(error) => {
+                            self.failure_reporter.report_unvalidated_inbound_method(
+                                ConnectionFailureCategory::Protocol,
+                                None,
+                            );
                             debug!(method = other, %error, "notification params ignored");
                             return Flow::Continue;
                         }
@@ -1236,10 +1411,22 @@ where
                 let delivered =
                     id_num.is_some_and(|n| self.client.outbound_registry().complete(n, result));
                 if !delivered {
+                    self.failure_reporter.report(
+                        ConnectionFailureCategory::Protocol,
+                        Some(ConnectionDirection::Inbound),
+                        None,
+                        Some(&id),
+                    );
                     debug!(?id, "ignoring response with unknown or non-numeric id");
                 }
             }
             RawMessage::ProtocolError { error } => {
+                self.failure_reporter.report(
+                    ConnectionFailureCategory::Protocol,
+                    Some(ConnectionDirection::Inbound),
+                    None,
+                    None,
+                );
                 let _ = self
                     .out_tx
                     .send_required(RawMessage::ProtocolError { error });
@@ -1290,7 +1477,7 @@ where
         &self,
         built_in: ProtocolNotification,
         raw_params: &Bytes,
-    ) -> std::result::Result<BuiltInGate, LspError> {
+    ) -> std::result::Result<BuiltInGate, BuiltInError> {
         match built_in {
             ProtocolNotification::Open => {
                 let params: DidOpenTextDocumentParams = decode_params(raw_params)?;
@@ -1336,7 +1523,8 @@ where
                 {
                     return Err(LspError::invalid_request(
                         "didSave text is required by textDocumentSync.save.includeText",
-                    ));
+                    )
+                    .into());
                 }
             }
             ProtocolNotification::WorkspaceFolders => {
@@ -1399,6 +1587,12 @@ where
     async fn initialize(&mut self, span: &Span, reservation: Reservation, params: Bytes) -> Flow {
         // A second `initialize` after the transaction has run is invalid.
         if !matches!(self.lifecycle, Lifecycle::Uninitialized(_)) {
+            self.failure_reporter.report(
+                ConnectionFailureCategory::Protocol,
+                Some(ConnectionDirection::Inbound),
+                Some("initialize"),
+                Some(&reservation.id),
+            );
             self.inbound.complete(
                 &self.out_tx,
                 reservation,
@@ -1416,6 +1610,12 @@ where
         let params = match decode_params::<InitializeParams>(&params) {
             Ok(params) => params,
             Err(err) => {
+                self.failure_reporter.report(
+                    ConnectionFailureCategory::Protocol,
+                    Some(ConnectionDirection::Inbound),
+                    Some("initialize"),
+                    Some(&reservation.id),
+                );
                 self.inbound.complete(&self.out_tx, reservation, Err(err));
                 return Flow::Continue;
             }
@@ -1566,7 +1766,12 @@ where
                 server_info,
             }),
         );
-        self.lifecycle = Lifecycle::Running(build_service_stack(router, layers, concurrency_limit));
+        self.lifecycle = Lifecycle::Running(build_service_stack(
+            router,
+            layers,
+            concurrency_limit,
+            self.failure_reporter.clone(),
+        ));
         Flow::Continue
     }
 
@@ -1900,7 +2105,7 @@ mod tests {
         ] {
             let (gate, events) = gated_cancel(&registry, raw);
             assert!(
-                matches!(gate, BuiltInGate::SkipHook),
+                matches!(gate, BuiltInGate::ProtocolFailure),
                 "malformed params {raw:?} skip the hook"
             );
             assert!(

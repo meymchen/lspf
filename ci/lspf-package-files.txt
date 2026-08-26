@@ -44,6 +44,7 @@ src/context.rs
 src/documents.rs
 src/engine.rs
 src/error.rs
+src/failure.rs
 src/features.rs
 src/file_provider.rs
 src/lib.rs
@@ -77,6 +78,7 @@ tests/custom_request.rs
 tests/diagnostics.rs
 tests/document_hooks.rs
 tests/editing_presentation.rs
+tests/error_hook.rs
 tests/file_provider.rs
 tests/fixtures/apply_edit_request.json
 tests/fixtures/code_action_provider_with_resolve.json
