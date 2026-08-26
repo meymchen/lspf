@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1](https://github.com/meymchen/lspf/compare/v0.8.0...v0.8.1) - 2026-08-26
+
+### Other
+
+- Record Gate B bounded-resource evidence ([#214](https://github.com/meymchen/lspf/pull/214))
+- Test deterministic overload and close races ([#213](https://github.com/meymchen/lspf/pull/213))
+- Add connection error hooks and pin Rust 1.98 ([#212](https://github.com/meymchen/lspf/pull/212))
+- Expose stable connection tracing schema ([#211](https://github.com/meymchen/lspf/pull/211))
+- Apply handler deadlines through the completion gate ([#210](https://github.com/meymchen/lspf/pull/210))
+
 ### Changed
 
 - [**breaking**] Raise the MSRV from Rust 1.96 to 1.98 and pin development and
