@@ -878,7 +878,7 @@ impl ClientHandle {
         self.notify_with_requirement::<N>(params, DeliveryRequirement::Ordinary)
     }
 
-    fn notify_required<N>(&self, params: N::Params) -> Result<(), ClientError>
+    pub(crate) fn notify_required<N>(&self, params: N::Params) -> Result<(), ClientError>
     where
         N: Notification,
     {
