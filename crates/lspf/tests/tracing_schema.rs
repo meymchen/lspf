@@ -88,22 +88,22 @@ impl Request for CaptureHandles {
 }
 
 #[derive(Default)]
-struct TaskUsage {
+struct HandlerTaskUsage {
     current: AtomicUsize,
     peak: AtomicUsize,
 }
 
-impl TaskUsage {
-    fn enter(self: &Arc<Self>) -> TaskGuard {
+impl HandlerTaskUsage {
+    fn enter(self: &Arc<Self>) -> HandlerTaskGuard {
         let current = self.current.fetch_add(1, Ordering::AcqRel) + 1;
         self.peak.fetch_max(current, Ordering::AcqRel);
-        TaskGuard(Arc::clone(self))
+        HandlerTaskGuard(Arc::clone(self))
     }
 }
 
-struct TaskGuard(Arc<TaskUsage>);
+struct HandlerTaskGuard(Arc<HandlerTaskUsage>);
 
-impl Drop for TaskGuard {
+impl Drop for HandlerTaskGuard {
     fn drop(&mut self) {
         self.0.current.fetch_sub(1, Ordering::AcqRel);
     }
@@ -111,25 +111,44 @@ impl Drop for TaskGuard {
 
 #[derive(Clone, Default)]
 struct StressState {
-    tasks: Arc<TaskUsage>,
+    handler_tasks: Arc<HandlerTaskUsage>,
     queue_rejected: Arc<Notify>,
     resume_queue_handler: Arc<Notify>,
 }
 
 #[derive(Clone, Default)]
 struct CleanupState {
-    tasks: Arc<TaskUsage>,
+    handler_tasks: Arc<HandlerTaskUsage>,
     client: Arc<Mutex<Option<Client>>>,
     documents: Arc<Mutex<Option<DocumentsView>>>,
 }
 
-async fn stalls(
-    state: Arc<StressState>,
+trait HasHandlerTaskUsage {
+    fn handler_tasks(&self) -> &Arc<HandlerTaskUsage>;
+}
+
+impl HasHandlerTaskUsage for StressState {
+    fn handler_tasks(&self) -> &Arc<HandlerTaskUsage> {
+        &self.handler_tasks
+    }
+}
+
+impl HasHandlerTaskUsage for CleanupState {
+    fn handler_tasks(&self) -> &Arc<HandlerTaskUsage> {
+        &self.handler_tasks
+    }
+}
+
+async fn stalls<S>(
+    state: Arc<S>,
     _ctx: Context,
     (): (),
     cancellation: lspf::CancellationToken,
-) -> Result<(), lspf::LspError> {
-    let _task = state.tasks.enter();
+) -> Result<(), lspf::LspError>
+where
+    S: HasHandlerTaskUsage,
+{
+    let _task = state.handler_tasks().enter();
     cancellation.cancelled().await;
     std::future::pending().await
 }
@@ -140,7 +159,7 @@ async fn fills_queue(
     (): (),
     _cancellation: lspf::CancellationToken,
 ) -> Result<(), lspf::LspError> {
-    let _task = state.tasks.enter();
+    let _task = state.handler_tasks.enter();
     let message = "x".repeat(12 * 1024);
     ctx.client()
         .log_message(LogMessageParams {
@@ -169,17 +188,6 @@ async fn capture_handles(
     *state.client.lock().unwrap() = Some(ctx.client());
     *state.documents.lock().unwrap() = Some(ctx.documents());
     Ok(())
-}
-
-async fn cleanup_stall(
-    state: Arc<CleanupState>,
-    _ctx: Context,
-    (): (),
-    cancellation: lspf::CancellationToken,
-) -> Result<(), lspf::LspError> {
-    let _task = state.tasks.enter();
-    cancellation.cancelled().await;
-    std::future::pending().await
 }
 
 #[derive(Clone, Default)]
@@ -265,13 +273,16 @@ async fn overloads_peer(
 }
 
 #[derive(Default)]
-struct WriterPause {
+/// Controls outbound transport progress. Pausing `send` models a peer that is
+/// not reading server output, while failing it models a terminal writer error.
+struct PeerReadControl {
     pause_next: AtomicBool,
+    fail_next: AtomicBool,
     entered: Notify,
     resume: Notify,
 }
 
-impl WriterPause {
+impl PeerReadControl {
     fn pause_next(&self) {
         self.pause_next.store(true, Ordering::Release);
     }
@@ -283,16 +294,20 @@ impl WriterPause {
     fn resume(&self) {
         self.resume.notify_one();
     }
+
+    fn fail_next(&self) {
+        self.fail_next.store(true, Ordering::Release);
+    }
 }
 
 struct ChannelTransport {
     incoming: mpsc::UnboundedReceiver<RawMessage>,
     outgoing: mpsc::UnboundedSender<RawMessage>,
-    writer_pause: Arc<WriterPause>,
+    peer_read: Arc<PeerReadControl>,
 }
 
 struct ChannelReader(mpsc::UnboundedReceiver<RawMessage>);
-struct ChannelWriter(mpsc::UnboundedSender<RawMessage>, Arc<WriterPause>);
+struct ChannelWriter(mpsc::UnboundedSender<RawMessage>, Arc<PeerReadControl>);
 
 impl Transport for ChannelTransport {
     type Reader = ChannelReader;
@@ -301,7 +316,7 @@ impl Transport for ChannelTransport {
     fn split(self) -> (Self::Reader, Self::Writer) {
         (
             ChannelReader(self.incoming),
-            ChannelWriter(self.outgoing, self.writer_pause),
+            ChannelWriter(self.outgoing, self.peer_read),
         )
     }
 }
@@ -317,6 +332,9 @@ impl TransportWriter for ChannelWriter {
         if self.1.pause_next.swap(false, Ordering::AcqRel) {
             self.1.entered.notify_one();
             self.1.resume.notified().await;
+        }
+        if self.1.fail_next.swap(false, Ordering::AcqRel) {
+            return Err(TransportError::Closed);
         }
         self.0.send(message).map_err(|_| TransportError::Closed)
     }
@@ -425,7 +443,7 @@ async fn wait_for_event(logs: &LogBuffer, predicate: impl Fn(&Value) -> bool) {
     .expect("the expected trace event is emitted");
 }
 
-async fn wait_for_task_count(tasks: &TaskUsage, expected: usize) {
+async fn wait_for_handler_task_count(tasks: &HandlerTaskUsage, expected: usize) {
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
             if tasks.current.load(Ordering::Acquire) == expected {
@@ -506,7 +524,7 @@ struct TestConnection {
     incoming: mpsc::UnboundedSender<RawMessage>,
     outgoing: mpsc::UnboundedReceiver<RawMessage>,
     serving: tokio::task::JoinHandle<lspf::Result<lspf::Outcome>>,
-    writer_pause: Arc<WriterPause>,
+    peer_read: Arc<PeerReadControl>,
 }
 
 impl TestConnection {
@@ -516,11 +534,11 @@ impl TestConnection {
     {
         let (incoming, incoming_rx) = mpsc::unbounded_channel();
         let (outgoing_tx, outgoing) = mpsc::unbounded_channel();
-        let writer_pause = Arc::new(WriterPause::default());
+        let peer_read = Arc::new(PeerReadControl::default());
         let serving = tokio::spawn(server.serve(ChannelTransport {
             incoming: incoming_rx,
             outgoing: outgoing_tx,
-            writer_pause: Arc::clone(&writer_pause),
+            peer_read: Arc::clone(&peer_read),
         }));
         incoming
             .send(request(
@@ -533,7 +551,7 @@ impl TestConnection {
             incoming,
             outgoing,
             serving,
-            writer_pause,
+            peer_read,
         };
         receive_id(&mut connection.outgoing, 1).await;
         connection
@@ -544,12 +562,31 @@ impl TestConnection {
     }
 
     fn pause_next_write(&self) {
-        self.writer_pause.pause_next();
+        self.peer_read.pause_next();
+    }
+
+    fn fail_next_write(&self) {
+        self.peer_read.fail_next();
     }
 
     async fn stop(self) -> lspf::Outcome {
         self.send(notification("exit", Value::Null));
         self.serving.await.unwrap().unwrap()
+    }
+
+    async fn close_from_eof(self) -> lspf::Outcome {
+        let Self {
+            incoming,
+            outgoing: _,
+            serving,
+            peer_read: _,
+        } = self;
+        drop(incoming);
+        tokio::time::timeout(Duration::from_secs(2), serving)
+            .await
+            .expect("EOF closed the connection")
+            .expect("serve task did not panic")
+            .expect("EOF is not a transport error")
     }
 }
 
@@ -819,7 +856,7 @@ async fn outbound_queue_rejection_completes_the_rolled_back_request_as_rejected(
 
     connection.pause_next_write();
     connection.send(request(2, OverloadsPeer::METHOD, Value::Null));
-    connection.writer_pause.wait_until_paused().await;
+    connection.peer_read.wait_until_paused().await;
     state.rejected.notified().await;
 
     let events = logs.events();
@@ -839,7 +876,7 @@ async fn outbound_queue_rejection_completes_the_rolled_back_request_as_rejected(
             && event["completion"] == "rejected"
     }));
 
-    connection.writer_pause.resume();
+    connection.peer_read.resume();
     receive_notification_method(&mut connection.outgoing, "window/logMessage").await;
     wait_for_event(&logs, |event| {
         event["message"] == "resource budget changed"
@@ -898,7 +935,7 @@ async fn rejected_document_change_reports_the_unchanged_byte_budget() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn fixed_budget_floods_and_a_slow_writer_never_exceed_connection_limits() {
+async fn fixed_budget_floods_and_a_slow_reader_never_exceed_connection_limits() {
     const OUTBOUND_BYTES: usize = 16 * 1024;
 
     let logs = LogBuffer::default();
@@ -915,7 +952,7 @@ async fn fixed_budget_floods_and_a_slow_writer_never_exceed_connection_limits() 
     };
     let server = Server::builder(state.clone())
         .resource_policy(policy)
-        .request::<Stalls, _, _>(stalls)
+        .request::<Stalls, _, _>(stalls::<StressState>)
         .request::<FillsQueue, _, _>(fills_queue)
         .build()
         .unwrap();
@@ -941,19 +978,19 @@ async fn fixed_budget_floods_and_a_slow_writer_never_exceed_connection_limits() 
 
     connection.send(request(2, Stalls::METHOD, Value::Null));
     connection.send(request(3, Stalls::METHOD, Value::Null));
-    wait_for_task_count(&state.tasks, 2).await;
+    wait_for_handler_task_count(&state.handler_tasks, 2).await;
     connection.send(request(4, Stalls::METHOD, Value::Null));
     receive_id(&mut connection.outgoing, 4).await;
 
     connection.send(notification("$/cancelRequest", json!({"id": 2})));
     receive_id(&mut connection.outgoing, 2).await;
-    wait_for_task_count(&state.tasks, 1).await;
+    wait_for_handler_task_count(&state.handler_tasks, 1).await;
 
     connection.pause_next_write();
     connection.send(request(5, FillsQueue::METHOD, Value::Null));
     tokio::time::timeout(
         Duration::from_secs(1),
-        connection.writer_pause.wait_until_paused(),
+        connection.peer_read.wait_until_paused(),
     )
     .await
     .expect("the slow writer reached its deterministic pause");
@@ -963,16 +1000,16 @@ async fn fixed_budget_floods_and_a_slow_writer_never_exceed_connection_limits() 
     )
     .await;
 
-    let events_at_peak = logs.events();
-    assert_resource_events_stay_within_limits(&events_at_peak);
-    assert_eq!(state.tasks.peak.load(Ordering::Acquire), 2);
-    assert!(events_at_peak.iter().any(|event| {
+    let events_during_load = logs.events();
+    assert_resource_events_stay_within_limits(&events_during_load);
+    assert_eq!(state.handler_tasks.peak.load(Ordering::Acquire), 2);
+    assert!(events_during_load.iter().any(|event| {
         event["resource"] == "inbound_requests"
             && event["resource_action"] == "reject"
             && event["resource_current"] == 2
             && event["resource_limit"] == 2
     }));
-    assert!(events_at_peak.iter().any(|event| {
+    assert!(events_during_load.iter().any(|event| {
         event["resource"] == "outbound_queue"
             && event["resource_action"] == "reject"
             && event["resource_bytes"]
@@ -980,14 +1017,14 @@ async fn fixed_budget_floods_and_a_slow_writer_never_exceed_connection_limits() 
                 .is_some_and(|bytes| bytes > 0)
             && event["resource_bytes_limit"] == OUTBOUND_BYTES
     }));
-    assert!(events_at_peak.iter().any(|event| {
+    assert!(events_during_load.iter().any(|event| {
         event["resource"] == "documents"
             && event["resource_action"] == "reject"
             && event["resource_current"] == 2
             && event["resource_bytes"] == 8
     }));
 
-    connection.writer_pause.resume();
+    connection.peer_read.resume();
     wait_for_event(&logs, |event| {
         event["resource"] == "outbound_queue"
             && event["resource_action"] == "release"
@@ -997,22 +1034,11 @@ async fn fixed_budget_floods_and_a_slow_writer_never_exceed_connection_limits() 
     state.resume_queue_handler.notify_one();
     receive_id(&mut connection.outgoing, 5).await;
 
-    let TestConnection {
-        incoming,
-        outgoing: _,
-        serving,
-        writer_pause: _,
-    } = connection;
-    drop(incoming);
     assert_eq!(
-        tokio::time::timeout(Duration::from_secs(2), serving)
-            .await
-            .expect("EOF closed the connection")
-            .expect("serve task did not panic")
-            .expect("EOF is not a transport error"),
+        connection.close_from_eof().await,
         lspf::Outcome::TransportClosed
     );
-    wait_for_task_count(&state.tasks, 0).await;
+    wait_for_handler_task_count(&state.handler_tasks, 0).await;
 
     let events = logs.events();
     assert_resource_events_stay_within_limits(&events);
@@ -1027,8 +1053,14 @@ async fn fixed_budget_floods_and_a_slow_writer_never_exceed_connection_limits() 
     );
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn eof_clears_pending_tasks_queue_bytes_documents_and_progress() {
+#[derive(Clone, Copy)]
+enum CleanupTrigger {
+    Eof,
+    WriterFailure,
+    ShutdownThenExit,
+}
+
+async fn assert_close_clears_every_connection_resource(trigger: CleanupTrigger) {
     let logs = LogBuffer::default();
     let _guard = capture_traces(&logs);
     let state = CleanupState::default();
@@ -1039,7 +1071,7 @@ async fn eof_clears_pending_tasks_queue_bytes_documents_and_progress() {
             ..ResourcePolicy::default()
         })
         .request::<CaptureHandles, _, _>(capture_handles)
-        .request::<Stalls, _, _>(cleanup_stall)
+        .request::<Stalls, _, _>(stalls::<CleanupState>)
         .build()
         .unwrap();
     let mut connection = TestConnection::start(server).await;
@@ -1051,7 +1083,7 @@ async fn eof_clears_pending_tasks_queue_bytes_documents_and_progress() {
                 "uri": "file:///retained.txt",
                 "languageId": "text",
                 "version": 1,
-                "text": "released on EOF"
+                "text": "released on close"
             }
         }),
     ));
@@ -1101,48 +1133,66 @@ async fn eof_clears_pending_tasks_queue_bytes_documents_and_progress() {
     };
 
     connection.send(request(3, Stalls::METHOD, Value::Null));
-    wait_for_task_count(&state.tasks, 1).await;
+    wait_for_handler_task_count(&state.handler_tasks, 1).await;
     connection.pause_next_write();
     client
         .log_message(LogMessageParams {
             typ: MessageType::INFO,
-            message: "accounted until EOF".to_string(),
+            message: "accounted until close".to_string(),
         })
         .expect("the final write is admitted");
     tokio::time::timeout(
         Duration::from_secs(1),
-        connection.writer_pause.wait_until_paused(),
+        connection.peer_read.wait_until_paused(),
     )
     .await
     .expect("the final accounted write reached its deterministic pause");
 
-    let TestConnection {
-        incoming,
-        outgoing: _,
-        serving,
-        writer_pause,
-    } = connection;
-    drop(incoming);
-    writer_pause.resume();
-    assert_eq!(
-        tokio::time::timeout(Duration::from_secs(2), serving)
-            .await
-            .expect("EOF closed the connection")
-            .expect("serve task did not panic")
-            .expect("EOF is not a transport error"),
-        lspf::Outcome::TransportClosed
-    );
+    let outcome = match trigger {
+        CleanupTrigger::Eof => {
+            connection.peer_read.resume();
+            connection.close_from_eof().await
+        }
+        CleanupTrigger::WriterFailure => {
+            connection.fail_next_write();
+            connection.peer_read.resume();
+            tokio::time::timeout(Duration::from_secs(2), connection.serving)
+                .await
+                .expect("writer failure closed the connection")
+                .expect("serve task did not panic")
+                .expect("writer failure is an Outcome")
+        }
+        CleanupTrigger::ShutdownThenExit => {
+            connection.send(request(4, "shutdown", Value::Null));
+            connection.peer_read.resume();
+            receive_id(&mut connection.outgoing, 4).await;
+            receive_id(&mut connection.outgoing, 3).await;
+            connection.send(notification("exit", Value::Null));
+            tokio::time::timeout(Duration::from_secs(2), connection.serving)
+                .await
+                .expect("shutdown and exit closed the connection")
+                .expect("serve task did not panic")
+                .expect("shutdown and exit end cleanly")
+        }
+    };
+    match trigger {
+        CleanupTrigger::Eof => assert_eq!(outcome, lspf::Outcome::TransportClosed),
+        CleanupTrigger::WriterFailure => assert_eq!(outcome, lspf::Outcome::WriterFailed),
+        CleanupTrigger::ShutdownThenExit => {
+            assert_eq!(outcome, lspf::Outcome::Exit { code: 0 })
+        }
+    }
 
     assert!(matches!(
         pending.await.expect("pending task did not panic"),
         Err(ClientError::Cancelled)
     ));
-    wait_for_task_count(&state.tasks, 0).await;
+    wait_for_handler_task_count(&state.handler_tasks, 0).await;
     assert!(
         documents
             .get(&"file:///retained.txt".parse().unwrap())
             .is_none(),
-        "EOF cleared the retained Documents view"
+        "close cleared the retained Documents view"
     );
     assert!(matches!(
         progress.report(None, Some(50)),
@@ -1168,4 +1218,52 @@ async fn eof_clears_pending_tasks_queue_bytes_documents_and_progress() {
         completion_count(&events, "outbound", PeerEcho::METHOD, &peer_id_text),
         1
     );
+    if matches!(trigger, CleanupTrigger::ShutdownThenExit) {
+        assert_eq!(completion_count(&events, "inbound", "shutdown", "4"), 1);
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn eof_clears_every_connection_resource_exactly_once() {
+    assert_close_clears_every_connection_resource(CleanupTrigger::Eof).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn writer_failure_clears_every_connection_resource_exactly_once() {
+    assert_close_clears_every_connection_resource(CleanupTrigger::WriterFailure).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn shutdown_then_exit_clears_every_connection_resource_exactly_once() {
+    assert_close_clears_every_connection_resource(CleanupTrigger::ShutdownThenExit).await;
+}
+
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn handler_timeout_completes_the_request_exactly_once() {
+    let logs = LogBuffer::default();
+    let _guard = capture_traces(&logs);
+    let server = Server::builder(())
+        .resource_policy(ResourcePolicy {
+            handler_timeout: Duration::from_secs(5),
+            ..ResourcePolicy::default()
+        })
+        .request::<Never, _, _>(never)
+        .build()
+        .unwrap();
+    let mut connection = TestConnection::start(server).await;
+
+    connection.send(request(2, Never::METHOD, Value::Null));
+    tokio::time::advance(Duration::from_secs(5)).await;
+    receive_id(&mut connection.outgoing, 2).await;
+    connection.stop().await;
+
+    let events = logs.events();
+    assert_eq!(completion_count(&events, "inbound", Never::METHOD, "2"), 1);
+    assert!(events.iter().any(|event| {
+        event["message"] == "request completed"
+            && event["direction"] == "inbound"
+            && event["method"] == Never::METHOD
+            && event["request_id"] == "2"
+            && event["completion"] == "deadline_expired"
+    }));
 }
