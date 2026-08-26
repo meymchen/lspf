@@ -17,7 +17,7 @@ use futures_util::future::{Either, select};
 use futures_util::select_biased;
 use lsp_types::error_codes::SERVER_CANCELLED;
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, warn};
+use tracing::{Instrument, Span, warn};
 
 use crate::LspError;
 use crate::client::ClientHandle;
@@ -70,6 +70,7 @@ impl<R: Runtime, P: SessionPeer, C> ProtocolSession<R, P, C> {
         policy: ResourcePolicy,
         writer: W,
         trace: ConnectionTrace,
+        connection_span: Span,
         failure_reporter: FailureReporter,
         writer_failed: fn() -> C,
         make_peer: F,
@@ -102,7 +103,7 @@ impl<R: Runtime, P: SessionPeer, C> ProtocolSession<R, P, C> {
                 trace,
                 failure_reporter.clone(),
             )
-            .instrument(trace.span()),
+            .instrument(connection_span),
         );
         let session = Self {
             inbound: InboundRegistry::new_with_reporter(

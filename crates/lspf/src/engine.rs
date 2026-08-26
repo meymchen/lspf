@@ -225,6 +225,7 @@ where
         server.resource_policy,
         writer,
         connection_trace,
+        connection_span.clone(),
         failure_reporter.clone(),
         CloseCause::writer_failed,
         ClientHandle::new,
