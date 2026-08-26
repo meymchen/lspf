@@ -275,14 +275,14 @@ async fn overloads_peer(
 #[derive(Default)]
 /// Controls outbound transport progress. Pausing `send` models a peer that is
 /// not reading server output, while failing it models a terminal writer error.
-struct PeerReadControl {
+struct OutboundTransportControl {
     pause_next: AtomicBool,
     fail_next: AtomicBool,
     entered: Notify,
     resume: Notify,
 }
 
-impl PeerReadControl {
+impl OutboundTransportControl {
     fn pause_next(&self) {
         self.pause_next.store(true, Ordering::Release);
     }
@@ -303,11 +303,14 @@ impl PeerReadControl {
 struct ChannelTransport {
     incoming: mpsc::UnboundedReceiver<RawMessage>,
     outgoing: mpsc::UnboundedSender<RawMessage>,
-    peer_read: Arc<PeerReadControl>,
+    outbound_control: Arc<OutboundTransportControl>,
 }
 
 struct ChannelReader(mpsc::UnboundedReceiver<RawMessage>);
-struct ChannelWriter(mpsc::UnboundedSender<RawMessage>, Arc<PeerReadControl>);
+struct ChannelWriter(
+    mpsc::UnboundedSender<RawMessage>,
+    Arc<OutboundTransportControl>,
+);
 
 impl Transport for ChannelTransport {
     type Reader = ChannelReader;
@@ -316,7 +319,7 @@ impl Transport for ChannelTransport {
     fn split(self) -> (Self::Reader, Self::Writer) {
         (
             ChannelReader(self.incoming),
-            ChannelWriter(self.outgoing, self.peer_read),
+            ChannelWriter(self.outgoing, self.outbound_control),
         )
     }
 }
@@ -520,11 +523,29 @@ fn completion_count(events: &[Value], direction: &str, method: &str, request_id:
         .count()
 }
 
+fn request_id_text(id: &RequestId) -> String {
+    match id {
+        RequestId::Number(id) => id.to_string(),
+        RequestId::String(id) => id.clone(),
+    }
+}
+
+async fn await_outcome(
+    serving: tokio::task::JoinHandle<lspf::Result<lspf::Outcome>>,
+    close_description: &str,
+) -> lspf::Outcome {
+    tokio::time::timeout(Duration::from_secs(2), serving)
+        .await
+        .unwrap_or_else(|_| panic!("{close_description} did not close the connection"))
+        .expect("serve task did not panic")
+        .unwrap_or_else(|error| panic!("{close_description} returned an error: {error}"))
+}
+
 struct TestConnection {
     incoming: mpsc::UnboundedSender<RawMessage>,
     outgoing: mpsc::UnboundedReceiver<RawMessage>,
     serving: tokio::task::JoinHandle<lspf::Result<lspf::Outcome>>,
-    peer_read: Arc<PeerReadControl>,
+    outbound_control: Arc<OutboundTransportControl>,
 }
 
 impl TestConnection {
@@ -534,11 +555,11 @@ impl TestConnection {
     {
         let (incoming, incoming_rx) = mpsc::unbounded_channel();
         let (outgoing_tx, outgoing) = mpsc::unbounded_channel();
-        let peer_read = Arc::new(PeerReadControl::default());
+        let outbound_control = Arc::new(OutboundTransportControl::default());
         let serving = tokio::spawn(server.serve(ChannelTransport {
             incoming: incoming_rx,
             outgoing: outgoing_tx,
-            peer_read: Arc::clone(&peer_read),
+            outbound_control: Arc::clone(&outbound_control),
         }));
         incoming
             .send(request(
@@ -551,7 +572,7 @@ impl TestConnection {
             incoming,
             outgoing,
             serving,
-            peer_read,
+            outbound_control,
         };
         receive_id(&mut connection.outgoing, 1).await;
         connection
@@ -562,11 +583,11 @@ impl TestConnection {
     }
 
     fn pause_next_write(&self) {
-        self.peer_read.pause_next();
+        self.outbound_control.pause_next();
     }
 
     fn fail_next_write(&self) {
-        self.peer_read.fail_next();
+        self.outbound_control.fail_next();
     }
 
     async fn stop(self) -> lspf::Outcome {
@@ -579,14 +600,10 @@ impl TestConnection {
             incoming,
             outgoing: _,
             serving,
-            peer_read: _,
+            outbound_control: _,
         } = self;
         drop(incoming);
-        tokio::time::timeout(Duration::from_secs(2), serving)
-            .await
-            .expect("EOF closed the connection")
-            .expect("serve task did not panic")
-            .expect("EOF is not a transport error")
+        await_outcome(serving, "EOF").await
     }
 }
 
@@ -721,6 +738,7 @@ async fn pending_request_and_handler_deadline_events_expose_time_budget_usage() 
     let mut connection = TestConnection::start(server).await;
     connection.send(request(2, CallsPeer::METHOD, Value::Null));
     let peer_id = receive_method(&mut connection.outgoing, PeerEcho::METHOD).await;
+    let peer_id_text = request_id_text(&peer_id);
     connection.send(RawMessage::Response {
         id: peer_id,
         result: Ok(Bytes::from(
@@ -770,10 +788,15 @@ async fn pending_request_and_handler_deadline_events_expose_time_budget_usage() 
             && event["deadline_ms"] == 7_000
             && event["deadline_elapsed_ms"].is_number()
     }));
+    assert_eq!(
+        completion_count(&events, "outbound", PeerEcho::METHOD, &peer_id_text),
+        1
+    );
     assert!(events.iter().any(|event| {
         event["message"] == "request completed"
             && event["direction"] == "outbound"
             && event["method"] == PeerEcho::METHOD
+            && event["request_id"] == peer_id_text
             && event["latency_ms"].is_number()
             && event["completion"] == "success"
     }));
@@ -856,7 +879,7 @@ async fn outbound_queue_rejection_completes_the_rolled_back_request_as_rejected(
 
     connection.pause_next_write();
     connection.send(request(2, OverloadsPeer::METHOD, Value::Null));
-    connection.peer_read.wait_until_paused().await;
+    connection.outbound_control.wait_until_paused().await;
     state.rejected.notified().await;
 
     let events = logs.events();
@@ -876,7 +899,7 @@ async fn outbound_queue_rejection_completes_the_rolled_back_request_as_rejected(
             && event["completion"] == "rejected"
     }));
 
-    connection.peer_read.resume();
+    connection.outbound_control.resume();
     receive_notification_method(&mut connection.outgoing, "window/logMessage").await;
     wait_for_event(&logs, |event| {
         event["message"] == "resource budget changed"
@@ -990,7 +1013,7 @@ async fn fixed_budget_floods_and_a_slow_reader_never_exceed_connection_limits() 
     connection.send(request(5, FillsQueue::METHOD, Value::Null));
     tokio::time::timeout(
         Duration::from_secs(1),
-        connection.peer_read.wait_until_paused(),
+        connection.outbound_control.wait_until_paused(),
     )
     .await
     .expect("the slow writer reached its deterministic pause");
@@ -1024,7 +1047,7 @@ async fn fixed_budget_floods_and_a_slow_reader_never_exceed_connection_limits() 
             && event["resource_bytes"] == 8
     }));
 
-    connection.peer_read.resume();
+    connection.outbound_control.resume();
     wait_for_event(&logs, |event| {
         event["resource"] == "outbound_queue"
             && event["resource_action"] == "release"
@@ -1127,10 +1150,7 @@ async fn assert_close_clears_every_connection_resource(trigger: CleanupTrigger) 
             .await
     });
     let peer_id = receive_method(&mut connection.outgoing, PeerEcho::METHOD).await;
-    let peer_id_text = match &peer_id {
-        RequestId::Number(id) => id.to_string(),
-        RequestId::String(id) => id.clone(),
-    };
+    let peer_id_text = request_id_text(&peer_id);
 
     connection.send(request(3, Stalls::METHOD, Value::Null));
     wait_for_handler_task_count(&state.handler_tasks, 1).await;
@@ -1143,45 +1163,40 @@ async fn assert_close_clears_every_connection_resource(trigger: CleanupTrigger) 
         .expect("the final write is admitted");
     tokio::time::timeout(
         Duration::from_secs(1),
-        connection.peer_read.wait_until_paused(),
+        connection.outbound_control.wait_until_paused(),
     )
     .await
     .expect("the final accounted write reached its deterministic pause");
 
-    let outcome = match trigger {
+    let (outcome, expected_outcome) = match trigger {
         CleanupTrigger::Eof => {
-            connection.peer_read.resume();
-            connection.close_from_eof().await
+            connection.outbound_control.resume();
+            (
+                connection.close_from_eof().await,
+                lspf::Outcome::TransportClosed,
+            )
         }
         CleanupTrigger::WriterFailure => {
             connection.fail_next_write();
-            connection.peer_read.resume();
-            tokio::time::timeout(Duration::from_secs(2), connection.serving)
-                .await
-                .expect("writer failure closed the connection")
-                .expect("serve task did not panic")
-                .expect("writer failure is an Outcome")
+            connection.outbound_control.resume();
+            (
+                await_outcome(connection.serving, "writer failure").await,
+                lspf::Outcome::WriterFailed,
+            )
         }
         CleanupTrigger::ShutdownThenExit => {
             connection.send(request(4, "shutdown", Value::Null));
-            connection.peer_read.resume();
+            connection.outbound_control.resume();
             receive_id(&mut connection.outgoing, 4).await;
             receive_id(&mut connection.outgoing, 3).await;
             connection.send(notification("exit", Value::Null));
-            tokio::time::timeout(Duration::from_secs(2), connection.serving)
-                .await
-                .expect("shutdown and exit closed the connection")
-                .expect("serve task did not panic")
-                .expect("shutdown and exit end cleanly")
+            (
+                await_outcome(connection.serving, "shutdown and exit").await,
+                lspf::Outcome::Exit { code: 0 },
+            )
         }
     };
-    match trigger {
-        CleanupTrigger::Eof => assert_eq!(outcome, lspf::Outcome::TransportClosed),
-        CleanupTrigger::WriterFailure => assert_eq!(outcome, lspf::Outcome::WriterFailed),
-        CleanupTrigger::ShutdownThenExit => {
-            assert_eq!(outcome, lspf::Outcome::Exit { code: 0 })
-        }
-    }
+    assert_eq!(outcome, expected_outcome);
 
     assert!(matches!(
         pending.await.expect("pending task did not panic"),
