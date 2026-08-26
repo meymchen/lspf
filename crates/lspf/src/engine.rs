@@ -29,8 +29,6 @@ use std::time::Duration;
 use bytes::Bytes;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 use futures_channel::mpsc::UnboundedReceiver;
-use futures_util::FutureExt;
-use futures_util::select_biased;
 use lsp_types::error_codes::SERVER_CANCELLED;
 use lsp_types::{
     DidChangeConfigurationParams, DidChangeTextDocumentParams, DidChangeWorkspaceFoldersParams,
@@ -66,7 +64,7 @@ use crate::session::send_loop as drive_send_loop;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 use crate::session::{CloseSignal, OutboundQueue, OutboundRegistry, enqueue_encoded};
 use crate::session::{
-    INBOUND_CAPACITY_EXHAUSTED, InboundReserveError, ProtocolSession, Reservation,
+    INBOUND_CAPACITY_EXHAUSTED, InboundReserveError, ProtocolSession, Reservation, SessionInput,
     run_handler_with_deadline,
 };
 use crate::telemetry::{Completion, ConnectionTrace, Direction, Instant};
@@ -422,24 +420,15 @@ where
     where
         Rd: TransportReader,
     {
-        let requested = self.protocol.close_requested();
-        let outbound_failed = self.protocol.outbound_failed();
         loop {
-            let msg = select_biased! {
-                // `biased`: an already-requested close wins over a message that
-                // happens to be ready, so the ending stays deterministic.
-                () = requested.cancelled().fuse() => break,
-                () = outbound_failed.cancelled().fuse() => {
+            let msg = match self.protocol.next_input(&mut reader).await {
+                SessionInput::CloseRequested => break,
+                SessionInput::OutboundFailed => {
                     self.protocol.request_close(CloseCause::WriterFailed);
                     break;
-                },
-                msg = reader.recv().fuse() => msg,
+                }
+                SessionInput::Message(message) => message,
             };
-            // Reap immediately before dispatch so a completed handler releases
-            // its task-owned admission permit before the next request tries to
-            // reserve capacity. Finished handles cannot accumulate behind an
-            // idle read loop.
-            self.protocol.reap_finished().await;
 
             match msg {
                 Ok(msg) => {
@@ -480,15 +469,7 @@ where
         }
 
         self.close().await;
-        let recorded = self
-            .protocol
-            .take_close_cause()
-            .expect("every path out of the read-loop records its close cause");
-        let cause = if self.protocol.outbound_failed().is_cancelled() {
-            CloseCause::WriterFailed
-        } else {
-            recorded
-        };
+        let cause = self.protocol.final_close_cause();
         self.trace.connection_closed(cause.as_str());
         cause.into_result()
     }
