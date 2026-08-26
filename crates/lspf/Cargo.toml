@@ -8,6 +8,15 @@ license.workspace = true
 repository.workspace = true
 description = "A Rust framework for building extensible LSP language servers"
 readme = "../../README.md"
+include = [
+    "src/**",
+    "examples/**",
+    "!examples/**/pkg/**",
+    "tests/**",
+    "benches/**",
+    "build.rs",
+    "CHANGELOG.md",
+]
 
 [dependencies]
 bytes.workspace = true
