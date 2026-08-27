@@ -211,5 +211,9 @@ expect_compile_error \
     'the `websocket` feature is not supported on the wasm32 target' \
     cargo check -p lspf --locked --target wasm32-unknown-unknown \
     --no-default-features --features wasm,websocket
+expect_compile_error \
+    'the `testing` feature requires a native target' \
+    cargo check -p lspf --locked --target wasm32-unknown-unknown \
+    --no-default-features --features wasm,testing
 
 echo "Cargo feature and target contract verified"

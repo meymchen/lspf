@@ -82,6 +82,9 @@ worker-channel = ["wasm", "dep:js-sys", "dep:wasm-bindgen", "dep:web-sys"]
 # stable API stays exactly the 3.17 catalog; enabling it only adds the
 # `proposed` module and the gated `ClientHandle` helpers. It pulls in no Transport.
 proposed = []
+# Native downstream test harness: an in-memory Transport, protocol journeys,
+# and Tokio's deterministic virtual clock.
+testing = ["runtime-tokio", "tokio/test-util"]
 
 # Transport examples name feature-gated APIs directly. `required-features`
 # keeps each example out of unrelated feature rows while CI builds it in the
@@ -295,6 +298,10 @@ required-features = ["runtime-tokio"]
 [[test]]
 name = "workspace_requests"
 required-features = ["runtime-tokio"]
+
+[[test]]
+name = "testing"
+required-features = ["testing"]
 
 # Dev-dependencies drive the native test suite and the native half of the
 # shared example; a wasm32 build (including `--example`) resolves none of

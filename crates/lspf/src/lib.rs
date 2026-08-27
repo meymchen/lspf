@@ -39,6 +39,9 @@ compile_error!("the `tcp` feature is not supported on the wasm32 target");
 #[cfg(all(target_arch = "wasm32", feature = "websocket"))]
 compile_error!("the `websocket` feature is not supported on the wasm32 target");
 
+#[cfg(all(target_arch = "wasm32", feature = "testing"))]
+compile_error!("the `testing` feature requires a native target");
+
 mod builder;
 mod capability;
 mod client;
@@ -69,6 +72,8 @@ mod service;
 mod session;
 mod sync;
 mod telemetry;
+#[cfg(all(feature = "testing", not(target_arch = "wasm32")))]
+pub mod testing;
 mod transport;
 mod uri_key;
 mod workspace;
@@ -101,6 +106,9 @@ mod markdown {
 
     #[doc = include_str!("../../../docs/guides/transports.md")]
     pub struct TransportsGuide;
+
+    #[doc = include_str!("../../../docs/guides/testing.md")]
+    pub struct TestingGuide;
 }
 
 #[doc(hidden)]
