@@ -143,6 +143,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server_task = tokio::spawn(language_server.serve(server_transport));
 
     let mut policy = ResourcePolicy::default();
+    policy.max_inbound_requests = 32;
+    policy.max_outbound_messages = 256;
+    policy.max_outbound_bytes = 4 * 1024 * 1024;
     policy.outbound_request_timeout = Some(Duration::from_secs(5));
     policy.handler_timeout = Duration::from_secs(10);
 
@@ -263,11 +266,17 @@ terminal evidence.
 
 ## Deadlines and cancellation
 
-`ResourcePolicy` belongs to one Client connection. Its outbound message and
-byte limits bound queued calls. `outbound_request_timeout` applies to requests
-sent through `ServerHandle`; expiry returns `ClientError::Timeout`, removes the
-pending request, and attempts one `$/cancelRequest`. Set it to `None` only when
-the application has another firm deadline.
+`ResourcePolicy` belongs to one Client connection. `max_inbound_requests`
+bounds admitted reverse requests before handler work starts.
+`max_outbound_messages` and `max_outbound_bytes` bound queued client-to-server
+traffic; an ordinary `ServerHandle` send that cannot fit returns
+`ClientError::OutboundOverloaded` without retaining the message or pending
+request. All three limits must be greater than zero.
+
+`outbound_request_timeout` applies to requests sent through `ServerHandle`;
+expiry returns `ClientError::Timeout`, removes the pending request, and
+attempts one `$/cancelRequest`. Set it to `None` only when the application has
+another firm deadline.
 
 `handler_timeout` bounds reverse request handlers. A peer cancellation or
 deadline fires the handler's `CancellationToken`; handlers should stop work
