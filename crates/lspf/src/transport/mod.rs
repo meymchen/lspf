@@ -7,6 +7,8 @@ mod conformance_support {
     #[cfg(all(not(target_arch = "wasm32"), any(feature = "stdio", feature = "tcp")))]
     pub(crate) use crate::transport::framing::ContentLengthCodec;
 }
+#[cfg(all(feature = "stdio", not(target_arch = "wasm32")))]
+mod child;
 #[cfg(all(test, feature = "runtime-tokio", not(target_arch = "wasm32")))]
 mod conformance;
 // Outbound accounting always uses `envelope::serialize`; without a Transport
@@ -43,6 +45,8 @@ use thiserror::Error;
 use crate::builder::Server;
 use crate::raw::RawMessage;
 
+#[cfg(all(feature = "stdio", not(target_arch = "wasm32")))]
+pub use child::{ChildConnection, ChildError, ChildOutput};
 #[cfg(all(feature = "stdio", not(target_arch = "wasm32")))]
 pub use stdio::{StdioReader, StdioTransport, StdioWriter};
 #[cfg(all(feature = "tcp", not(target_arch = "wasm32")))]

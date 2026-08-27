@@ -279,25 +279,27 @@ impl ClientBuilder {
 
     /// Validate the configuration and build a client over `transport` without
     /// performing I/O.
-    pub fn build<T: Transport>(
-        mut self,
-        transport: T,
-    ) -> std::result::Result<Client<T>, BuildError> {
+    pub fn build<T: Transport>(self, transport: T) -> std::result::Result<Client<T>, BuildError> {
+        let validated = self.validate()?;
+        Ok(Client {
+            transport,
+            capabilities: validated.capabilities,
+            client_info: validated.client_info,
+            initialization_options: validated.initialization_options,
+            request_handlers: validated.request_handlers,
+            notification_handlers: validated.notification_handlers,
+            resource_policy: validated.resource_policy,
+        })
+    }
+
+    pub(crate) fn validate(mut self) -> std::result::Result<Self, BuildError> {
         if let Err(error) = self.resource_policy.validate() {
             self.record(error);
         }
-        if let Some(error) = self.error {
+        if let Some(error) = self.error.take() {
             return Err(error);
         }
-        Ok(Client {
-            transport,
-            capabilities: self.capabilities,
-            client_info: self.client_info,
-            initialization_options: self.initialization_options,
-            request_handlers: self.request_handlers,
-            notification_handlers: self.notification_handlers,
-            resource_policy: self.resource_policy,
-        })
+        Ok(self)
     }
 
     fn record(&mut self, error: BuildError) {

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Launch, drive, and deterministically reclaim stdio language-server children
+  through `ClientBuilder::spawn` and `ChildConnection`.
+
 ## [0.9.1](https://github.com/meymchen/lspf/compare/v0.9.0...v0.9.1) - 2026-08-26
 
 ### Other

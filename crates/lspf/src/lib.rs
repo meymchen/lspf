@@ -140,7 +140,10 @@ pub use resource_policy::{ResourcePolicy, ResourcePolicyField};
 pub use runtime::{TaskFuture, TaskSend};
 pub use service::{CallKind, IncomingCall, Layer, Next, ServiceFuture, ServiceResult};
 #[cfg(all(feature = "stdio", not(target_arch = "wasm32")))]
-pub use transport::{StdioBuilder, StdioReader, StdioTransport, StdioWriter, stdio};
+pub use transport::{
+    ChildConnection, ChildError, ChildOutput, StdioBuilder, StdioReader, StdioTransport,
+    StdioWriter, stdio,
+};
 #[cfg(all(feature = "tcp", not(target_arch = "wasm32")))]
 pub use transport::{TcpBuilder, TcpReader, TcpTransport, TcpWriter, tcp};
 pub use transport::{Transport, TransportError, TransportReader, TransportWriter};

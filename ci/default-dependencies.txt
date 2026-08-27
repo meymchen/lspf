@@ -1,5 +1,6 @@
 bitflags
 bytes
+errno
 fluent_uri
 futures_channel
 futures_core
@@ -8,9 +9,11 @@ futures_sink
 futures_task
 futures_util
 itoa
+libc
 lsp_types
 lspf
 memchr
+mio
 once_cell
 pin_project_lite
 proc_macro2
@@ -21,6 +24,7 @@ serde_core
 serde_derive
 serde_json
 serde_repr
+signal_hook_registry
 slab
 smallvec
 str_indices

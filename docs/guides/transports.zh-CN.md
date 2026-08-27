@@ -36,7 +36,7 @@ feature 即可。
 | Feature | 默认启用 | 启用内容 | 公开效果 |
 | --- | --- | --- | --- |
 | `default` | 是 | `stdio` | 原生 stdio 使用方式 |
-| `stdio` | 通过 `default` | `runtime-tokio`、`tokio-util/codec` | 在原生 target 提供 `stdio`、`StdioBuilder` 和 stdio Transport 类型 |
+| `stdio` | 通过 `default` | `runtime-tokio`、`tokio-util/codec`、`tokio/process` | 在原生 target 提供 `stdio`、`StdioBuilder`、stdio Transport 类型与 stdio 子进程监管 |
 | `tcp` | 否 | `runtime-tokio`、`tokio-util/codec`、`tokio/net` | 在原生 target 提供 `tcp`、`TcpBuilder` 和 TCP Transport 类型 |
 | `websocket` | 否 | `runtime-tokio`、`tokio-tungstenite`、`tokio/net` | 在原生 target 提供 `websocket`、`WebSocketBuilder` 和 WebSocket Transport 类型 |
 | `runtime-tokio` | 通过原生 Transport | `tokio` | 为 `Server::serve` 提供原生执行环境，本身不提供 I/O adapter |
@@ -165,6 +165,39 @@ LSP `Content-Length: N\r\n\r\n` framing 读取 stdin 和写入 stdout。不要�
 `lspf::stdio(server).serve().await` 返回 `Outcome`，不会终止进程。二进制自行决定是否
 调用 `outcome.code()`、报告错误、重启或执行其他清理。reader EOF、客户端关闭、协议
 `exit` 与初始化致命错误都通过同一 outcome 路径返回。
+
+### 启动语言服务器子进程
+
+原生 Client 可以独占任意 command，并将其作为一个受监管的 stdio 子进程。`spawn`
+会把三个标准流设置替换为 pipe，连接并初始化 Client，驱动入站协议流量，同时持续排空
+stderr：
+
+```rust,no_run
+use lspf::types::ClientCapabilities;
+use lspf::Client;
+use tokio::process::Command;
+
+# async fn run() -> Result<(), lspf::ChildError> {
+let command = Command::new("rust-analyzer");
+let child = Client::builder(ClientCapabilities::default())
+    .spawn(command)
+    .await?;
+let server = child.server();
+
+// 子进程存活期间，通过 `server` 发送带类型的请求与通知。
+let output = child.shutdown().await?;
+assert!(output.status().success());
+# Ok(())
+# }
+```
+
+`shutdown` 依次发送 LSP `shutdown` 请求与 `exit` 通知，然后回收进程。若子进程不退出，
+清理会依次执行有界等待、terminate、再次有界等待与 kill。`wait` 则用于观察自行退出的
+服务器。两者都会返回协议 `Outcome`、操作系统退出状态与 stderr 的前 64 KiB；达到
+捕获上限后仍会继续排空 stderr。丢弃仍存活的 `ChildConnection` 会把资源转交给 reaper
+thread，并在当前 Tokio runtime 上安排 graceful 协议清理。即使 runtime 停止，该 thread
+的同步 terminate-kill-reap 路径仍会继续运行。若 Drop 执行时没有当前 runtime，则会同步
+执行相同的进程清理。
 
 ## 实现自定义 Transport
 
