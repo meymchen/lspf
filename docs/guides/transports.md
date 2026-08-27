@@ -1,7 +1,5 @@
 # Choosing and implementing a Transport
 
-[English](./transports.md) | [简体中文](./transports.zh-CN.md)
-
 A `Server` owns one LSP connection. A Transport is the message-framed channel
 that carries that connection's JSON-RPC envelopes. Choose the Transport from
 the host that owns the connection; handler registration and business logic do

@@ -1,7 +1,5 @@
 # Support, compatibility, and security policy
 
-[English](./SECURITY.md) | [Simplified Chinese](./SECURITY.zh-CN.md)
-
 This document is the support contract for released versions of `lspf`. It
 defines which Rust versions, hosts, targets, and Cargo feature selections the
 maintainers support, as well as the rules for compatibility, deprecation, and
