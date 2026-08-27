@@ -173,7 +173,7 @@ impl Document {
     /// Leaves the text untouched when the change is rejected, so a caller
     /// applying a batch can abandon a working copy without having corrupted
     /// anything.
-    fn apply_change(
+    pub(crate) fn apply_change(
         &mut self,
         encoding: PositionEncoding,
         change: TextDocumentContentChangeEvent,

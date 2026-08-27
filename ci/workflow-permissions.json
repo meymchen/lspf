@@ -3,6 +3,7 @@
     ".github/workflows/ci.yml": {
       "feature-matrix": { "contents": "read" },
       "markdownlint": { "contents": "read" },
+      "fuzz-contract": { "contents": "read" },
       "fmt": { "contents": "read" },
       "public-docs": { "contents": "read" },
       "packaged-crate": { "contents": "read" },
@@ -24,6 +25,9 @@
     },
     ".github/workflows/public-docs.yml": {
       "public-docs": { "contents": "read" }
+    },
+    ".github/workflows/fuzz.yml": {
+      "protocol-boundaries": { "contents": "read" }
     },
     ".github/workflows/release-plz.yml": {
       "public-docs": { "contents": "read" },

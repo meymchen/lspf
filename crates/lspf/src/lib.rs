@@ -61,6 +61,9 @@ mod error;
 mod failure;
 pub mod features;
 mod file_provider;
+#[cfg(all(feature = "fuzzing", not(target_arch = "wasm32")))]
+#[doc(hidden)]
+pub mod fuzzing;
 mod progress;
 #[cfg(feature = "proposed")]
 pub mod proposed;
