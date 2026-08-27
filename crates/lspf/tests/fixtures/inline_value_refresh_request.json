@@ -1,4 +1,3 @@
 {
-  "method": "workspace/inlineValue/refresh",
-  "params": null
+  "method": "workspace/inlineValue/refresh"
 }

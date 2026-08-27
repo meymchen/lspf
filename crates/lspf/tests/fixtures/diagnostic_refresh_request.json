@@ -1,4 +1,3 @@
 {
-  "method": "workspace/diagnostic/refresh",
-  "params": null
+  "method": "workspace/diagnostic/refresh"
 }

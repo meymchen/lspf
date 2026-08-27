@@ -1,4 +1,3 @@
 {
-  "method": "workspace/semanticTokens/refresh",
-  "params": null
+  "method": "workspace/semanticTokens/refresh"
 }

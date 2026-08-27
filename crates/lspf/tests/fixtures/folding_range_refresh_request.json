@@ -1,4 +1,3 @@
 {
-  "method": "workspace/foldingRange/refresh",
-  "params": null
+  "method": "workspace/foldingRange/refresh"
 }

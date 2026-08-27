@@ -129,7 +129,12 @@ fn expect_request(message: &RawMessage, method: &str) -> (i32, Value) {
             let RequestId::Number(id) = id else {
                 panic!("expected a numeric request id");
             };
-            (*id, serde_json::from_slice(params).unwrap())
+            let params = if params.is_empty() {
+                Value::Null
+            } else {
+                serde_json::from_slice(params).unwrap()
+            };
+            (*id, params)
         }
         other => panic!("expected a {method} request, got {other:?}"),
     }

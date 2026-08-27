@@ -28,6 +28,7 @@ use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 use tracing::{trace, warn};
 
+use crate::codec::encode_params;
 use crate::error::ClientError;
 use crate::progress::ProgressRegistry;
 use crate::raw::{JsonRpcError, RawMessage, RequestId};
@@ -898,10 +899,10 @@ impl ClientHandle {
             self.ensure_open(&mut phase)?;
         }
 
-        let params = serde_json::to_vec(&params).map_err(ClientError::Serialize)?;
+        let params = encode_params(&params).map_err(ClientError::Serialize)?;
         let message = RawMessage::Notification {
             method: Cow::Borrowed(N::METHOD),
-            params: Bytes::from(params),
+            params,
         };
 
         let mut phase = self.state.phase.lock().unwrap();
@@ -1024,8 +1025,8 @@ impl ClientHandle {
     where
         R: Request,
     {
-        let params = serde_json::to_vec(&params).map_err(ClientError::Serialize)?;
-        self.request_encoded::<R>(Bytes::from(params)).await
+        let params = encode_params(&params).map_err(ClientError::Serialize)?;
+        self.request_encoded::<R>(params).await
     }
 
     /// Enqueue an already encoded typed request. The Client endpoint uses

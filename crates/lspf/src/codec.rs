@@ -35,6 +35,20 @@ pub(crate) fn erase_value<R: Serialize>(value: R) -> Result<Value, LspError> {
         .map_err(|error| LspError::internal(format!("serialization failed: {error}")))
 }
 
+/// Encode typed JSON-RPC parameters, omitting a serde unit/null payload.
+///
+/// JSON-RPC permits parameters to be absent, an object, or an array, but not
+/// `null`. Rust request markers conventionally use `()` for parameterless
+/// methods, so their serialized `null` becomes an absent `params` member.
+pub(crate) fn encode_params<P: Serialize>(params: &P) -> Result<Bytes, serde_json::Error> {
+    let encoded = serde_json::to_vec(params)?;
+    if encoded == b"null" {
+        Ok(Bytes::new())
+    } else {
+        Ok(Bytes::from(encoded))
+    }
+}
+
 /// Encode a success value to its JSON body bytes exactly once, mapping a
 /// serialization failure to an internal error.
 pub(crate) fn encode_body<R: Serialize>(value: &R) -> Result<Bytes, LspError> {
