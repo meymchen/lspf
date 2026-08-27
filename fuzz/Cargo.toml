@@ -1,0 +1,57 @@
+[package]
+name = "lspf-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+lspf = { path = "../crates/lspf", default-features = false, features = ["fuzzing"] }
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "envelope"
+path = "fuzz_targets/envelope.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "content_length"
+path = "fuzz_targets/content_length.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "uri_identity"
+path = "fuzz_targets/uri_identity.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "position_conversion"
+path = "fuzz_targets/position_conversion.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "incremental_edits"
+path = "fuzz_targets/incremental_edits.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lifecycle_sequences"
+path = "fuzz_targets/lifecycle_sequences.rs"
+test = false
+doc = false
+bench = false

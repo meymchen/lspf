@@ -85,6 +85,10 @@ proposed = []
 # Native downstream test harness: an in-memory Transport, protocol journeys,
 # and Tokio's deterministic virtual clock.
 testing = ["runtime-tokio", "tokio/test-util"]
+# Internal harness surface used only by the repository's cargo-fuzz package.
+# Framing needs tokio-util's codec traits; lifecycle fuzzing exercises the
+# native Client state machine compiled by runtime-tokio.
+fuzzing = ["runtime-tokio", "tokio-util/codec"]
 
 # Transport examples name feature-gated APIs directly. `required-features`
 # keeps each example out of unrelated feature rows while CI builds it in the

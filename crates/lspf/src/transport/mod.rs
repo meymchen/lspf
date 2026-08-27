@@ -16,6 +16,7 @@ mod conformance;
 #[cfg_attr(
     not(any(
         test,
+        feature = "fuzzing",
         feature = "stdio",
         feature = "tcp",
         feature = "websocket",
@@ -25,7 +26,7 @@ mod conformance;
 )]
 pub(crate) mod envelope;
 // `Content-Length` framing is the wire contract of stdio and TCP only.
-#[cfg(any(feature = "stdio", feature = "tcp"))]
+#[cfg(any(feature = "stdio", feature = "tcp", feature = "fuzzing"))]
 pub mod framing;
 #[cfg(all(feature = "stdio", not(target_arch = "wasm32")))]
 mod stdio;

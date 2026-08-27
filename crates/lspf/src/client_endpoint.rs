@@ -534,6 +534,36 @@ impl ClientPhase {
     }
 }
 
+#[cfg(feature = "fuzzing")]
+pub(crate) fn fuzz_lifecycle_sequence(data: &[u8]) {
+    let mut phase = ClientPhase::Initializing;
+
+    for byte in data {
+        let before = phase;
+        let transition = match byte % 6 {
+            0 => ClientTransition::Initialized,
+            1 => ClientTransition::BeginShutdown,
+            2 => ClientTransition::ShutdownSucceeded,
+            3 => ClientTransition::ShutdownFailed,
+            4 => ClientTransition::Exit,
+            _ => ClientTransition::Disconnect,
+        };
+
+        if let Some(next) = phase.transition(transition) {
+            phase = next;
+        }
+
+        // Work admission is part of the lifecycle contract and must remain a
+        // total operation in every state reached by arbitrary peer sequences.
+        let _ = phase.permits(ClientWork::Outbound);
+        let _ = phase.permits(ClientWork::Reverse);
+
+        if matches!(before, ClientPhase::Exited | ClientPhase::Disconnected) {
+            assert_eq!(phase, before, "terminal lifecycle state changed");
+        }
+    }
+}
+
 struct ClientLifecycle {
     phase: Mutex<ClientPhase>,
     protocol: ProtocolControl<ClientHandle, ClientCloseCause>,
