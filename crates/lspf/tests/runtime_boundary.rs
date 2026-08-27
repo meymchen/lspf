@@ -14,7 +14,8 @@ use syn::visit::Visit;
 /// Native Transport files allowed to reach Tokio directly. Runtime adapter
 /// exemptions are narrower: only the `TokioRuntime` and `WasmRuntime` impl
 /// bodies receive them.
-const ALLOWED_NATIVE_TRANSPORT_BOUNDARIES: [&str; 3] = [
+const ALLOWED_NATIVE_TRANSPORT_BOUNDARIES: [&str; 4] = [
+    "transport/child.rs",
     "transport/stdio.rs",
     "transport/tcp.rs",
     "transport/websocket.rs",

@@ -56,6 +56,10 @@ The initialized, exclusively owned client endpoint returned by
 _Avoid_: Session (the protocol session is private), ClientHandle (the opposite
 message direction).
 
+**Child connection**:
+The initialized Client connection that exclusively owns one stdio language-server process and its terminal evidence until graceful shutdown, natural exit, or drop reclaims it.
+_Avoid_: Child Transport (the Transport carries frames but does not own process lifecycle), process handle (does not include the Client connection).
+
 **ClientContext**:
 The cheap-to-clone protocol context passed by value to every Client handler;
 it exposes the current call scope and [[ServerHandle]], but no editor

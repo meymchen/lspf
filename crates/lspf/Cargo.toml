@@ -71,7 +71,7 @@ tokio-tungstenite = { workspace = true, optional = true }
 # Native stdio is the default experience: opting in also selects the Tokio
 # runtime that serves it (the 0.5 feature graph, ADR 0013).
 default = ["stdio"]
-stdio = ["runtime-tokio", "tokio-util/codec"]
+stdio = ["runtime-tokio", "tokio-util/codec", "tokio/io-util", "tokio/process"]
 tcp = ["runtime-tokio", "tokio-util/codec", "tokio/net"]
 websocket = ["runtime-tokio", "dep:tokio-tungstenite", "tokio/net"]
 runtime-tokio = ["dep:tokio"]
@@ -185,6 +185,11 @@ required-features = ["runtime-tokio"]
 [[test]]
 name = "client_requests"
 required-features = ["runtime-tokio"]
+
+[[test]]
+name = "stdio_child"
+required-features = ["stdio"]
+harness = false
 
 [[test]]
 name = "commands"

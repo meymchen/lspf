@@ -38,7 +38,7 @@ adapter; keep the default features when using stdio.
 | Feature | Default | Enables | Public effect |
 | --- | --- | --- | --- |
 | `default` | Yes | `stdio` | The native stdio experience |
-| `stdio` | Via `default` | `runtime-tokio`, `tokio-util/codec` | `stdio`, `StdioBuilder`, and the stdio Transport types on native targets |
+| `stdio` | Via `default` | `runtime-tokio`, `tokio-util/codec`, `tokio/process` | `stdio`, `StdioBuilder`, stdio Transport types, and stdio child supervision on native targets |
 | `tcp` | No | `runtime-tokio`, `tokio-util/codec`, `tokio/net` | `tcp`, `TcpBuilder`, and the TCP Transport types on native targets |
 | `websocket` | No | `runtime-tokio`, `tokio-tungstenite`, `tokio/net` | `websocket`, `WebSocketBuilder`, and the WebSocket Transport types on native targets |
 | `runtime-tokio` | Through a native Transport | `tokio` | Native execution for `Server::serve`; no I/O adapter by itself |
@@ -183,6 +183,43 @@ to stderr.
 the process. The binary decides whether to call `outcome.code()`, report an
 error, restart, or perform other cleanup. Reader EOF, peer closure, protocol
 `exit`, and fatal initialization all go through that same outcome path.
+
+### Launching a language-server child
+
+A native Client can own an arbitrary command as one supervised stdio child.
+`spawn` replaces all three standard-stream settings with pipes, connects and
+initializes the Client, drives incoming protocol traffic, and drains stderr
+concurrently:
+
+```rust,no_run
+use lspf::types::ClientCapabilities;
+use lspf::Client;
+use tokio::process::Command;
+
+# async fn run() -> Result<(), lspf::ChildError> {
+let command = Command::new("rust-analyzer");
+let child = Client::builder(ClientCapabilities::default())
+    .spawn(command)
+    .await?;
+let server = child.server();
+
+// Send typed requests and notifications through `server` while the child is live.
+let output = child.shutdown().await?;
+assert!(output.status().success());
+# Ok(())
+# }
+```
+
+`shutdown` sends the LSP `shutdown` request and `exit` notification, then
+reaps the process. A child that does not exit is escalated through a bounded
+wait, terminate, another bounded wait, and kill. `wait` instead observes a
+server that exits by itself. Both return the protocol `Outcome`, OS exit
+status, and the first 64 KiB of stderr; stderr continues draining after that
+capture limit. Dropping a live `ChildConnection` transfers its resources to a
+reaper thread and schedules graceful protocol cleanup on the current Tokio
+runtime. The thread's synchronous terminate-kill-reap path continues even if
+that runtime stops. If no runtime is current when Drop runs, it performs the
+same process cleanup synchronously.
 
 ## Implementing a custom Transport
 
