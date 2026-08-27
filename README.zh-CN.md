@@ -179,6 +179,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 | `FileProvider`      | 解析编辑器中未打开资源的可配置 provider。                                              |
 | `ServerContext`     | 每个处理器都会收到的框架状态句柄（克隆开销极小）：文档、workspace 和 client。          |
 | `ClientHandle`      | 发送带类型服务端通知与请求的句柄（`ctx.client()`）。                                   |
+| `ChildConnection`   | 持有一个已初始化的 stdio Client 连接及其受监管的语言服务器子进程。                     |
 | `CancellationToken` | 传递给请求处理器的取消信号。                                                           |
 | `Transport`         | 供协议引擎使用、拆分为 reader 和 writer 两部分的消息帧通道。                           |
 | `Outcome`           | 连接如何结束；serve 返回它，其中带有 LSP 退出码，但框架从不结束进程。                  |

@@ -199,6 +199,7 @@ the docs.
 | `FileProvider`      | The configurable resolver for resources that are not open in the editor.                                 |
 | `ServerContext`     | The cheap-to-clone framework-state handle every handler receives: documents, workspace, client, scope.   |
 | `ClientHandle`      | The typed handle for server-to-client notifications and requests (`ctx.client()`).                       |
+| `ChildConnection`   | Owns one initialized stdio Client connection and its supervised language-server process.                 |
 | `CancellationToken` | The cancellation signal passed to request handlers.                                                      |
 | `Transport`         | A message-framed channel split into reader and writer halves for the protocol engine.                    |
 | `Outcome`           | How one connection ended, returned by serving; it carries the LSP exit code but never exits the process. |

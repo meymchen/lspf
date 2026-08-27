@@ -50,8 +50,7 @@ impl StdioTransport {
         }
     }
 
-    #[cfg(test)]
-    fn from_io<R, W>(reader: R, writer: W) -> Self
+    pub(crate) fn from_io<R, W>(reader: R, writer: W) -> Self
     where
         R: AsyncRead + Send + 'static,
         W: AsyncWrite + Send + 'static,
