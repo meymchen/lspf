@@ -59,12 +59,12 @@ then
     exit 1
 fi
 
-run_count=$(rg -c ' fuzz run ' "$invocations")
+run_count=$(grep -c ' fuzz run ' "$invocations")
 if [[ $run_count != 6 ]]; then
     echo "fuzz runner stopped before executing every target" >&2
     exit 1
 fi
-if ! rg -q ' fuzz tmin envelope ' "$invocations"; then
+if ! grep -q ' fuzz tmin envelope ' "$invocations"; then
     echo "fuzz runner did not minimize the failing target" >&2
     exit 1
 fi

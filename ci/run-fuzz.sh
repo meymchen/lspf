@@ -33,7 +33,7 @@ check_contract() {
             echo "missing fuzz target source: $target" >&2
             return 1
         fi
-        if ! rg -q "name = \"$target\"" "$manifest"; then
+        if ! grep -q "name = \"$target\"" "$manifest"; then
             echo "fuzz target is absent from fuzz/Cargo.toml: $target" >&2
             return 1
         fi
@@ -46,13 +46,13 @@ check_contract() {
             return 1
         fi
         local expected_row="| \`$target\` | $max_len | $timeout s | $budget s |"
-        if ! rg -Fqx "$expected_row" "$guide"; then
+        if ! grep -Fqx "$expected_row" "$guide"; then
             echo "fuzz target limits are undocumented or stale: $target" >&2
             return 1
         fi
     done
 
-    if ! rg -q 'bash ci/run-fuzz.sh --all' "$workflow"; then
+    if ! grep -q 'bash ci/run-fuzz.sh --all' "$workflow"; then
         echo "scheduled workflow does not run every fuzz target" >&2
         return 1
     fi
