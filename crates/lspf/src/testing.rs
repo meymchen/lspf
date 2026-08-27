@@ -143,6 +143,18 @@ impl WireCapture {
             message,
         });
     }
+
+    fn deliver<E>(
+        &self,
+        direction: WireDirection,
+        message: RawMessage,
+        deliver: impl FnOnce(RawMessage) -> Result<(), E>,
+    ) -> Result<(), TransportError> {
+        let mut events = self.events.lock().unwrap();
+        deliver(message.clone()).map_err(|_| TransportError::Closed)?;
+        Self::record(&mut events, direction, message);
+        Ok(())
+    }
 }
 
 /// In-memory message-framed Transport controlled by a [`ScriptedPeer`].
@@ -207,12 +219,10 @@ impl TransportReader for MemoryReader {
 
 impl TransportWriter for MemoryWriter {
     async fn send(&mut self, message: RawMessage) -> Result<(), TransportError> {
-        let mut events = self.capture.events.lock().unwrap();
-        self.outgoing
-            .send(message.clone())
-            .map_err(|_| TransportError::Closed)?;
-        WireCapture::record(&mut events, WireDirection::EndpointToPeer, message);
-        Ok(())
+        self.capture
+            .deliver(WireDirection::EndpointToPeer, message, |message| {
+                self.outgoing.send(message)
+            })
     }
 
     async fn shutdown(self) -> Result<(), TransportError> {
@@ -235,12 +245,10 @@ impl ScriptedPeer {
 
     /// Deliver one message to the endpoint.
     pub fn send(&self, message: RawMessage) -> Result<(), TransportError> {
-        let mut events = self.capture.events.lock().unwrap();
-        self.to_endpoint
-            .send(Ok(message.clone()))
-            .map_err(|_| TransportError::Closed)?;
-        WireCapture::record(&mut events, WireDirection::PeerToEndpoint, message);
-        Ok(())
+        self.capture
+            .deliver(WireDirection::PeerToEndpoint, message, |message| {
+                self.to_endpoint.send(Ok(message))
+            })
     }
 
     /// Make the endpoint's next read fail with a scripted Transport error.
