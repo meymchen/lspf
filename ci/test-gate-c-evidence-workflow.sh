@@ -2,28 +2,12 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$repo_root/ci/workflow-test-helpers.sh"
 ci_workflow="$repo_root/.github/workflows/ci.yml"
 security_workflow="$repo_root/.github/workflows/security.yml"
 permissions_policy="$repo_root/ci/workflow-permissions.json"
-yq_bin="${YQ_BIN:-yq}"
 
-yaml_to_json() {
-    if command -v "$yq_bin" >/dev/null; then
-        "$yq_bin" -o=json '.' "$1"
-    else
-        python3 -c '
-import json
-import sys
-
-import yaml
-
-with open(sys.argv[1], encoding="utf-8") as source:
-    json.dump(yaml.safe_load(source), sys.stdout)
-' "$1"
-    fi
-}
-
-ci_json="$(yaml_to_json "$ci_workflow")"
+ci_json="$(workflow_yaml_to_json "$ci_workflow")"
 job="$(jq -c '.jobs["gate-c-evidence"]' <<<"$ci_json")"
 
 jq -e '
@@ -46,7 +30,7 @@ jq -e '
     and .with["if-no-files-found"] == "error")
 ' <<<"$job" >/dev/null
 
-yaml_to_json "$security_workflow" | jq -e '
+workflow_yaml_to_json "$security_workflow" | jq -e '
   .jobs["supply-chain"].steps[] |
   select(.run == "bash ci/test-gate-c-evidence-workflow.sh")
 ' >/dev/null
