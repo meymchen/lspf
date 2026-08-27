@@ -24,7 +24,7 @@ use tracing::{Instrument, Span, debug};
 use crate::builder::SharedHandler;
 use crate::client::ClientHandle;
 use crate::client_progress::{ClientProgressRegistry, CreateOutcome};
-use crate::codec::{decode_value, encode_body, erase_value};
+use crate::codec::{decode_value, encode_body, encode_params, erase_value};
 use crate::error::{BuildError, LspError};
 use crate::failure::FailureReporter;
 use crate::raw::{RawMessage, RequestId};
@@ -420,7 +420,7 @@ impl ServerHandle {
         R: Request,
     {
         self.lifecycle.ensure_running(R::METHOD)?;
-        let params = serde_json::to_vec(&params).map_err(ClientError::Serialize)?;
+        let params = encode_params(&params).map_err(ClientError::Serialize)?;
         let token = work_done_token(&params)?;
         let _request_progress_guard = match token {
             Some(token) => {
@@ -436,9 +436,7 @@ impl ServerHandle {
             }
             None => None,
         };
-        self.inner
-            .request_encoded::<R>(bytes::Bytes::from(params))
-            .await
+        self.inner.request_encoded::<R>(params).await
     }
 
     /// Request a graceful LSP shutdown from the connected server.
@@ -979,6 +977,9 @@ fn is_reserved_reverse_method(method: &str) -> bool {
 fn work_done_token(
     params: &[u8],
 ) -> std::result::Result<Option<lsp_types::ProgressToken>, ClientError> {
+    if params.is_empty() {
+        return Ok(None);
+    }
     let value = serde_json::from_slice::<Value>(params).map_err(ClientError::Serialize)?;
     let Some(token) = value.get("workDoneToken") else {
         return Ok(None);

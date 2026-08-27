@@ -192,6 +192,11 @@ required-features = ["stdio"]
 harness = false
 
 [[test]]
+name = "public_conformance"
+required-features = ["stdio"]
+harness = false
+
+[[test]]
 name = "commands"
 required-features = ["runtime-tokio"]
 

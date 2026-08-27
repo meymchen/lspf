@@ -1,4 +1,3 @@
 {
-  "method": "workspace/inlayHint/refresh",
-  "params": null
+  "method": "workspace/inlayHint/refresh"
 }

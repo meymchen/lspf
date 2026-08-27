@@ -1,4 +1,3 @@
 {
-  "method": "workspace/workspaceFolders",
-  "params": null
+  "method": "workspace/workspaceFolders"
 }

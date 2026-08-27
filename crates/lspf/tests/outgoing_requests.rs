@@ -193,11 +193,10 @@ fn assert_wire_request(message: &RawMessage, fixture: &str) {
     let RawMessage::Request { method, params, .. } = message else {
         panic!("expected a request, got {message:?}")
     };
-    let wire = json!({
-        "method": method.as_ref(),
-        "params": serde_json::from_slice::<serde_json::Value>(params)
-            .expect("the params are valid JSON"),
-    });
+    let mut wire = json!({ "method": method.as_ref() });
+    if !params.is_empty() {
+        wire["params"] = serde_json::from_slice(params).expect("the params are valid JSON");
+    }
     let expected: serde_json::Value =
         serde_json::from_str(fixture).expect("the fixture is valid JSON");
     assert_eq!(wire, expected, "the wire shape must match the fixture");

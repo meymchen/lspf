@@ -385,11 +385,7 @@ async fn workspace_folders_result_never_overwrites_the_folder_snapshot() {
         panic!("expected an outgoing request, got {outbound:?}")
     };
     assert_eq!(method.as_ref(), "workspace/workspaceFolders");
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(params).unwrap(),
-        serde_json::Value::Null,
-        "the parameterless query sends null params"
-    );
+    assert!(params.is_empty(), "the parameterless query omits params");
 
     // Answer with folders that differ from the initialized snapshot.
     let id = outbound_number_id(&outbound);
