@@ -11,8 +11,8 @@ use std::time::Duration;
 use lspf::types::ClientCapabilities;
 use lspf::types::request::Request;
 use lspf::{
-    Client, ClientError, LspError, Outcome, RawMessage, Server, ServerContext, ServerHandle,
-    Transport, TransportError, TransportReader, TransportWriter,
+    Client, ClientBuilder, ClientError, LspError, Outcome, RawMessage, Server, ServerContext,
+    ServerHandle, Transport, TransportError, TransportReader, TransportWriter,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -23,6 +23,41 @@ const CHILD_MODE: &str = "LSPF_PUBLIC_CONFORMANCE_CHILD";
 #[derive(Default)]
 struct ConformanceState {
     cancellations: AtomicUsize,
+}
+
+struct ConformanceSignals {
+    server_completions: mpsc::UnboundedSender<String>,
+    cancellation_entered: mpsc::UnboundedSender<()>,
+    cancellation_observed: mpsc::UnboundedSender<()>,
+    pending_entered: mpsc::UnboundedSender<()>,
+}
+
+struct ConformanceReceivers {
+    server_completions: mpsc::UnboundedReceiver<String>,
+    cancellation_entered: mpsc::UnboundedReceiver<()>,
+    cancellation_observed: mpsc::UnboundedReceiver<()>,
+    pending_entered: mpsc::UnboundedReceiver<()>,
+}
+
+fn conformance_signals() -> (ConformanceSignals, ConformanceReceivers) {
+    let (server_completions, server_completion_rx) = mpsc::unbounded_channel();
+    let (cancellation_entered, cancellation_entered_rx) = mpsc::unbounded_channel();
+    let (cancellation_observed, cancellation_observed_rx) = mpsc::unbounded_channel();
+    let (pending_entered, pending_entered_rx) = mpsc::unbounded_channel();
+    (
+        ConformanceSignals {
+            server_completions,
+            cancellation_entered,
+            cancellation_observed,
+            pending_entered,
+        },
+        ConformanceReceivers {
+            server_completions: server_completion_rx,
+            cancellation_entered: cancellation_entered_rx,
+            cancellation_observed: cancellation_observed_rx,
+            pending_entered: pending_entered_rx,
+        },
+    )
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -158,12 +193,11 @@ async fn within<T>(future: impl Future<Output = T>) -> T {
         .expect("public conformance operation completes within the watchdog")
 }
 
-fn conformance_server(
-    server_completions: mpsc::UnboundedSender<String>,
-    cancellation_entered: mpsc::UnboundedSender<()>,
-    cancellation_observed: mpsc::UnboundedSender<()>,
-    pending_entered: mpsc::UnboundedSender<()>,
-) -> Server<ConformanceState> {
+fn conformance_server(signals: ConformanceSignals) -> Server<ConformanceState> {
+    let server_completions = signals.server_completions;
+    let cancellation_entered = signals.cancellation_entered;
+    let cancellation_observed = signals.cancellation_observed;
+    let pending_entered = signals.pending_entered;
     Server::builder(ConformanceState::default())
         .request::<ServerEcho, _, _>(move |_state, _ctx, params, _cancellation| {
             let completions = server_completions.clone();
@@ -221,6 +255,21 @@ fn conformance_server(
         .expect("the public conformance Server builds")
 }
 
+fn conformance_client(client_completions: mpsc::UnboundedSender<String>) -> ClientBuilder {
+    Client::builder(ClientCapabilities::default()).request::<ClientEcho, _, _>(
+        move |_ctx, params, _cancellation| {
+            let completions = client_completions.clone();
+            async move {
+                tokio::time::sleep(Duration::from_millis(params.delay_ms)).await;
+                completions.send(params.text.clone()).unwrap();
+                Ok(EchoResult {
+                    text: format!("client: {}", params.text),
+                })
+            }
+        },
+    )
+}
+
 async fn connect_loopback(
     pair: LoopbackPair,
     server: Server<ConformanceState>,
@@ -232,17 +281,7 @@ async fn connect_loopback(
     mpsc::UnboundedSender<Incoming>,
 ) {
     let server_serving = tokio::spawn(server.serve(pair.server));
-    let client = Client::builder(ClientCapabilities::default())
-        .request::<ClientEcho, _, _>(move |_ctx, params, _cancellation| {
-            let completions = client_completions.clone();
-            async move {
-                tokio::time::sleep(Duration::from_millis(params.delay_ms)).await;
-                completions.send(params.text.clone()).unwrap();
-                Ok(EchoResult {
-                    text: format!("client: {}", params.text),
-                })
-            }
-        })
+    let client = conformance_client(client_completions)
         .build(pair.client)
         .expect("the public conformance Client builds");
     let connection = within(client.connect())
@@ -276,17 +315,9 @@ async fn wait_for_cancellation_count(server: &ServerHandle) {
 }
 
 async fn symmetric_loopback_journey() {
-    let (server_completions, mut server_completion_rx) = mpsc::unbounded_channel();
+    let (signals, mut receivers) = conformance_signals();
     let (client_completions, mut client_completion_rx) = mpsc::unbounded_channel();
-    let (cancellation_entered, mut cancellation_entered_rx) = mpsc::unbounded_channel();
-    let (cancellation_observed, mut cancellation_observed_rx) = mpsc::unbounded_channel();
-    let (pending_entered, _pending_entered_rx) = mpsc::unbounded_channel();
-    let server = conformance_server(
-        server_completions,
-        cancellation_entered,
-        cancellation_observed,
-        pending_entered,
-    );
+    let server = conformance_server(signals);
     let (server, server_serving, client_serving, _fail_client_reader) =
         connect_loopback(loopback_pair(), server, client_completions).await;
 
@@ -311,8 +342,14 @@ async fn symmetric_loopback_journey() {
             .text,
         "server: second"
     );
-    assert_eq!(server_completion_rx.recv().await.as_deref(), Some("second"));
-    assert_eq!(server_completion_rx.recv().await.as_deref(), Some("first"));
+    assert_eq!(
+        receivers.server_completions.recv().await.as_deref(),
+        Some("second")
+    );
+    assert_eq!(
+        receivers.server_completions.recv().await.as_deref(),
+        Some("first")
+    );
 
     let reverse = within(server.request::<ReversePair>(EmptyParams::default()))
         .await
@@ -330,10 +367,12 @@ async fn symmetric_loopback_journey() {
                 .await
         }
     });
-    within(cancellation_entered_rx.recv()).await.unwrap();
+    within(receivers.cancellation_entered.recv()).await.unwrap();
     cancelled_request.abort();
     assert!(cancelled_request.await.unwrap_err().is_cancelled());
-    within(cancellation_observed_rx.recv()).await.unwrap();
+    within(receivers.cancellation_observed.recv())
+        .await
+        .unwrap();
     wait_for_cancellation_count(&server).await;
 
     within(server.shutdown())
@@ -351,17 +390,9 @@ async fn symmetric_loopback_journey() {
 }
 
 async fn transport_failure_resolves_pending_future() {
-    let (server_completions, _server_completion_rx) = mpsc::unbounded_channel();
+    let (signals, mut receivers) = conformance_signals();
     let (client_completions, _client_completion_rx) = mpsc::unbounded_channel();
-    let (cancellation_entered, _cancellation_entered_rx) = mpsc::unbounded_channel();
-    let (cancellation_observed, _cancellation_observed_rx) = mpsc::unbounded_channel();
-    let (pending_entered, mut pending_entered_rx) = mpsc::unbounded_channel();
-    let server = conformance_server(
-        server_completions,
-        cancellation_entered,
-        cancellation_observed,
-        pending_entered,
-    );
+    let server = conformance_server(signals);
     let (server, server_serving, client_serving, fail_client_reader) =
         connect_loopback(loopback_pair(), server, client_completions).await;
 
@@ -369,7 +400,7 @@ async fn transport_failure_resolves_pending_future() {
         let server = server.clone();
         async move { server.request::<NeverRespond>(EmptyParams::default()).await }
     });
-    within(pending_entered_rx.recv()).await.unwrap();
+    within(receivers.pending_entered.recv()).await.unwrap();
     fail_client_reader
         .send(Err(TransportError::Malformed(
             "injected public Transport failure".into(),
@@ -393,17 +424,7 @@ fn child_command() -> tokio::process::Command {
 
 async fn stdio_child_journey() {
     let (client_completions, mut client_completion_rx) = mpsc::unbounded_channel();
-    let child = Client::builder(ClientCapabilities::default())
-        .request::<ClientEcho, _, _>(move |_ctx, params, _cancellation| {
-            let completions = client_completions.clone();
-            async move {
-                tokio::time::sleep(Duration::from_millis(params.delay_ms)).await;
-                completions.send(params.text.clone()).unwrap();
-                Ok(EchoResult {
-                    text: format!("client: {}", params.text),
-                })
-            }
-        })
+    let child = conformance_client(client_completions)
         .spawn(child_command())
         .await
         .expect("the downstream Client initializes a real stdio child");
@@ -481,16 +502,8 @@ async fn early_child_exit_resolves_pending_future() {
 }
 
 async fn run_stdio_server_child() {
-    let (server_completions, _server_completion_rx) = mpsc::unbounded_channel();
-    let (cancellation_entered, _cancellation_entered_rx) = mpsc::unbounded_channel();
-    let (cancellation_observed, _cancellation_observed_rx) = mpsc::unbounded_channel();
-    let (pending_entered, _pending_entered_rx) = mpsc::unbounded_channel();
-    let server = conformance_server(
-        server_completions,
-        cancellation_entered,
-        cancellation_observed,
-        pending_entered,
-    );
+    let (signals, _receivers) = conformance_signals();
+    let server = conformance_server(signals);
     let outcome = lspf::stdio(server)
         .serve()
         .await
