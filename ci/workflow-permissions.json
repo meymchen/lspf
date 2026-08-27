@@ -48,7 +48,10 @@
       "supply-chain": { "contents": "read" }
     },
     ".github/workflows/sonarcloud.yml": {
-      "Analysis": { "pull-requests": "read" }
+      "Analysis": {
+        "contents": "read",
+        "pull-requests": "read"
+      }
     }
   }
 }
