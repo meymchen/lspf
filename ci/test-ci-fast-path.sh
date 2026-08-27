@@ -30,7 +30,7 @@ yaml_to_json "$ci_workflow" | jq -e '
 ' >/dev/null
 
 ci_json="$(yaml_to_json "$ci_workflow")"
-for job in feature-matrix msrv native-matrix test-coverage gate-b-evidence
+for job in feature-matrix msrv native-matrix test-coverage gate-b-evidence gate-c-evidence
 do
     jq -e --arg job "$job" '
       .jobs[$job].if == "${{ github.event_name == '\''push'\'' }}"

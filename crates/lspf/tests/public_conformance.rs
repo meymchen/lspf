@@ -11,8 +11,8 @@ use std::time::Duration;
 use lspf::types::ClientCapabilities;
 use lspf::types::request::Request;
 use lspf::{
-    Client, ClientBuilder, ClientError, LspError, Outcome, RawMessage, Server, ServerContext,
-    ServerHandle, Transport, TransportError, TransportReader, TransportWriter,
+    Client, ClientBuilder, ClientError, LspError, Outcome, RawMessage, ResourcePolicy, Server,
+    ServerContext, ServerHandle, Transport, TransportError, TransportReader, TransportWriter,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -273,7 +273,7 @@ fn conformance_client(client_completions: mpsc::UnboundedSender<String>) -> Clie
 async fn connect_loopback(
     pair: LoopbackPair,
     server: Server<ConformanceState>,
-    client_completions: mpsc::UnboundedSender<String>,
+    client_builder: ClientBuilder,
 ) -> (
     ServerHandle,
     tokio::task::JoinHandle<lspf::Result<Outcome>>,
@@ -281,7 +281,7 @@ async fn connect_loopback(
     mpsc::UnboundedSender<Incoming>,
 ) {
     let server_serving = tokio::spawn(server.serve(pair.server));
-    let client = conformance_client(client_completions)
+    let client = client_builder
         .build(pair.client)
         .expect("the public conformance Client builds");
     let connection = within(client.connect())
@@ -318,8 +318,12 @@ async fn symmetric_loopback_journey() {
     let (signals, mut receivers) = conformance_signals();
     let (client_completions, mut client_completion_rx) = mpsc::unbounded_channel();
     let server = conformance_server(signals);
-    let (server, server_serving, client_serving, _fail_client_reader) =
-        connect_loopback(loopback_pair(), server, client_completions).await;
+    let (server, server_serving, client_serving, _fail_client_reader) = connect_loopback(
+        loopback_pair(),
+        server,
+        conformance_client(client_completions),
+    )
+    .await;
 
     let first = server.request::<ServerEcho>(EchoParams {
         text: "first".into(),
@@ -393,8 +397,12 @@ async fn transport_failure_resolves_pending_future() {
     let (signals, mut receivers) = conformance_signals();
     let (client_completions, _client_completion_rx) = mpsc::unbounded_channel();
     let server = conformance_server(signals);
-    let (server, server_serving, client_serving, fail_client_reader) =
-        connect_loopback(loopback_pair(), server, client_completions).await;
+    let (server, server_serving, client_serving, fail_client_reader) = connect_loopback(
+        loopback_pair(),
+        server,
+        conformance_client(client_completions),
+    )
+    .await;
 
     let pending = tokio::spawn({
         let server = server.clone();
@@ -413,6 +421,36 @@ async fn transport_failure_resolves_pending_future() {
     ));
     assert!(within(client_serving).await.unwrap().is_err());
     server.disconnect();
+    let _ = within(server_serving).await;
+}
+
+async fn outbound_timeout_releases_pending_future() {
+    let (signals, mut receivers) = conformance_signals();
+    let (client_completions, _client_completion_rx) = mpsc::unbounded_channel();
+    let server = conformance_server(signals);
+    let policy = ResourcePolicy {
+        outbound_request_timeout: Some(Duration::from_millis(50)),
+        ..ResourcePolicy::default()
+    };
+    let (server, server_serving, client_serving, _fail_client_reader) = connect_loopback(
+        loopback_pair(),
+        server,
+        conformance_client(client_completions).resource_policy(policy),
+    )
+    .await;
+
+    let pending = tokio::spawn({
+        let server = server.clone();
+        async move { server.request::<NeverRespond>(EmptyParams::default()).await }
+    });
+    within(receivers.pending_entered.recv()).await.unwrap();
+
+    assert!(matches!(
+        within(pending).await.unwrap(),
+        Err(ClientError::Timeout)
+    ));
+    server.disconnect();
+    let _ = within(client_serving).await;
     let _ = within(server_serving).await;
 }
 
@@ -476,6 +514,8 @@ async fn stdio_child_journey() {
         .expect("the real stdio child closes and is reclaimed");
     assert_eq!(output.outcome(), Outcome::Exit { code: 0 });
     assert!(output.status().success());
+    assert_eq!(output.stderr().len(), 64 * 1024);
+    assert!(output.stderr_truncated());
 }
 
 async fn early_child_exit_resolves_pending_future() {
@@ -502,6 +542,13 @@ async fn early_child_exit_resolves_pending_future() {
 }
 
 async fn run_stdio_server_child() {
+    use std::io::Write;
+
+    let mut stderr = std::io::stderr().lock();
+    stderr.write_all(&vec![b'x'; 256 * 1024]).unwrap();
+    stderr.flush().unwrap();
+    drop(stderr);
+
     let (signals, _receivers) = conformance_signals();
     let server = conformance_server(signals);
     let outcome = lspf::stdio(server)
@@ -524,6 +571,7 @@ fn main() {
     runtime.block_on(async {
         symmetric_loopback_journey().await;
         transport_failure_resolves_pending_future().await;
+        outbound_timeout_releases_pending_future().await;
         stdio_child_journey().await;
         early_child_exit_resolves_pending_future().await;
     });
