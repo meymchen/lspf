@@ -56,6 +56,12 @@ The initialized, exclusively owned client endpoint returned by
 _Avoid_: Session (the protocol session is private), ClientHandle (the opposite
 message direction).
 
+**ClientContext**:
+The cheap-to-clone protocol context passed by value to every Client handler;
+it exposes the current call scope and [[ServerHandle]], but no editor
+Workspace, UI, filesystem, or extension-host state.
+_Avoid_: Editor context, extension context (those imply caller-owned policy).
+
 **Protocol session**:
 The private connection core shared by Server and Client endpoints for correlation, bounded admission and queues, deadlines, task ownership, writer coordination, and idempotent close. Endpoint lifecycle, registration, and domain-state policy remain outside it.
 _Avoid_: Endpoint, engine (those own direction-specific policy).

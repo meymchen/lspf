@@ -175,6 +175,10 @@ name = "catalog"
 required-features = ["runtime-tokio"]
 
 [[test]]
+name = "client_endpoint"
+required-features = ["runtime-tokio"]
+
+[[test]]
 name = "client_notifications"
 required-features = ["runtime-tokio"]
 
