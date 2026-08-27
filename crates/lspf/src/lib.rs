@@ -105,6 +105,12 @@ mod markdown {
     #[doc = include_str!("../../../docs/guides/outgoing-client.zh-CN.md")]
     pub struct OutgoingClientGuideZhCn;
 
+    #[doc = include_str!("../../../docs/guides/client-adoption.md")]
+    pub struct ClientAdoptionGuide;
+
+    #[doc = include_str!("../../../docs/guides/client-adoption.zh-CN.md")]
+    pub struct ClientAdoptionGuideZhCn;
+
     #[doc = include_str!("../../../docs/guides/transports.md")]
     pub struct TransportsGuide;
 

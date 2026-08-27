@@ -130,6 +130,8 @@ with an end-to-end stdio test beside it. The
 guide walks through each piece. To choose a Transport adapter, enable only
 its Cargo dependencies, or implement another message-framed channel, see
 [Choosing and implementing a Transport](./docs/guides/transports.md).
+To embed the Client endpoint or own a stdio language-server child, follow the
+[Client adoption guide](./docs/guides/client-adoption.md).
 Runnable servers for individual LSP features are indexed in
 [`crates/lspf/examples/README.md`](./crates/lspf/examples/README.md).
 
@@ -199,6 +201,10 @@ the docs.
 | `FileProvider`      | The configurable resolver for resources that are not open in the editor.                                 |
 | `ServerContext`     | The cheap-to-clone framework-state handle every handler receives: documents, workspace, client, scope.   |
 | `ClientHandle`      | The typed handle for server-to-client notifications and requests (`ctx.client()`).                       |
+| `Client`            | Configures one outbound LSP connection over a caller-provided Transport or supervised stdio child.       |
+| `ClientConnection`  | Owns one initialized generic Client connection and its inbound protocol driver.                          |
+| `ClientContext`     | The protocol-only context passed to reverse handlers; editor state remains caller-owned.                 |
+| `ServerHandle`      | The cloneable handle for typed client-to-server calls and Client lifecycle transitions.                  |
 | `ChildConnection`   | Owns one initialized stdio Client connection and its supervised language-server process.                 |
 | `CancellationToken` | The cancellation signal passed to request handlers.                                                      |
 | `Transport`         | A message-framed channel split into reader and writer halves for the protocol engine.                    |
@@ -224,6 +230,10 @@ The full design lives next to the code:
   requests, dynamic registration, workspace refreshes, and work-done
   progress, with a full helper reference. Every example compiles as a
   doctest.
+- [`docs/guides/client-adoption.md`](./docs/guides/client-adoption.md) — how
+  to connect the Client over a custom Transport or supervised stdio child,
+  register reverse handlers, set deadlines, handle failures, and shut down
+  cleanly. Both walkthroughs compile as doctests.
 - [`docs/guides/transports.md`](./docs/guides/transports.md) — Transport
   selection and target/feature matrices, buildable native and WASM examples,
   and the custom Transport contract.
@@ -237,6 +247,8 @@ Available today:
 
 - `stdio`, single-client TCP, WebSocket, and WASM worker-channel adapters, plus
   the public custom-transport interface.
+- A typed Client endpoint over custom Transport and supervised stdio child,
+  with reverse handlers, bounded resources, deadlines, and lifecycle control.
 - The built `Server`: typed requests, notifications, commands, the sealed
   feature catalog covering the stable LSP 3.17 features, user `Layer`s, and
   the one `configure_initialize` transaction.
