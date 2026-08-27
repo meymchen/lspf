@@ -237,7 +237,8 @@ The full design lives next to the code:
   and the custom Transport contract.
 - [`docs/guides/testing.md`](./docs/guides/testing.md) — in-memory peers,
   ordered wire capture, deterministic deadlines, and reusable Server and
-  Client lifecycle journeys for external tests.
+  Client lifecycle journeys for external tests, plus the repository's
+  deterministic protocol-session concurrency model.
 - [`SECURITY.md`](./SECURITY.md) — supported Rust versions, hosts, targets,
   Cargo feature combinations, release compatibility, deprecation, and private
   vulnerability reporting.
