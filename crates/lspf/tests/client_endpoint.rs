@@ -4,8 +4,8 @@ use std::borrow::Cow;
 use std::time::Duration;
 
 use bytes::Bytes;
-use lspf::types::notification::Notification;
-use lspf::types::request::Request;
+use lspf::types::notification::{Notification, Progress};
+use lspf::types::request::{RegisterCapability, Request, WorkDoneProgressCreate};
 use lspf::types::{ClientCapabilities, ClientInfo, InitializeResult, ServerCapabilities};
 use lspf::{
     Client, ClientBuilder, ClientConnection, ClientError, Outcome, RawMessage, RequestId,
@@ -25,12 +25,27 @@ struct EchoResult {
     text: String,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProgressEchoParams {
+    text: String,
+    work_done_token: Option<lspf::types::ProgressToken>,
+}
+
 enum ServerEcho {}
 
 impl Request for ServerEcho {
     type Params = EchoParams;
     type Result = EchoResult;
     const METHOD: &'static str = "test/serverEcho";
+}
+
+enum ServerProgressEcho {}
+
+impl Request for ServerProgressEcho {
+    type Params = ProgressEchoParams;
+    type Result = EchoResult;
+    const METHOD: &'static str = "test/serverProgressEcho";
 }
 
 enum ClientEcho {}
@@ -209,7 +224,7 @@ async fn client_initializes_and_completes_one_typed_exchange_each_way() {
     let client = Client::builder(capabilities.clone())
         .client_info(client_info.clone())
         .initialization_options(initialization_options.clone())
-        .request::<ClientEcho, _, _>(|params, cancellation| async move {
+        .request::<ClientEcho, _, _>(|_ctx, params, cancellation| async move {
             assert!(!cancellation.is_cancelled());
             Ok(EchoResult {
                 text: format!("client: {}", params.text),
@@ -450,7 +465,7 @@ async fn client_shutdown_resolves_pending_work_in_both_directions() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
     let mut client = ConnectedClient::start(
         Client::builder(ClientCapabilities::default()).request::<ClientEcho, _, _>(
-            move |_params, cancellation| {
+            move |_ctx, _params, cancellation| {
                 let started_tx = started_tx.clone();
                 async move {
                     started_tx.send(cancellation.clone()).unwrap();
@@ -716,7 +731,7 @@ async fn client_uses_shared_admission_and_cancellation_for_reverse_requests() {
             max_inbound_requests: 1,
             ..ResourcePolicy::default()
         })
-        .request::<ClientEcho, _, _>(move |_params, cancellation| {
+        .request::<ClientEcho, _, _>(move |_ctx, _params, cancellation| {
             let started_tx = started_tx.clone();
             async move {
                 started_tx.send(cancellation.clone()).unwrap();
@@ -778,6 +793,287 @@ async fn client_uses_shared_admission_and_cancellation_for_reverse_requests() {
     tokio::time::timeout(Duration::from_secs(2), cancellation.cancelled())
         .await
         .expect("handler observes cancellation");
+
+    drop(incoming_tx);
+    assert_eq!(serving.await.unwrap().unwrap(), Outcome::TransportClosed);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn client_context_supports_nested_typed_calls_progress_and_dynamic_registration() {
+    let (incoming_tx, incoming_rx) = mpsc::unbounded_channel();
+    let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel();
+    let (progress_tx, mut progress_rx) = mpsc::unbounded_channel();
+    let (create_tx, mut create_rx) = mpsc::unbounded_channel();
+    let client = Client::builder(ClientCapabilities::default())
+        .notification::<Progress, _, _>(move |ctx, params| {
+            let progress_tx = progress_tx.clone();
+            async move {
+                let result = if params.token == lspf::types::NumberOrString::Number(9)
+                    && matches!(
+                        &params.value,
+                        lspf::types::ProgressParamsValue::WorkDone(
+                            lspf::types::WorkDoneProgress::Begin(_)
+                        )
+                    ) {
+                    Some(
+                        ctx.server()
+                            .request::<ServerEcho>(EchoParams {
+                                text: "progress".into(),
+                            })
+                            .await
+                            .expect("progress handler can await a nested typed request"),
+                    )
+                } else {
+                    None
+                };
+                progress_tx
+                    .send((ctx.request_id().cloned(), params, result))
+                    .unwrap();
+            }
+        })
+        .request::<WorkDoneProgressCreate, _, _>(move |_ctx, params, cancellation| {
+            let create_tx = create_tx.clone();
+            async move {
+                assert!(!cancellation.is_cancelled());
+                create_tx.send(params.token).unwrap();
+                Ok(())
+            }
+        })
+        .request::<RegisterCapability, _, _>(|ctx, _params, cancellation| async move {
+            assert!(!cancellation.is_cancelled());
+            assert_eq!(ctx.request_id(), Some(&RequestId::Number(70)));
+            let server = ctx.server();
+            server
+                .notify::<ClientEvent>(json!({ "fromHandler": true }))
+                .expect("reverse handler sends a typed notification");
+
+            let first = server.request::<ServerEcho>(EchoParams {
+                text: "first".into(),
+            });
+            let second = server.request::<ServerEcho>(EchoParams {
+                text: "second".into(),
+            });
+            let (first, second) = tokio::join!(first, second);
+            assert_eq!(
+                first.expect("first nested request completes").text,
+                "first response"
+            );
+            assert_eq!(
+                second.expect("second nested request completes").text,
+                "second response"
+            );
+            Ok(())
+        })
+        .build(ChannelTransport {
+            incoming: incoming_rx,
+            outgoing: outgoing_tx,
+        })
+        .expect("client builds");
+    let connection = initialize_client(client, &incoming_tx, &mut outgoing_rx, |_| {}).await;
+    let server = connection.server();
+    let serving = tokio::spawn(connection.serve());
+    let _initialized = recv(&mut outgoing_rx).await;
+
+    incoming_tx
+        .send(RawMessage::Request {
+            id: RequestId::Number(60),
+            method: Cow::Borrowed(WorkDoneProgressCreate::METHOD),
+            params: Bytes::from_static(br#"{"token":9}"#),
+        })
+        .unwrap();
+    assert!(matches!(
+        recv(&mut outgoing_rx).await,
+        RawMessage::Response {
+            id: RequestId::Number(60),
+            result: Ok(_),
+        }
+    ));
+    assert_eq!(
+        create_rx.recv().await.unwrap(),
+        lspf::types::NumberOrString::Number(9)
+    );
+
+    incoming_tx
+        .send(RawMessage::Request {
+            id: RequestId::Number(61),
+            method: Cow::Borrowed(WorkDoneProgressCreate::METHOD),
+            params: Bytes::from_static(br#"{"token":9}"#),
+        })
+        .unwrap();
+    match recv(&mut outgoing_rx).await {
+        RawMessage::Response {
+            id: RequestId::Number(61),
+            result: Err(error),
+        } => assert_eq!(error.code, -32602),
+        other => panic!("expected duplicate progress-token rejection, got {other:?}"),
+    }
+    assert!(create_rx.try_recv().is_err());
+
+    incoming_tx
+        .send(RawMessage::Notification {
+            method: Cow::Borrowed(Progress::METHOD),
+            params: Bytes::from_static(
+                br#"{"token":9,"value":{"kind":"begin","title":"Indexing"}}"#,
+            ),
+        })
+        .unwrap();
+    incoming_tx
+        .send(RawMessage::Notification {
+            method: Cow::Borrowed(Progress::METHOD),
+            params: Bytes::from_static(br#"{"token":9,"value":{"kind":"end","message":"done"}}"#),
+        })
+        .unwrap();
+    let (progress_request_id, progress_request_params) = match recv(&mut outgoing_rx).await {
+        RawMessage::Request { id, params, .. } => {
+            (id, serde_json::from_slice::<EchoParams>(&params).unwrap())
+        }
+        other => panic!("expected progress handler's nested request, got {other:?}"),
+    };
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), progress_rx.recv())
+            .await
+            .is_err(),
+        "progress end waits for the begin handler on the same token"
+    );
+    incoming_tx
+        .send(response(
+            progress_request_id,
+            EchoResult {
+                text: format!("{} response", progress_request_params.text),
+            },
+        ))
+        .unwrap();
+    let (request_id, progress, nested_result) =
+        tokio::time::timeout(Duration::from_secs(2), progress_rx.recv())
+            .await
+            .expect("progress handler completes within watchdog")
+            .expect("progress handler runs exactly once");
+    assert!(request_id.is_none());
+    assert_eq!(progress.token, lspf::types::NumberOrString::Number(9));
+    assert_eq!(nested_result.unwrap().text, "progress response");
+    let (_, _, nested_result) = tokio::time::timeout(Duration::from_secs(2), progress_rx.recv())
+        .await
+        .expect("progress end completes within watchdog")
+        .expect("progress end runs exactly once");
+    assert!(nested_result.is_none());
+
+    incoming_tx
+        .send(RawMessage::Notification {
+            method: Cow::Borrowed(Progress::METHOD),
+            params: Bytes::from_static(
+                br#"{"token":9,"value":{"kind":"report","message":"too late"}}"#,
+            ),
+        })
+        .unwrap();
+
+    incoming_tx
+        .send(RawMessage::Request {
+            id: RequestId::Number(70),
+            method: Cow::Borrowed(RegisterCapability::METHOD),
+            params: Bytes::from_static(br#"{"registrations":[]}"#),
+        })
+        .unwrap();
+    assert!(matches!(
+        recv(&mut outgoing_rx).await,
+        RawMessage::Notification {
+            method: Cow::Borrowed("test/clientEvent"),
+            ..
+        }
+    ));
+
+    let first_message = recv(&mut outgoing_rx).await;
+    let second_message = recv(&mut outgoing_rx).await;
+    let request_parts = |message: RawMessage| match message {
+        RawMessage::Request { id, params, .. } => {
+            (id, serde_json::from_slice::<EchoParams>(&params).unwrap())
+        }
+        other => panic!("expected nested request, got {other:?}"),
+    };
+    let (first_id, first_params) = request_parts(first_message);
+    let (second_id, second_params) = request_parts(second_message);
+    assert_ne!(first_id, second_id);
+    incoming_tx
+        .send(response(
+            second_id,
+            EchoResult {
+                text: format!("{} response", second_params.text),
+            },
+        ))
+        .unwrap();
+    incoming_tx
+        .send(response(
+            first_id,
+            EchoResult {
+                text: format!("{} response", first_params.text),
+            },
+        ))
+        .unwrap();
+    match recv(&mut outgoing_rx).await {
+        RawMessage::Response {
+            id: RequestId::Number(70),
+            result: Ok(result),
+        } => assert_eq!(
+            serde_json::from_slice::<Value>(&result).unwrap(),
+            Value::Null
+        ),
+        other => panic!("expected one dynamic-registration response, got {other:?}"),
+    }
+    tokio::task::yield_now().await;
+    assert!(
+        progress_rx.try_recv().is_err(),
+        "an ended progress token ignores late notifications"
+    );
+
+    let requesting_with_progress = tokio::spawn({
+        let server = server.clone();
+        async move {
+            server
+                .request::<ServerProgressEcho>(ProgressEchoParams {
+                    text: "client initiated".into(),
+                    work_done_token: Some(lspf::types::NumberOrString::Number(10)),
+                })
+                .await
+        }
+    });
+    let progress_request_id = match recv(&mut outgoing_rx).await {
+        RawMessage::Request { id, method, .. } if method.as_ref() == ServerProgressEcho::METHOD => {
+            id
+        }
+        other => panic!("expected client-initiated progress request, got {other:?}"),
+    };
+    for params in [
+        br#"{"token":10,"value":{"kind":"begin","title":"Client work"}}"#.as_slice(),
+        br#"{"token":10,"value":{"kind":"end","message":"done"}}"#.as_slice(),
+    ] {
+        incoming_tx
+            .send(RawMessage::Notification {
+                method: Cow::Borrowed(Progress::METHOD),
+                params: Bytes::copy_from_slice(params),
+            })
+            .unwrap();
+    }
+    let (_, begin, _) = progress_rx.recv().await.unwrap();
+    let (_, end, _) = progress_rx.recv().await.unwrap();
+    assert!(matches!(
+        begin.value,
+        lspf::types::ProgressParamsValue::WorkDone(lspf::types::WorkDoneProgress::Begin(_))
+    ));
+    assert!(matches!(
+        end.value,
+        lspf::types::ProgressParamsValue::WorkDone(lspf::types::WorkDoneProgress::End(_))
+    ));
+    incoming_tx
+        .send(response(
+            progress_request_id,
+            EchoResult {
+                text: "client initiated response".into(),
+            },
+        ))
+        .unwrap();
+    assert_eq!(
+        requesting_with_progress.await.unwrap().unwrap().text,
+        "client initiated response"
+    );
 
     drop(incoming_tx);
     assert_eq!(serving.await.unwrap().unwrap(), Outcome::TransportClosed);

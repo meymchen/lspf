@@ -1024,17 +1024,24 @@ impl ClientHandle {
     where
         R: Request,
     {
+        let params = serde_json::to_vec(&params).map_err(ClientError::Serialize)?;
+        self.request_encoded::<R>(Bytes::from(params)).await
+    }
+
+    /// Enqueue an already encoded typed request. The Client endpoint uses
+    /// this seam after inspecting the same bytes for a top-level work-done
+    /// progress token, avoiding two serialization passes.
+    pub(crate) async fn request_encoded<R>(&self, params: Bytes) -> Result<R::Result, ClientError>
+    where
+        R: Request,
+    {
         // 1. Reject early if not open.
         {
             let mut phase = self.state.phase.lock().unwrap();
             self.ensure_open(&mut phase)?;
         }
 
-        // 2. Serialize params before touching the registry (no cleanup needed
-        //    on encode failure before insert).
-        let params_bytes = serde_json::to_vec(&params).map_err(ClientError::Serialize)?;
-
-        // 3. Allocate a never-reused ID and insert the pending entry. If the
+        // 2. Allocate a never-reused ID and insert the pending entry. If the
         //    registry was already closed by `close_all()` (e.g. because a
         //    prior in-flight handler is still draining while a new one
         //    starts), fail fast instead of enqueuing a request that would
@@ -1053,13 +1060,13 @@ impl ClientHandle {
         // peer about the cancellation once the request reached the wire.
         let mut guard = PendingGuard::new(self.clone(), id);
 
-        // 4. Enqueue. On any failure remove the pending entry and report the
+        // 3. Enqueue. On any failure remove the pending entry and report the
         //    error; the request never reached the wire, so no cancellation
         //    notification is sent.
         let message = RawMessage::Request {
             id: RequestId::Number(id as i32),
             method: Cow::Borrowed(R::METHOD),
-            params: Bytes::from(params_bytes),
+            params,
         };
 
         let enqueued = {
@@ -1099,7 +1106,7 @@ impl ClientHandle {
         }
         guard.enqueued = true;
 
-        // 5. Await the response, bounded by the connection policy unless the
+        // 4. Await the response, bounded by the connection policy unless the
         //    deadline was explicitly disabled. Expiry atomically removes the
         //    registry entry before reporting Timeout; if response completion
         //    won that race, await and return that already-owned outcome.

@@ -97,7 +97,24 @@ pub(crate) enum SessionInput {
 
 impl CompletionGate {
     pub(crate) fn complete(&self, reservation: Reservation, result: Result<Bytes, LspError>) {
-        self.inbound.complete(&self.outbound, reservation, result);
+        self.inbound
+            .try_complete_with(&self.outbound, reservation, result, || {});
+    }
+
+    /// Claim one request completion, run endpoint-specific registry mutation,
+    /// then enqueue the response. The callback runs only for the winning
+    /// completion path and before the peer can observe its response.
+    pub(crate) fn try_complete_with<F>(
+        &self,
+        reservation: Reservation,
+        result: Result<Bytes, LspError>,
+        on_claim: F,
+    ) -> bool
+    where
+        F: FnOnce(),
+    {
+        self.inbound
+            .try_complete_with(&self.outbound, reservation, result, on_claim)
     }
 }
 
@@ -271,6 +288,15 @@ impl<R: Runtime, P: SessionPeer, C> ProtocolSession<R, P, C> {
         self.tasks.spawn(future, permit);
     }
 
+    /// Spawn connection-owned notification work without charging the inbound
+    /// request budget. Close still aborts and joins the task.
+    pub(crate) fn spawn_notification<F>(&mut self, future: F)
+    where
+        F: Future<Output = ()> + TaskSend + 'static,
+    {
+        self.tasks.spawn_notification(future);
+    }
+
     pub(crate) async fn reap_finished(&mut self) {
         self.tasks.reap_finished().await;
     }
@@ -412,12 +438,12 @@ impl<C> CloseSignal<C> {
 
 pub(crate) struct TaskGroup<R> {
     pub(crate) runtime: R,
-    pub(crate) handles: Vec<InboundTask>,
+    pub(crate) handles: Vec<ConnectionTask>,
 }
 
-pub(crate) struct InboundTask {
+pub(crate) struct ConnectionTask {
     pub(crate) handle: TaskHandle,
-    _permit: Arc<OwnedPermit>,
+    _permit: Option<Arc<OwnedPermit>>,
 }
 
 #[derive(Clone, Copy, Default, Eq, PartialEq)]
@@ -443,9 +469,19 @@ impl<R: Runtime> TaskGroup<R> {
     where
         F: Future<Output = ()> + TaskSend + 'static,
     {
-        self.handles.push(InboundTask {
+        self.handles.push(ConnectionTask {
             handle: self.runtime.spawn(future),
-            _permit: permit,
+            _permit: Some(permit),
+        });
+    }
+
+    pub(crate) fn spawn_notification<F>(&mut self, future: F)
+    where
+        F: Future<Output = ()> + TaskSend + 'static,
+    {
+        self.handles.push(ConnectionTask {
+            handle: self.runtime.spawn(future),
+            _permit: None,
         });
     }
 
@@ -704,6 +740,19 @@ impl InboundRegistry {
         reservation: Reservation,
         result: std::result::Result<Bytes, LspError>,
     ) {
+        self.try_complete_with(out_tx, reservation, result, || {});
+    }
+
+    pub(crate) fn try_complete_with<F>(
+        &self,
+        out_tx: &OutboundQueue,
+        reservation: Reservation,
+        result: std::result::Result<Bytes, LspError>,
+        on_claim: F,
+    ) -> bool
+    where
+        F: FnOnce(),
+    {
         let current = {
             let mut inner = self.inner.lock().unwrap();
             match inner.entries.get(&reservation.id) {
@@ -715,6 +764,7 @@ impl InboundRegistry {
             }
         };
         if let Some(current) = current {
+            let callback = std::panic::catch_unwind(std::panic::AssertUnwindSafe(on_claim));
             self.trace.resource_budget(
                 Resource::InboundRequests,
                 ResourceAction::Release,
@@ -731,6 +781,12 @@ impl InboundRegistry {
                 completion,
             );
             enqueue_encoded(out_tx, reservation.id, result);
+            if let Err(payload) = callback {
+                std::panic::resume_unwind(payload);
+            }
+            true
+        } else {
+            false
         }
     }
 
