@@ -235,6 +235,9 @@ The full design lives next to the code:
 - [`docs/guides/transports.md`](./docs/guides/transports.md) — Transport
   selection and target/feature matrices, buildable native and WASM examples,
   and the custom Transport contract.
+- [`docs/guides/testing.md`](./docs/guides/testing.md) — in-memory peers,
+  ordered wire capture, deterministic deadlines, and reusable Server and
+  Client lifecycle journeys for external tests.
 - [`SECURITY.md`](./SECURITY.md) — supported Rust versions, hosts, targets,
   Cargo feature combinations, release compatibility, deprecation, and private
   vulnerability reporting.

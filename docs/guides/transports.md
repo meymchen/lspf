@@ -43,6 +43,7 @@ adapter; keep the default features when using stdio.
 | `wasm` | No | `wasm-bindgen-futures` | WASM execution for `Server::serve`; no I/O adapter by itself |
 | `worker-channel` | No | `wasm`, `js-sys`, `wasm-bindgen`, `web-sys` | `worker_channel` and its `MessagePort` Transport types on `wasm32` |
 | `proposed` | No | Nothing else | Draft LSP types and client helpers; independent of every Transport |
+| `testing` | No | `runtime-tokio`, `tokio/test-util` | Native in-memory Transport, scripted peer, wire capture, virtual clock, and lifecycle journeys |
 
 Application code also lists dependencies it names directly. For example, a
 `#[tokio::main]` binary needs its own `tokio` dependency even though lspf's
@@ -56,6 +57,7 @@ selected native Transport uses Tokio internally.
 | Native `tcp` | Supported | Serve with `lspf::tcp(server, address)` |
 | Native `websocket` | Supported | Serve with `lspf::websocket(server, address)` |
 | Native `runtime-tokio` without an adapter | Supported for custom Transports | Call `server.serve(custom_transport)` |
+| Native `testing`, alone or with another native row | Supported for external protocol tests | Use `MemoryTransport`, a lifecycle journey, or `VirtualClock` from `lspf::testing` |
 | Native with no runtime feature | Supported for protocol-only compilation | Registration and protocol types are available, but serving is not |
 | Native `worker-channel` | Intentionally invalid | The feature emits a compile error because `MessagePort` belongs in a WASM Worker |
 | `wasm32-unknown-unknown` `worker-channel` | Supported | It implies `wasm`; serve with `lspf::worker_channel(server, port)` |
@@ -63,6 +65,7 @@ selected native Transport uses Tokio internally.
 | `wasm32-unknown-unknown` without `wasm` | Intentionally invalid | Every WASM build requires its target runtime glue |
 | `wasm32-unknown-unknown` default or `stdio` | Unsupported | stdio is a native adapter; disable default features |
 | `wasm32-unknown-unknown` with `tcp` or `websocket` | Intentionally invalid | These adapters require native Tokio sockets and emit a compile error |
+| `wasm32-unknown-unknown` with `testing` | Intentionally invalid | The deterministic testing surface uses Tokio's native virtual clock |
 | Any supported row plus `proposed` | Supported | `proposed` adds protocol API and selects no Transport or runtime |
 
 Do not combine native adapters with `worker-channel` in one build. A project

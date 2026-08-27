@@ -257,6 +257,19 @@ concern.
 _Avoid_: Connection (overloaded with TCP-specific meaning), socket
 (byte-stream connotation), channel.
 
+**Testing surface**:
+The native, opt-in `lspf::testing` module that lets external consumers exercise
+real Server and Client endpoints at the public Transport seam. A
+`MemoryTransport` pairs with one `ScriptedPeer`; every message crossing that
+seam enters one ordered `WireCapture`. `ServerJourney` and `ClientJourney`
+perform the standard initialize, initialized, shutdown, and exit exchange,
+while leaving the peer available for scenario-specific traffic. `VirtualClock`
+controls the same Tokio clock used by connection deadlines, so timeout journeys
+advance deterministically without wall-clock sleeps. Enabled by the `testing`
+Cargo feature and intentionally native-only.
+_Avoid_: Test util (internal and vague), mock server/client (the real endpoint
+engines run), fake Transport (it is a concrete in-memory Transport adapter).
+
 **Outcome**:
 How one connection ended, returned by `Server::serve` over a [[Transport]]
 (ADR 0018). Reader EOF, a writer failure, `exit`, and a fatal initialize

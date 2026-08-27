@@ -57,8 +57,8 @@ target to this matrix.
 
 Default features select `stdio`. The rows below cover every supported feature
 selection. Features in the same supported native row may be combined;
-`proposed` may be added to any supported row. No other cross-target
-combination is supported.
+`proposed` may be added to any supported row, and `testing` may be added to any
+native row. No other cross-target combination is supported.
 
 | Target family | Feature selection | Status | Enforcement gate |
 | --- | --- | --- | --- |
@@ -67,6 +67,7 @@ combination is supported.
 | Native | `websocket` | Supported WebSocket Transport | CI `msrv`, `native-matrix`, and `test` |
 | Native | any combination of `stdio`, `tcp`, and `websocket` | Supported | CI `msrv` row `all-native-features` and CI `test` |
 | Native | `runtime-tokio` without a first-party adapter | Supported for a custom Transport | CI `feature-contract` |
+| Native | `testing` alone or added to another native row | Supported in-memory test Transport, protocol journeys, and virtual clock; implies `runtime-tokio` | CI `feature-contract`, `native-matrix`, and `test` |
 | Native | no runtime or Transport feature | Supported for protocol-only compilation, not serving | CI `feature-contract` |
 | Native | `worker-channel` | Intentionally invalid | CI `feature-contract` checks the compile-time diagnostic |
 | `wasm32-unknown-unknown` | `wasm` without a first-party adapter | Supported for a custom Transport | CI `wasm` |
@@ -74,6 +75,7 @@ combination is supported.
 | `wasm32-unknown-unknown` | no `wasm` | Intentionally invalid | CI `feature-contract` checks the compile-time diagnostic |
 | `wasm32-unknown-unknown` | default features or `stdio` | Unsupported | Not applicable; this selection is outside the support contract |
 | `wasm32-unknown-unknown` | `tcp` or `websocket` | Intentionally invalid | CI `feature-contract` checks the compile-time diagnostics |
+| `wasm32-unknown-unknown` | `testing` | Intentionally invalid | CI `feature-contract` checks the compile-time diagnostic |
 | Any supported row | add `proposed` | Supported as an unstable API surface; it never selects a runtime or Transport | CI `msrv` row `proposed`, CI `native-matrix`, and CI `test` |
 
 The [Transport guide](./docs/guides/transports.md) gives build commands and
@@ -113,7 +115,7 @@ CI `public API compatibility` compares the crate with the latest version on
 crates.io, which is the maintained baseline. The exhaustive `feature-contract`
 and public-docs gates own combination correctness. Compatibility checks the
 core and additive maximal API surfaces for native and WASM targets: native
-without features, native with `stdio,tcp,websocket,proposed`, WASM with
+without features, native with `stdio,tcp,websocket,proposed,testing`, WASM with
 `wasm,proposed`, and WASM with `worker-channel,proposed`. The job uploads
 `public-api-compatibility-report`, a JSON artifact containing the baseline,
 current version, command output, result, and exit code for every surface.
