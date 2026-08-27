@@ -16,7 +16,8 @@
       "wasm": { "contents": "read" },
       "test-coverage": { "contents": "read" },
       "gate-a-evidence": { "contents": "read" },
-      "gate-b-evidence": { "contents": "read" }
+      "gate-b-evidence": { "contents": "read" },
+      "gate-c-evidence": { "contents": "read" }
     },
     ".github/workflows/packaged-crate.yml": {
       "packaged-crate": { "contents": "read" }

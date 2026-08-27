@@ -276,6 +276,30 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+  gate-c-evidence:
+    name: Gate C endpoint evidence
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: ./.github/actions/setup-rust
+      - name: Run revision-locked Gate C evidence
+        run: >-
+          bash ci/run-gate-c-evidence.sh
+          "$GITHUB_SHA"
+          "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          "$RUNNER_TEMP/gate-c-evidence"
+      - name: Retain Gate C endpoint evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: gate-c-endpoint-evidence
+          path: ${{ runner.temp }}/gate-c-evidence
+          if-no-files-found: error
+          retention-days: 90
+
   gate-a-evidence:
     name: Gate A release evidence
     if: ${{ always() && github.event_name == 'push' }}
