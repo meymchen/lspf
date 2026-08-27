@@ -1,7 +1,5 @@
 # Adopting the Client endpoint
 
-[English](./client-adoption.md) | [Simplified Chinese](./client-adoption.zh-CN.md)
-
 The [`Client`](lspf::Client) endpoint lets an application connect to a language
 server. It works over a caller-provided [`Transport`](lspf::Transport), or it
 can launch and supervise a native stdio child. In both cases, lspf owns LSP

@@ -1,7 +1,5 @@
 # Outgoing client helpers
 
-[English](./outgoing-client.md) | [简体中文](./outgoing-client.zh-CN.md)
-
 This guide covers the server-to-client half of a connection: the typed
 [`ClientHandle`] a handler reaches through [`ServerContext`], the named helpers
 it offers for every standard outgoing notification and request, dynamic

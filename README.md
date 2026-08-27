@@ -4,8 +4,6 @@
 [![docs.rs](https://docs.rs/lspf/badge.svg)](https://docs.rs/lspf)
 [![License: MIT OR Apache-2.0](https://img.shields.io/crates/l/lspf)](#license)
 
-[English](./README.md) | [简体中文](./README.zh-CN.md)
-
 A Rust framework for building extensible LSP (Language Server Protocol) language servers.
 
 `lspf` is **async-only** and designed so a developer can stand up a working
@@ -482,10 +480,6 @@ Before opening a PR, please skim:
 - The relevant `docs/adr/*.md` — if the change revisits a decision,
   either justify the deviation in the PR description or write a new
   ADR.
-
-Keep handwritten user-facing documentation bilingual. Pair each English
-README or guide with a `.zh-CN.md` version; generated release documents are
-excluded.
 
 Lint all Markdown with the repository's shared configuration (Node.js 24):
 

@@ -1,7 +1,5 @@
 # lspf VS Code test client
 
-[English](./README.md) | [简体中文](./README.zh-CN.md)
-
 Minimal VSCode extension that spawns `target/debug/lspf-hello` as a
 language server. Used for manual smoke testing during development —
 the CI side of the same path is the `lspf-hello` end-to-end suite,

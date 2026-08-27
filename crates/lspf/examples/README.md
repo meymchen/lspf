@@ -1,7 +1,5 @@
 # Feature example servers
 
-[English](./README.md) | [简体中文](./README.zh-CN.md)
-
 Each file is a runnable stdio language server focused on a small set of LSP
 methods. The parsers and languages are intentionally small so that the protocol
 interaction stays visible.
