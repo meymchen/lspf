@@ -46,6 +46,9 @@
     },
     ".github/workflows/security.yml": {
       "supply-chain": { "contents": "read" }
+    },
+    ".github/workflows/sonarcloud.yml": {
+      "Analysis": { "pull-requests": "read" }
     }
   }
 }
