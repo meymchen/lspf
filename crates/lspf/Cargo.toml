@@ -313,6 +313,12 @@ harness = false
 test = false
 required-features = ["testing"]
 
+[[bench]]
+name = "soak_journeys"
+harness = false
+test = false
+required-features = ["testing"]
+
 # Dev-dependencies drive the native test suite and the native half of the
 # shared example; a wasm32 build (including `--example`) resolves none of
 # them, so tokio's native-only features never reach the wasm32 target.

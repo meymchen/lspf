@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Run bounded-memory request, cancellation, edit, progress, slow-peer,
+  reconnect, and shutdown soak journeys with retained time-series evidence.
 - Publish a Client adoption guide with compiling custom-Transport and
   supervised-stdio-child walkthroughs.
 - Launch, drive, and deterministically reclaim stdio language-server children

@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "workloadVersion": 1,
+  "durationSeconds": 60,
+  "sampleIntervalMilliseconds": 1000,
+  "scenarios": [
+    "request",
+    "cancellation",
+    "edit",
+    "progress",
+    "slow-peer",
+    "reconnect",
+    "shutdown"
+  ],
+  "traffic": {
+    "requestConcurrency": 32,
+    "cancellationConcurrency": 16,
+    "editDocumentBytes": 1048576,
+    "progressConcurrency": 8,
+    "slowPeerAttemptsPerCycle": 128,
+    "reconnectsPerCycle": 8,
+    "shutdownsPerCycle": 8
+  },
+  "limits": {
+    "inboundRequests": 64,
+    "outboundMessages": 64,
+    "outboundBytes": 4194304,
+    "documents": 4,
+    "documentBytes": 4194304,
+    "handlerTimeoutMilliseconds": 120000,
+    "outboundRequestTimeoutMilliseconds": 30000
+  }
+}
