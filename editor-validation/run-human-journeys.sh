@@ -192,17 +192,24 @@ REVISION=$(git -C "$REPO_ROOT" rev-parse HEAD)
 INSTALL_ROOT="$REPO_ROOT/target/editor-validation-install"
 SERVER_PATH="$INSTALL_ROOT/bin/lspf-markdown"
 [[ "${OS:-}" == "Windows_NT" ]] && SERVER_PATH="${SERVER_PATH}.exe"
+ACTIONS=(OPEN EDIT DIAGNOSTICS HOVER DEFINITION RESTART SHUTDOWN)
+
+ask_required() {
+  local key="$1" prompt="$2"
+  while true; do
+    ask "$key" "$prompt"
+    [[ -n "${!key}" ]] && return
+    warn "A recorded journey cannot leave this observation blank."
+  done
+}
 
 capture_journey() {
-  local prefix="$1"
-  ask "${prefix}_OPEN" "Open observation:"
-  ask "${prefix}_EDIT" "Edit observation:"
-  ask "${prefix}_DIAGNOSTICS" "Diagnostics observation:"
-  ask "${prefix}_HOVER" "Hover observation:"
-  ask "${prefix}_DEFINITION" "Definition observation:"
-  ask "${prefix}_RESTART" "Restart observation:"
-  ask "${prefix}_SHUTDOWN" "Shutdown observation:"
-  ask "${prefix}_DURATION" "Journey duration:"
+  local prefix="$1" action label
+  for action in "${ACTIONS[@]}"; do
+    label=$(printf '%s' "$action" | tr '[:upper:]' '[:lower:]')
+    ask_required "${prefix}_${action}" "${label^} observation:"
+  done
+  ask_required "${prefix}_DURATION" "Journey duration:"
 }
 
 banner "lspf three-editor validation"
@@ -221,14 +228,14 @@ say "Close existing VS Code windows, then start Code from a shell with:"
 step "LSPF_MARKDOWN_SERVER='$SERVER_PATH' code '$REPO_ROOT'"
 step "Choose 'Debug LSP client (Extension Host)' and open editor-validation/fixture/readme.md."
 step "Perform all seven VS Code actions in editor-validation/journeys-v1.json."
-ask VSCODE_VERSION "VS Code version:"
+ask_required VSCODE_VERSION "VS Code version:"
 capture_journey VSCODE
 
 stage "Neovim journey"
 say "Start Neovim 0.11 or later with the checked-in clean configuration:"
 step "LSPF_MARKDOWN_SERVER='$SERVER_PATH' nvim --clean -u '$REPO_ROOT/editor-validation/neovim/init.lua' '$REPO_ROOT/editor-validation/fixture/readme.md'"
 step "Perform all seven Neovim actions in editor-validation/journeys-v1.json."
-ask NEOVIM_VERSION "Neovim version:"
+ask_required NEOVIM_VERSION "Neovim version:"
 capture_journey NEOVIM
 
 stage "Zed journey"
@@ -236,12 +243,12 @@ say "Start Zed from the prepared shell, install the dev extension, and open the 
 step "PATH='$INSTALL_ROOT/bin:$PATH' zed '$REPO_ROOT/editor-validation/fixture'"
 step "Extensions → Install Dev Extension → select editor-validation/zed-extension."
 step "Perform all seven Zed actions in editor-validation/journeys-v1.json."
-ask ZED_VERSION "Zed version:"
+ask_required ZED_VERSION "Zed version:"
 capture_journey ZED
 
 stage "Record observations and gaps"
 say "Only record what you observed in the editor. Automated assertions stay in journeys-v1.json."
-ask OPERATING_SYSTEM "Operating system:"
+ask_required OPERATING_SYSTEM "Operating system:"
 ask FRAMEWORK_GAPS "Framework gap issue URLs, comma-separated (leave blank if none):"
 mkdir -p "$(dirname "$OUTPUT_PATH")"
 {
@@ -259,7 +266,7 @@ mkdir -p "$(dirname "$OUTPUT_PATH")"
     version_var="${editor}_VERSION"; duration_var="${editor}_DURATION"
     printf '## %s %s\n\n' "$name" "${!version_var}"
     printf -- '- Duration: %s\n' "${!duration_var}"
-    for action in OPEN EDIT DIAGNOSTICS HOVER DEFINITION RESTART SHUTDOWN; do
+    for action in "${ACTIONS[@]}"; do
       value_var="${editor}_${action}"
       label=$(printf '%s' "$action" | tr '[:upper:]' '[:lower:]')
       printf -- '- %s: %s\n' "$label" "${!value_var}"
