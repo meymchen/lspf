@@ -1,15 +1,17 @@
 # Bounded-memory soak journeys
 
-The soak job drives real `Server` endpoints through the public in-memory
-Transport. It runs on pushes to `main` and keeps its artifacts for 90 days.
-The job is meant to catch growth and cleanup failures that short correctness
-tests can miss.
+The soak jobs drive real `Server` endpoints through the public in-memory
+Transport. They run on pushes to `main` and keep their artifacts for 90 days.
+The jobs are meant to catch growth and cleanup failures that short correctness
+tests can miss. CI assigns each journey to its own matrix job so every hosted
+runner finishes well inside its execution lifetime; the versioned workload
+still gives every journey its full duration.
 
 ## Workload
 
 [`soak/workloads-v1.json`](../soak/workloads-v1.json) is the versioned workload
 definition. Each of these journeys runs for 60 seconds, for a total measured
-duration of about seven minutes:
+duration of about seven minutes across the matrix:
 
 - 32 concurrent requests whose handlers stay in flight for the full 60-second
   journey before responding normally;
@@ -43,7 +45,7 @@ Every connection uses these limits:
 [`soak/thresholds-v1.json`](../soak/thresholds-v1.json) allows at most 512 MiB
 peak RSS and 32 MiB unexplained growth between the first and last sample of
 any journey. Each journey must produce at least 30 samples. A 10-minute
-watchdog stops the full command if it hangs.
+watchdog stops each command if it hangs.
 
 The run also fails when a journey crashes, returns an unexpected terminal
 outcome, misses a required scenario, or finishes with a nonzero resource
@@ -55,7 +57,8 @@ to zero.
 
 ## Artifacts and local runs
 
-The `bounded-memory-soak-journeys` artifact contains:
+Each matrix entry uploads a `bounded-memory-soak-<scenario>` artifact that
+contains:
 
 - the workload and threshold files used by the run;
 - `time-series.jsonl` for incremental evidence, including partial samples if

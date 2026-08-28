@@ -34,7 +34,7 @@ pub async fn run() -> SoakResult<()> {
     let run_started = Instant::now();
     let mut measurements = Vec::with_capacity(workload.scenarios.len());
 
-    for scenario in Scenario::ALL {
+    for scenario in workload.scenarios.iter().copied() {
         match journeys::run(scenario, &workload, &counts, &mut recorder).await {
             Ok(measurement) => measurements.push(measurement),
             Err(error) => {

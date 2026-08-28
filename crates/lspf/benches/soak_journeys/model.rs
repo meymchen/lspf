@@ -77,7 +77,15 @@ impl WorkloadManifest {
         if self.schema_version != 1
             || self.duration_seconds == 0
             || self.sample_interval_milliseconds == 0
-            || self.scenarios != Scenario::ALL
+            || self.scenarios.is_empty()
+            || !self.scenarios.windows(2).all(|pair| {
+                Scenario::ALL
+                    .iter()
+                    .position(|scenario| *scenario == pair[0])
+                    < Scenario::ALL
+                        .iter()
+                        .position(|scenario| *scenario == pair[1])
+            })
             || traffic.request_concurrency == 0
             || traffic.cancellation_concurrency == 0
             || traffic.edit_document_bytes == 0

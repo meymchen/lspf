@@ -81,3 +81,31 @@ then
 fi
 
 echo 'Soak journey workload verified'
+
+single_workload="$test_root/single-workload.json"
+single_output="$test_root/single-results.json"
+single_time_series="$test_root/single-time-series.jsonl"
+jq '.scenarios = ["progress"]' "$workloads" >"$single_workload"
+
+cargo bench -p lspf --bench soak_journeys --features testing -- \
+    --workloads "$single_workload" \
+    --output "$single_output" \
+    --timeseries "$single_time_series" \
+    --revision 0123456789abcdef0123456789abcdef01234567
+
+jq -e '
+  [.scenarios[].name] == ["progress"]
+  and .scenarios[0].result == "success"
+  and all(.scenarios[0].terminalResources[]; . == 0)
+' "$single_output" >/dev/null
+
+if ! jq -s -e '
+  length >= 2
+  and ([.[].scenario] | unique) == ["progress"]
+' "$single_time_series" >/dev/null
+then
+    jq -s '.' "$single_time_series" >&2
+    exit 1
+fi
+
+echo 'Single soak journey workload verified'
