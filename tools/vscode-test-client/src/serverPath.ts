@@ -10,12 +10,19 @@ import * as path from 'node:path';
  * @param repoRoot Absolute path to the lspf repository root.
  * @param platform Platform used to select the executable suffix.
  * @param exampleName Optional Cargo example selected through `LSPF_TEST_EXAMPLE`.
+ * @param selectedServer Installed server command or path selected through
+ * `LSPF_TEST_SERVER` or `LSPF_MARKDOWN_SERVER`.
  */
 export function resolveServerBinary(
     repoRoot: string,
     platform: NodeJS.Platform = process.platform,
     exampleName: string | undefined = process.env.LSPF_TEST_EXAMPLE,
+    selectedServer: string | undefined =
+        process.env.LSPF_TEST_SERVER ?? process.env.LSPF_MARKDOWN_SERVER,
 ): string {
+    if (selectedServer) {
+        return selectedServer;
+    }
     const suffix = platform === 'win32' ? '.exe' : '';
     if (exampleName) {
         if (!/^[a-z0-9][a-z0-9_-]*$/.test(exampleName)) {

@@ -1,0 +1,11 @@
+id = "lspf-markdown"
+name = "lspf Markdown"
+description = "Local validation extension for the lspf Markdown reference server"
+version = "0.1.0"
+schema_version = 1
+authors = ["lspf contributors"]
+repository = "https://github.com/meymchen/lspf"
+
+[language_servers.lspf-markdown]
+name = "lspf Markdown"
+language = "Markdown"

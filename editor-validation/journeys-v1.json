@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "server": {
+    "command": "lspf-markdown",
+    "pathEnvironment": "LSPF_MARKDOWN_SERVER",
+    "installCommand": "cargo install --path crates/lspf-markdown --root <install-root> --locked"
+  },
+  "editors": [
+    {
+      "id": "vscode",
+      "name": "Visual Studio Code",
+      "maintained": true,
+      "configurationFiles": [
+        "tools/vscode-test-client/src/serverPath.ts",
+        "tools/vscode-test-client/src/serverProfile.ts",
+        "tools/vscode-test-client/src/extension.ts"
+      ],
+      "journey": [
+        { "action": "open", "observation": "Open fixture/readme.md in the Extension Development Host." },
+        { "action": "edit", "observation": "Change missing.md to guide.md and save." },
+        { "action": "diagnostics", "observation": "Problems clears the missing-target diagnostic after the edit." },
+        { "action": "hover", "observation": "Hover guide.md and inspect the resolved target heading and URI." },
+        { "action": "definition", "observation": "Go to Definition opens guide.md at its heading." },
+        { "action": "restart", "observation": "Run Developer: Restart Extension Host, then reopen readme.md." },
+        { "action": "shutdown", "observation": "Close the Extension Development Host and verify the server process exits." }
+      ]
+    },
+    {
+      "id": "neovim",
+      "name": "Neovim 0.11+",
+      "maintained": true,
+      "configurationFiles": [
+        "editor-validation/neovim/init.lua"
+      ],
+      "journey": [
+        { "action": "open", "observation": "Open fixture/readme.md with the validation init.lua." },
+        { "action": "edit", "observation": "Change missing.md to guide.md and write the buffer." },
+        { "action": "diagnostics", "observation": "vim.diagnostic.open_float reports, then clears, the target error." },
+        { "action": "hover", "observation": "vim.lsp.buf.hover shows the target heading and URI." },
+        { "action": "definition", "observation": "vim.lsp.buf.definition opens guide.md at its heading." },
+        { "action": "restart", "observation": "LspfMarkdownRestart disables and re-enables the client." },
+        { "action": "shutdown", "observation": "LspfMarkdownStop gracefully stops the client." }
+      ]
+    },
+    {
+      "id": "zed",
+      "name": "Zed",
+      "maintained": true,
+      "configurationFiles": [
+        "editor-validation/zed-extension/extension.toml",
+        "editor-validation/zed-extension/src/lib.rs"
+      ],
+      "journey": [
+        { "action": "open", "observation": "Open fixture/readme.md after installing the dev extension." },
+        { "action": "edit", "observation": "Change missing.md to guide.md and save." },
+        { "action": "diagnostics", "observation": "The diagnostic disappears after the target is repaired." },
+        { "action": "hover", "observation": "Hover guide.md and inspect the resolved target heading and URI." },
+        { "action": "definition", "observation": "Go to Definition opens guide.md at its heading." },
+        { "action": "restart", "observation": "Run language server: restart and reopen readme.md." },
+        { "action": "shutdown", "observation": "Quit the fixture workspace and verify the server process exits." }
+      ]
+    }
+  ],
+  "automatedEvidence": {
+    "kind": "machine",
+    "command": "cargo test -p lspf-markdown --test packaged_editor_journey",
+    "assertions": [
+      "one external stdio process exercises initialize, open, incremental edit, diagnostics, hover, definition, shutdown, and exit",
+      "a second external stdio process repeats initialization and clean shutdown as restart evidence",
+      "all three editor integrations select the same installed lspf-markdown command"
+    ]
+  },
+  "humanUxObservations": {
+    "kind": "human",
+    "status": "pending",
+    "records": [],
+    "instructions": "Run editor-validation/run-human-journeys.sh to record editor version, duration, each journey observation, and any UX-only finding without copying automated assertions into this section."
+  },
+  "frameworkGaps": {
+    "tracked": [],
+    "untracked": []
+  }
+}

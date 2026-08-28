@@ -36,4 +36,44 @@ assert_contract '
     | $checkout != null and $analysis != null and $checkout < $analysis
 ' 'SonarCloud analysis must check out Git history before running the scanner'
 
+assert_contract '
+    .jobs.Analysis.steps as $steps
+    | ([range(0; $steps | length) |
+        select(($steps[.].run // "") |
+            contains("npm --prefix tools/vscode-test-client run test:coverage"))]
+        | first) as $coverage
+    | ([range(0; $steps | length) |
+        select(($steps[.].uses // "") | startswith("SonarSource/sonarcloud-github-action@"))]
+        | first) as $analysis
+    | $coverage != null and $analysis != null and $coverage < $analysis
+' 'SonarCloud analysis must generate TypeScript coverage before running the scanner'
+
+assert_contract '
+    .jobs.Analysis.steps
+    | any((.run // "") |
+        contains("SF:tools/vscode-test-client/"))
+' 'SonarCloud analysis must make LCOV source paths relative to the repository root'
+
+assert_contract '
+    .jobs.Analysis.steps
+    | any((.run // "") |
+        contains("npm --prefix tools/vscode-test-client ci --ignore-scripts"))
+' 'SonarCloud dependency installation must disable package lifecycle scripts'
+
+assert_contract '
+    .jobs.Analysis.steps
+    | map(select((.uses // "") | startswith("SonarSource/sonarcloud-github-action@")))
+    | length == 1
+' 'SonarCloud analysis must run exactly once'
+
+assert_contract '
+    .jobs.Analysis.steps
+    | map(select((.uses // "") | startswith("SonarSource/sonarcloud-github-action@")))
+    | .[0].with.args as $args
+    | ($args | contains("-Dsonar.javascript.lcov.reportPaths=coverage/vscode-test-client/lcov.info"))
+      and ($args | contains("-Dsonar.tests=."))
+      and ($args |
+        contains("-Dsonar.test.inclusions=tools/vscode-test-client/test/**/*.test.ts"))
+' 'SonarCloud analysis must import the generated TypeScript LCOV report'
+
 echo 'SonarCloud workflow contract verified'
