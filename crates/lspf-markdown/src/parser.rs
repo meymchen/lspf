@@ -13,14 +13,58 @@ pub(crate) struct SourceLine<'a> {
     pub(crate) start: usize,
 }
 
+fn blockquote_content(line: &str) -> (&str, usize) {
+    let mut content = line;
+    let mut removed = 0;
+    loop {
+        let spaces = content.bytes().take_while(|byte| *byte == b' ').count();
+        if spaces > 3 || content.as_bytes().get(spaces) != Some(&b'>') {
+            return (content, removed);
+        }
+        let mut prefix = spaces + 1;
+        if matches!(content.as_bytes().get(prefix), Some(b' ' | b'\t')) {
+            prefix += 1;
+        }
+        content = &content[prefix..];
+        removed += prefix;
+    }
+}
+
+fn indentation(content: &str) -> (usize, usize) {
+    let mut bytes = 0;
+    let mut columns = 0;
+    for byte in content.bytes() {
+        match byte {
+            b' ' => columns += 1,
+            b'\t' => columns += 4 - columns % 4,
+            _ => break,
+        }
+        bytes += 1;
+    }
+    (bytes, columns)
+}
+
+fn list_content_indent(trimmed: &str) -> Option<usize> {
+    if matches!(trimmed.as_bytes(), [b'-' | b'+' | b'*', b' ' | b'\t', ..]) {
+        return Some(2);
+    }
+    let digits = trimmed.bytes().take_while(u8::is_ascii_digit).count();
+    (digits > 0
+        && matches!(trimmed.as_bytes().get(digits), Some(b'.' | b')'))
+        && matches!(trimmed.as_bytes().get(digits + 1), Some(b' ' | b'\t')))
+    .then_some(digits + 2)
+}
+
 pub(crate) fn content_lines(text: &str) -> Vec<SourceLine<'_>> {
     let mut lines = Vec::new();
     let mut start = 0;
     let mut fence = None;
+    let mut list_indent = None;
     for line in text.split_inclusive('\n') {
-        let trimmed = line.trim_start();
-        let indentation = line.len() - trimmed.len();
-        let marker = (indentation <= 3)
+        let (content, quote_prefix) = blockquote_content(line);
+        let (indent_bytes, indent_columns) = indentation(content);
+        let trimmed = &content[indent_bytes..];
+        let marker = (indent_columns <= 3)
             .then(|| trimmed.as_bytes().first().copied())
             .flatten()
             .filter(|byte| matches!(byte, b'`' | b'~'))
@@ -41,8 +85,21 @@ pub(crate) fn content_lines(text: &str) -> Vec<SourceLine<'_>> {
             start += line.len();
             continue;
         }
-        if fence.is_none() && indentation < 4 {
-            lines.push(SourceLine { text: line, start });
+        if fence.is_none() {
+            let in_list = list_indent.is_some_and(|list_indent| {
+                indent_columns >= list_indent && indent_columns < list_indent + 4
+            });
+            if indent_columns < 4 || in_list {
+                lines.push(SourceLine {
+                    text: trimmed,
+                    start: start + quote_prefix + indent_bytes,
+                });
+            }
+        }
+        if let Some(indent) = list_content_indent(trimmed) {
+            list_indent = Some(indent);
+        } else if !trimmed.trim().is_empty() && indent_columns == 0 {
+            list_indent = None;
         }
         start += line.len();
     }
@@ -78,6 +135,16 @@ fn inside_inline_code(line: &str, offset: usize) -> bool {
         }
     }
     delimiter.is_some()
+}
+
+fn is_escaped(line: &str, offset: usize) -> bool {
+    line.as_bytes()[..offset]
+        .iter()
+        .rev()
+        .take_while(|byte| **byte == b'\\')
+        .count()
+        % 2
+        == 1
 }
 
 fn inline_destination(line: &str, start: usize) -> Option<(&str, usize, usize, usize)> {
@@ -131,6 +198,10 @@ fn inline_links(lines: &[SourceLine<'_>]) -> Vec<Link> {
                 cursor = close + 2;
                 continue;
             };
+            if is_escaped(line, _open) {
+                cursor = close + 2;
+                continue;
+            }
             let destination_start = close + 2;
             let Some((target, target_start, target_end, destination_end)) =
                 inline_destination(line, destination_start)
@@ -198,6 +269,10 @@ fn full_reference_links(
                 cursor = separator + 2;
                 continue;
             };
+            if is_escaped(line, text_open) {
+                cursor = separator + 2;
+                continue;
+            }
             let label_start = separator + 2;
             let Some(relative_close) = line[label_start..].find(']') else {
                 break;
@@ -231,7 +306,10 @@ fn shortcut_reference_links(
         let mut cursor = 0;
         while let Some(relative_open) = line[cursor..].find('[') {
             let open = cursor + relative_open;
-            if inside_inline_code(line, open) || open > 0 && line.as_bytes()[open - 1] == b']' {
+            if inside_inline_code(line, open)
+                || is_escaped(line, open)
+                || open > 0 && line.as_bytes()[open - 1] == b']'
+            {
                 cursor = open + 1;
                 continue;
             }
