@@ -22,4 +22,5 @@ bytes.workspace = true
 lspf = { path = "../lspf", features = ["testing"] }
 serde.workspace = true
 serde_json.workspace = true
+tempfile.workspace = true
 tokio = { version = "1", features = ["macros", "rt", "time"] }

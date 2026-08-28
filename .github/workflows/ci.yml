@@ -172,6 +172,7 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: ./.github/actions/setup-rust
+      - run: bash ci/test-check-editor-validation.sh
       - run: cargo test --workspace --features stdio,tcp,websocket,proposed,testing --all-targets
       - run: cargo test --workspace --features stdio,tcp,websocket,proposed,testing --doc
 

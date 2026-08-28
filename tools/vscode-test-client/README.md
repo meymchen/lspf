@@ -28,6 +28,13 @@ should see the `lspf-hello` output channel come alive with LSP traffic,
 and the server's `tracing` spans on its stderr (visible in the
 Extension Host's debug console).
 
+To run the Markdown reference-server journey instead, install
+`lspf-markdown`, set `LSPF_MARKDOWN_SERVER` to its absolute path, then launch the
+same Extension Host configuration. The client switches its document selector
+to Markdown and does not register the `lspf-hello` reverse-request or Command
+middleware. The complete three-editor procedure lives in
+[`../../editor-validation`](../../editor-validation).
+
 To run one of the framework examples instead, select
 `Run LSP example client (select example)`. The pre-launch task builds every
 stdio example, and the picker chooses the binary placed under

@@ -10,6 +10,7 @@ import {
 import { resolveServerBinary } from './serverPath.js';
 import { serverEnvironment } from './serverEnvironment.js';
 import { serverCommandArguments } from './serverCommands.js';
+import { serverProfile } from './serverProfile.js';
 
 let client: LanguageClient | undefined;
 
@@ -17,6 +18,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
     // tools/vscode-test-client/out/extension.js  →  repo root is two levels up.
     const repoRoot = path.resolve(context.extensionPath, '..', '..');
     const serverBinary = resolveServerBinary(repoRoot);
+    const profile = serverProfile(serverBinary);
 
     const serverOptions: ServerOptions = {
         command: serverBinary,
@@ -26,16 +28,23 @@ export async function activate(context: ExtensionContext): Promise<void> {
         },
     };
 
-    const commandOutput = window.createOutputChannel('lspf-hello commands');
-    context.subscriptions.push(commandOutput);
+    const commandOutput = profile.commandOutput
+        ? window.createOutputChannel(profile.commandOutput)
+        : undefined;
+    if (commandOutput) {
+        context.subscriptions.push(commandOutput);
+    }
     const clientOptions: LanguageClientOptions = {
-        documentSelector: [{ scheme: 'file', language: 'plaintext' }],
-        outputChannelName: 'lspf-hello',
+        documentSelector: [{ scheme: 'file', language: profile.language }],
+        outputChannelName: profile.outputChannel,
         synchronize: {
             fileEvents: workspace.createFileSystemWatcher('**/*'),
         },
         middleware: {
             async executeCommand(command, args, next) {
+                if (!commandOutput) {
+                    return next(command, args);
+                }
                 try {
                     const result = await next(
                         command,
@@ -58,10 +67,12 @@ export async function activate(context: ExtensionContext): Promise<void> {
         },
     };
 
-    client = new LanguageClient('lspf-hello', 'lspf hello', serverOptions, clientOptions);
-    context.subscriptions.push(
-        client.onRequest('lspf-hello/ping', () => 'pong'),
-    );
+    client = new LanguageClient(profile.id, profile.name, serverOptions, clientOptions);
+    if (profile.id === 'lspf-hello') {
+        context.subscriptions.push(
+            client.onRequest('lspf-hello/ping', () => 'pong'),
+        );
+    }
     await client.start();
 }
 

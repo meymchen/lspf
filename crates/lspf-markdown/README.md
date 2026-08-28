@@ -21,3 +21,8 @@ in-memory Transport seam:
 ```bash
 cargo test -p lspf-markdown
 ```
+
+The repository also contains repeatable VS Code, Neovim, and Zed validation
+journeys in [`../../editor-validation`](../../editor-validation). Those
+journeys install one packaged binary and keep protocol evidence separate from
+human editor observations.

@@ -9,6 +9,21 @@ test('resolves the lspf-hello workspace binary under target/debug on Unix', () =
     assert.equal(binary, path.join('/repo', 'target', 'debug', 'lspf-hello'));
 });
 
+test('resolves the packaged Markdown reference server selected by the journey', () => {
+    const binary = resolveServerBinary('/repo', 'linux', undefined, 'lspf-markdown');
+    assert.equal(binary, 'lspf-markdown');
+});
+
+test('accepts an explicit installed Markdown server path', () => {
+    const binary = resolveServerBinary(
+        '/repo',
+        'linux',
+        undefined,
+        '/opt/lspf/bin/lspf-markdown',
+    );
+    assert.equal(binary, '/opt/lspf/bin/lspf-markdown');
+});
+
 test('uses the executable suffix on Windows', () => {
     const binary = resolveServerBinary('C:\\repo', 'win32');
     assert.equal(path.basename(binary), 'lspf-hello.exe');
