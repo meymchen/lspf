@@ -11,7 +11,7 @@ use lspf::{
     Transport, TransportError, TransportReader, TransportWriter,
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Notify, mpsc, oneshot};
+use tokio::sync::{Notify, Semaphore, mpsc, oneshot};
 
 use super::harness::{CountGuard, ResourceCounts};
 
@@ -198,6 +198,8 @@ pub struct SlowTransport {
     pub incoming: mpsc::UnboundedReceiver<RawMessage>,
     pub outgoing: mpsc::UnboundedSender<RawMessage>,
     pub delay: Duration,
+    pub writes_blocked: Arc<AtomicBool>,
+    pub write_release: Arc<Semaphore>,
 }
 
 pub struct SlowReader(mpsc::UnboundedReceiver<RawMessage>);
@@ -205,6 +207,8 @@ pub struct SlowReader(mpsc::UnboundedReceiver<RawMessage>);
 pub struct SlowWriter {
     outgoing: mpsc::UnboundedSender<RawMessage>,
     delay: Duration,
+    writes_blocked: Arc<AtomicBool>,
+    write_release: Arc<Semaphore>,
 }
 
 impl Transport for SlowTransport {
@@ -217,6 +221,8 @@ impl Transport for SlowTransport {
             SlowWriter {
                 outgoing: self.outgoing,
                 delay: self.delay,
+                writes_blocked: self.writes_blocked,
+                write_release: self.write_release,
             },
         )
     }
@@ -230,6 +236,13 @@ impl TransportReader for SlowReader {
 
 impl TransportWriter for SlowWriter {
     async fn send(&mut self, message: RawMessage) -> Result<(), TransportError> {
+        if self.writes_blocked.load(Ordering::Acquire) {
+            self.write_release
+                .acquire()
+                .await
+                .map_err(|_| TransportError::Closed)?
+                .forget();
+        }
         tokio::time::sleep(self.delay).await;
         self.outgoing
             .send(message)

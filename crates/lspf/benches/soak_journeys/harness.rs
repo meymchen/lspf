@@ -254,6 +254,12 @@ impl<'a> JourneyContext<'a> {
         Ok(())
     }
 
+    pub fn sample_now(&mut self) -> SoakResult<()> {
+        // Load-bearing resource states can be shorter than the periodic interval.
+        self.recorder.record(self.scenario, self.counts, true)?;
+        Ok(())
+    }
+
     pub fn finish(
         self,
         terminal_outcome: &'static str,

@@ -1,5 +1,5 @@
 use std::str::FromStr;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -264,6 +264,8 @@ async fn slow_peer_journey(
         let (input, incoming) = mpsc::unbounded_channel();
         let (outgoing, mut output) = mpsc::unbounded_channel();
         let (completed, completion) = oneshot::channel();
+        let writes_blocked = Arc::new(AtomicBool::new(false));
+        let write_release = Arc::new(tokio::sync::Semaphore::new(0));
         let server = Server::builder(SlowPeerState {
             counts: Arc::clone(context.counts()),
             completed: Mutex::new(Some(completed)),
@@ -276,6 +278,8 @@ async fn slow_peer_journey(
             incoming,
             outgoing,
             delay: Duration::from_millis(2),
+            writes_blocked: Arc::clone(&writes_blocked),
+            write_release: Arc::clone(&write_release),
         }));
         input.send(request(
             1,
@@ -284,17 +288,32 @@ async fn slow_peer_journey(
         )?)?;
         expect_channel_success(&mut output).await?;
         input.send(notification("initialized", &json!({}))?)?;
+        // Hold admitted flood messages until their non-zero queue depth is sampled.
+        writes_blocked.store(true, Ordering::Release);
+        let release_writes = || {
+            writes_blocked.store(false, Ordering::Release);
+            write_release.add_permits(1);
+        };
         input.send(notification(
             Flood::METHOD,
             &FloodParams {
                 attempts: workload.traffic.slow_peer_attempts_per_cycle,
             },
         )?)?;
-        let (accepted, overloaded) = completion.await?;
+        let (accepted, overloaded) = match completion.await {
+            Ok(result) => result,
+            Err(error) => {
+                release_writes();
+                return Err(error.into());
+            }
+        };
         if overloaded == 0 {
+            release_writes();
             return Err("slow peer did not exercise outbound overload".into());
         }
-        context.sample()?;
+        let sample = context.sample_now();
+        release_writes();
+        sample?;
         for _ in 0..accepted {
             output
                 .recv()
