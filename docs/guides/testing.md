@@ -55,3 +55,32 @@ failures under the test's control.
 and handler deadlines. It must be created inside a current-thread Tokio
 runtime. Call `advance` after the message that arms the deadline has appeared
 at the scripted peer; the clock jump then makes the timeout deterministic.
+
+## Repository concurrency model
+
+The repository has a dependency-free model of the private protocol session in
+`crates/lspf/tests/concurrency_model_support`. It checks every
+order-preserving interleaving in six representative scenarios:
+
+- independently tagged, out-of-order responses;
+- completion racing cancellation and later capacity reuse;
+- bounded queue producers racing sends and close;
+- pending requests and owned tasks racing repeated close; and
+- writer or required-message failure racing reader EOF.
+
+The model asserts correlation and exactly-once completion, the two-message and
+eight-byte model queue limits, complete charge and inbound-capacity release,
+one close cleanup, joined task ownership, and writer-failure precedence before
+quiescence. These small limits are model bounds, not production defaults.
+
+Run all scenarios with the ordinary integration-test command:
+
+```console
+cargo test -p lspf --test concurrency_model --no-default-features
+```
+
+The test is part of Cargo's automatic integration-test discovery, so the
+workspace CI suite runs it without a separate job. A failure includes the
+scenario name followed by the exact actor and operation sequence. The search
+order is deterministic; rerunning the named test reproduces the same failing
+trace.
