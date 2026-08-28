@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "workloadVersion": 1,
+  "workloads": {
+    "startup": {
+      "iterations": 50
+    },
+    "requestLatency": {
+      "warmupOperations": 100,
+      "measuredOperations": 1000
+    },
+    "throughput": {
+      "operations": 10000
+    },
+    "largeDocumentEditing": {
+      "documentBytes": 1048576,
+      "edits": 100,
+      "replacementBytes": 16
+    },
+    "slowPeer": {
+      "attempts": 128,
+      "outboundMessageLimit": 8,
+      "outboundByteLimit": 1048576,
+      "writeDelayMs": 5
+    }
+  }
+}
