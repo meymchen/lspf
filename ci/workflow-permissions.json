@@ -16,6 +16,7 @@
       "native-lifecycle": { "contents": "read" },
       "wasm": { "contents": "read" },
       "test-coverage": { "contents": "read" },
+      "performance-baseline": { "contents": "read" },
       "gate-a-evidence": { "contents": "read" },
       "gate-b-evidence": { "contents": "read" },
       "gate-c-evidence": { "contents": "read" }
