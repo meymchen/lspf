@@ -51,6 +51,18 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24.x
+          cache: npm
+          cache-dependency-path: tools/vscode-test-client/package-lock.json
+      - name: Generate TypeScript coverage
+        run: |
+          npm --prefix tools/vscode-test-client ci
+          mkdir -p coverage/vscode-test-client
+          npm --prefix tools/vscode-test-client run test:coverage
+          sed -i 's|^SF:|SF:tools/vscode-test-client/|' coverage/vscode-test-client/lcov.info
       - name: Analyze with SonarCloud
         uses: SonarSource/sonarcloud-github-action@ffc3010689be73b8e5ae0c57ce35968afd7909e8 # v5
         env:
@@ -62,6 +74,7 @@ jobs:
             # mandatory
             -Dsonar.projectKey=meymchen_lspf
             -Dsonar.organization=meymchen
+            -Dsonar.javascript.lcov.reportPaths=coverage/vscode-test-client/lcov.info
             # Comma-separated paths to directories containing main source files.
             #-Dsonar.sources= # optional, default is project base directory
             # Comma-separated paths to directories containing test source files.
