@@ -268,3 +268,197 @@ async fn diagnostics_ignore_code_examples_and_external_links() {
     assert!(diagnostics(&mut journey).await.diagnostics.is_empty());
     journey.finish().await.unwrap();
 }
+
+#[tokio::test]
+async fn balanced_parentheses_are_part_of_an_inline_destination() {
+    let uri = lspf::types::Uri::from_str("file:///workspace/readme.md").unwrap();
+    let target = lspf::types::Uri::from_str("file:///workspace/guide_(v2).md").unwrap();
+    let provider = MemoryFileProvider::new();
+    provider.insert(target, "# Guide v2\n");
+    let mut journey = ServerJourney::start(lspf_markdown::server(provider))
+        .await
+        .unwrap();
+
+    journey
+        .peer()
+        .send(notification(
+            "textDocument/didOpen",
+            &DidOpenTextDocumentParams {
+                text_document: TextDocumentItem {
+                    uri,
+                    language_id: "markdown".into(),
+                    version: 1,
+                    text: "Read [version two](guide_(v2).md).\n".into(),
+                },
+            },
+        ))
+        .unwrap();
+
+    assert!(diagnostics(&mut journey).await.diagnostics.is_empty());
+    journey.finish().await.unwrap();
+}
+
+#[tokio::test]
+async fn reference_links_resolve_their_local_definition_target() {
+    let uri = lspf::types::Uri::from_str("file:///workspace/readme.md").unwrap();
+    let guide = lspf::types::Uri::from_str("file:///workspace/guide.md").unwrap();
+    let provider = MemoryFileProvider::new();
+    provider.insert(guide, "# Guide\n");
+    let mut journey = ServerJourney::start(lspf_markdown::server(provider))
+        .await
+        .unwrap();
+
+    journey
+        .peer()
+        .send(notification(
+            "textDocument/didOpen",
+            &DidOpenTextDocumentParams {
+                text_document: TextDocumentItem {
+                    uri: uri.clone(),
+                    language_id: "markdown".into(),
+                    version: 1,
+                    text: "Read [the guide][docs].\n\n[docs]: guide.md\n".into(),
+                },
+            },
+        ))
+        .unwrap();
+    assert!(diagnostics(&mut journey).await.diagnostics.is_empty());
+
+    journey
+        .peer()
+        .send(request(
+            20,
+            "textDocument/hover",
+            &HoverParams {
+                text_document_position_params: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier { uri: uri.clone() },
+                    position: Position::new(0, 19),
+                },
+                work_done_progress_params: WorkDoneProgressParams::default(),
+            },
+        ))
+        .unwrap();
+    let response = journey.peer().recv().await.unwrap();
+    let RawMessage::Response {
+        id,
+        result: Ok(result),
+    } = response
+    else {
+        panic!("expected successful hover response, got {response:?}");
+    };
+    assert_eq!(id, RequestId::Number(20));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&result).unwrap(),
+        serde_json::json!({
+            "contents": {
+                "kind": "markdown",
+                "value": "**Guide**\n\n`file:///workspace/guide.md`"
+            },
+            "range": {
+                "start": { "line": 0, "character": 17 },
+                "end": { "line": 0, "character": 21 }
+            }
+        })
+    );
+
+    journey
+        .peer()
+        .send(request(
+            21,
+            "textDocument/definition",
+            &GotoDefinitionParams {
+                text_document_position_params: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier { uri },
+                    position: Position::new(0, 19),
+                },
+                work_done_progress_params: WorkDoneProgressParams::default(),
+                partial_result_params: PartialResultParams::default(),
+            },
+        ))
+        .unwrap();
+    let response = journey.peer().recv().await.unwrap();
+    let RawMessage::Response {
+        id,
+        result: Ok(result),
+    } = response
+    else {
+        panic!("expected successful definition response, got {response:?}");
+    };
+    assert_eq!(id, RequestId::Number(21));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&result).unwrap(),
+        serde_json::json!({
+            "uri": "file:///workspace/guide.md",
+            "range": {
+                "start": { "line": 0, "character": 2 },
+                "end": { "line": 0, "character": 7 }
+            }
+        })
+    );
+
+    journey.finish().await.unwrap();
+}
+
+#[tokio::test]
+async fn fragment_definition_navigates_to_the_named_heading() {
+    let uri = lspf::types::Uri::from_str("file:///workspace/readme.md").unwrap();
+    let guide = lspf::types::Uri::from_str("file:///workspace/guide.md").unwrap();
+    let provider = MemoryFileProvider::new();
+    provider.insert(guide, "# Guide\n\n## Install\n");
+    let mut journey = ServerJourney::start(lspf_markdown::server(provider))
+        .await
+        .unwrap();
+
+    journey
+        .peer()
+        .send(notification(
+            "textDocument/didOpen",
+            &DidOpenTextDocumentParams {
+                text_document: TextDocumentItem {
+                    uri: uri.clone(),
+                    language_id: "markdown".into(),
+                    version: 1,
+                    text: "See [installation](guide.md#install).\n".into(),
+                },
+            },
+        ))
+        .unwrap();
+    assert!(diagnostics(&mut journey).await.diagnostics.is_empty());
+
+    journey
+        .peer()
+        .send(request(
+            30,
+            "textDocument/definition",
+            &GotoDefinitionParams {
+                text_document_position_params: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier { uri },
+                    position: Position::new(0, 25),
+                },
+                work_done_progress_params: WorkDoneProgressParams::default(),
+                partial_result_params: PartialResultParams::default(),
+            },
+        ))
+        .unwrap();
+    let response = journey.peer().recv().await.unwrap();
+    let RawMessage::Response {
+        id,
+        result: Ok(result),
+    } = response
+    else {
+        panic!("expected successful definition response, got {response:?}");
+    };
+    assert_eq!(id, RequestId::Number(30));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&result).unwrap(),
+        serde_json::json!({
+            "uri": "file:///workspace/guide.md",
+            "range": {
+                "start": { "line": 2, "character": 3 },
+                "end": { "line": 2, "character": 10 }
+            }
+        })
+    );
+
+    journey.finish().await.unwrap();
+}
