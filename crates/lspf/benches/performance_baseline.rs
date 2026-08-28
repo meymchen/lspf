@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use lspf::testing::{ScriptedPeer, ServerJourney};
+use lspf::types::Uri;
 use lspf::types::notification::Notification;
 use lspf::types::request::Request;
 use lspf::{
@@ -98,7 +99,7 @@ async fn ping(
 
 #[derive(Deserialize, Serialize)]
 struct DocumentProbeParams {
-    uri: String,
+    uri: Uri,
 }
 
 enum DocumentProbe {}
@@ -115,11 +116,9 @@ async fn document_probe(
     params: DocumentProbeParams,
     _cancellation: CancellationToken,
 ) -> Result<Option<i32>, LspError> {
-    let uri = lspf::types::Uri::from_str(&params.uri)
-        .map_err(|error| LspError::invalid_params(error.to_string()))?;
     Ok(context
         .documents()
-        .get(&uri)
+        .get(&params.uri)
         .and_then(|document| document.version()))
 }
 
@@ -336,8 +335,8 @@ async fn measure_startup(workload: &StartupWorkload) -> BenchmarkResult<Vec<Dura
     for _ in 0..workload.iterations {
         let started = Instant::now();
         let journey = ServerJourney::start(Server::builder(()).build()?).await?;
-        journey.finish().await?;
         samples.push(started.elapsed());
+        journey.finish().await?;
     }
     Ok(samples)
 }
@@ -404,20 +403,20 @@ async fn measure_large_document_editing(
         .request::<DocumentProbe, _, _>(document_probe)
         .build()?;
     let mut journey = ServerJourney::start(server).await?;
-    let uri = "file:///performance-baseline.txt";
+    let uri = Uri::from_str("file:///performance-baseline.txt")?;
     let document = "a".repeat(workload.document_bytes);
     journey.peer().send(notification(
         "textDocument/didOpen",
         &json!({
             "textDocument": {
-                "uri": uri,
+                "uri": uri.as_str(),
                 "languageId": "plaintext",
                 "version": 1,
                 "text": document
             }
         }),
     )?)?;
-    probe_document(journey.peer(), 20_000, uri, 1).await?;
+    probe_document(journey.peer(), 20_000, &uri, 1).await?;
 
     let replacement = "b".repeat(workload.replacement_bytes);
     let mut samples = Vec::with_capacity(workload.edits);
@@ -427,7 +426,7 @@ async fn measure_large_document_editing(
         journey.peer().send(notification(
             "textDocument/didChange",
             &json!({
-                "textDocument": { "uri": uri, "version": version },
+                "textDocument": { "uri": uri.as_str(), "version": version },
                 "contentChanges": [{
                     "range": {
                         "start": { "line": 0, "character": 0 },
@@ -440,13 +439,13 @@ async fn measure_large_document_editing(
                 }]
             }),
         )?)?;
-        probe_document(journey.peer(), 20_001 + version, uri, version).await?;
+        probe_document(journey.peer(), 20_001 + version, &uri, version).await?;
         samples.push(started.elapsed());
     }
 
     journey.peer().send(notification(
         "textDocument/didClose",
-        &json!({ "textDocument": { "uri": uri } }),
+        &json!({ "textDocument": { "uri": uri.as_str() } }),
     )?)?;
     journey.finish().await?;
     Ok(samples)
@@ -455,15 +454,13 @@ async fn measure_large_document_editing(
 async fn probe_document(
     peer: &mut ScriptedPeer,
     id: i32,
-    uri: &str,
+    uri: &Uri,
     expected_version: i32,
 ) -> BenchmarkResult<()> {
     peer.send(request(
         id,
         DocumentProbe::METHOD,
-        &DocumentProbeParams {
-            uri: uri.to_string(),
-        },
+        &DocumentProbeParams { uri: uri.clone() },
     )?)?;
     let result = expect_success(peer).await?;
     let version: Option<i32> = serde_json::from_slice(&result)?;
@@ -526,16 +523,15 @@ async fn expect_channel_success(
     output: &mut mpsc::UnboundedReceiver<RawMessage>,
 ) -> BenchmarkResult<Bytes> {
     let message = output.recv().await.ok_or("server output closed early")?;
-    match message {
-        RawMessage::Response {
-            result: Ok(result), ..
-        } => Ok(result),
-        other => Err(format!("expected successful response, received {other:?}").into()),
-    }
+    successful_response(message)
 }
 
 async fn expect_success(peer: &mut ScriptedPeer) -> BenchmarkResult<Bytes> {
-    match peer.recv().await? {
+    successful_response(peer.recv().await?)
+}
+
+fn successful_response(message: RawMessage) -> BenchmarkResult<Bytes> {
+    match message {
         RawMessage::Response {
             result: Ok(result), ..
         } => Ok(result),
