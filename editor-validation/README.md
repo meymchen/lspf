@@ -96,3 +96,11 @@ Human UI observations belong in a copy of
 an automated assertion into a UX observation. If a run exposes a framework
 gap, open an issue first and add its URL to `frameworkGaps.tracked` in the JSON
 manifest.
+
+The interactive wizard walks through all three editors and writes the record
+without mixing in automated assertions:
+
+```bash
+bash editor-validation/run-human-journeys.sh \
+  .scratch/editor-validation-observations.md
+```

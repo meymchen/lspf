@@ -74,7 +74,7 @@
     "kind": "human",
     "status": "pending",
     "records": [],
-    "instructions": "Record editor version, duration, each journey observation, and any UX-only finding without copying automated assertions into this section."
+    "instructions": "Run editor-validation/run-human-journeys.sh to record editor version, duration, each journey observation, and any UX-only finding without copying automated assertions into this section."
   },
   "frameworkGaps": {
     "tracked": [],
