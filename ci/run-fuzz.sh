@@ -13,6 +13,7 @@ readonly TARGETS=(
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 readonly cargo_bin=${FUZZ_CARGO_BIN:-cargo}
+readonly artifact_root=${FUZZ_ARTIFACT_ROOT:-$repo_root/fuzz/artifacts}
 
 check_contract() {
     local config target max_len timeout budget
@@ -63,7 +64,7 @@ run_target() {
     local max_len=$2
     local timeout=$3
     local budget=$4
-    local artifact_dir="$repo_root/fuzz/artifacts/$target"
+    local artifact_dir="$artifact_root/$target"
     local corpus_dir="$repo_root/fuzz/corpus/$target"
     local marker
     local status=0

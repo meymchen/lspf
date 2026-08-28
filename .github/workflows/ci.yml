@@ -385,6 +385,36 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+  gate-d-evidence:
+    name: Gate D verification evidence
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: nightly
+          cache: "false"
+      - name: Install the fuzz runner
+        run: cargo install cargo-fuzz --locked
+      - name: Run revision-locked Gate D verification
+        run: >-
+          bash ci/run-gate-d-evidence.sh
+          "$GITHUB_SHA"
+          "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          "$RUNNER_TEMP/gate-d-evidence"
+      - name: Retain Gate D verification evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: gate-d-verification-evidence
+          path: ${{ runner.temp }}/gate-d-evidence
+          if-no-files-found: error
+          retention-days: 90
+
   gate-a-evidence:
     name: Gate A release evidence
     if: ${{ always() && github.event_name == 'push' }}
