@@ -559,3 +559,29 @@ async fn fragment_definition_uses_setext_headings_and_ignores_fenced_examples() 
 
     journey.finish().await.unwrap();
 }
+
+#[tokio::test]
+async fn diagnostics_ignore_links_in_indented_code_blocks() {
+    let uri = lspf::types::Uri::from_str("file:///workspace/readme.md").unwrap();
+    let mut journey = ServerJourney::start(lspf_markdown::server(MemoryFileProvider::new()))
+        .await
+        .unwrap();
+
+    journey
+        .peer()
+        .send(notification(
+            "textDocument/didOpen",
+            &DidOpenTextDocumentParams {
+                text_document: TextDocumentItem {
+                    uri,
+                    language_id: "markdown".into(),
+                    version: 1,
+                    text: "    [example](missing.md)\n\n    [docs]: missing.md\n".into(),
+                },
+            },
+        ))
+        .unwrap();
+
+    assert!(diagnostics(&mut journey).await.diagnostics.is_empty());
+    journey.finish().await.unwrap();
+}

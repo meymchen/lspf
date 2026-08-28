@@ -41,7 +41,7 @@ pub(crate) fn content_lines(text: &str) -> Vec<SourceLine<'_>> {
             start += line.len();
             continue;
         }
-        if fence.is_none() {
+        if fence.is_none() && indentation < 4 {
             lines.push(SourceLine { text: line, start });
         }
         start += line.len();
