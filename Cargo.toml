@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/lspf", "crates/lspf-hello"]
+members = ["crates/lspf", "crates/lspf-hello", "crates/lspf-markdown"]
 resolver = "3"
 
 [workspace.package]
