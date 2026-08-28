@@ -462,3 +462,100 @@ async fn fragment_definition_navigates_to_the_named_heading() {
 
     journey.finish().await.unwrap();
 }
+
+#[tokio::test]
+async fn shortcut_reference_links_report_broken_definition_targets() {
+    let uri = lspf::types::Uri::from_str("file:///workspace/readme.md").unwrap();
+    let mut journey = ServerJourney::start(lspf_markdown::server(MemoryFileProvider::new()))
+        .await
+        .unwrap();
+
+    journey
+        .peer()
+        .send(notification(
+            "textDocument/didOpen",
+            &DidOpenTextDocumentParams {
+                text_document: TextDocumentItem {
+                    uri,
+                    language_id: "markdown".into(),
+                    version: 1,
+                    text: "Read [guide].\n\n[guide]: missing.md\n".into(),
+                },
+            },
+        ))
+        .unwrap();
+
+    let published = diagnostics(&mut journey).await;
+    assert_eq!(published.diagnostics.len(), 1);
+    assert_eq!(
+        published.diagnostics[0].range,
+        lspf::types::Range::new(Position::new(0, 6), Position::new(0, 11))
+    );
+    assert_eq!(
+        published.diagnostics[0].message,
+        "local link target does not exist: missing.md"
+    );
+    journey.finish().await.unwrap();
+}
+
+#[tokio::test]
+async fn fragment_definition_uses_setext_headings_and_ignores_fenced_examples() {
+    let uri = lspf::types::Uri::from_str("file:///workspace/readme.md").unwrap();
+    let guide = lspf::types::Uri::from_str("file:///workspace/guide.md").unwrap();
+    let provider = MemoryFileProvider::new();
+    provider.insert(guide, "```md\n# Install\n```\n\nInstall\n=======\n");
+    let mut journey = ServerJourney::start(lspf_markdown::server(provider))
+        .await
+        .unwrap();
+
+    journey
+        .peer()
+        .send(notification(
+            "textDocument/didOpen",
+            &DidOpenTextDocumentParams {
+                text_document: TextDocumentItem {
+                    uri: uri.clone(),
+                    language_id: "markdown".into(),
+                    version: 1,
+                    text: "See [installation](guide.md#install).\n".into(),
+                },
+            },
+        ))
+        .unwrap();
+    assert!(diagnostics(&mut journey).await.diagnostics.is_empty());
+
+    journey
+        .peer()
+        .send(request(
+            31,
+            "textDocument/definition",
+            &GotoDefinitionParams {
+                text_document_position_params: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier { uri },
+                    position: Position::new(0, 25),
+                },
+                work_done_progress_params: WorkDoneProgressParams::default(),
+                partial_result_params: PartialResultParams::default(),
+            },
+        ))
+        .unwrap();
+    let response = journey.peer().recv().await.unwrap();
+    let RawMessage::Response {
+        result: Ok(result), ..
+    } = response
+    else {
+        panic!("expected successful definition response, got {response:?}");
+    };
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&result).unwrap(),
+        serde_json::json!({
+            "uri": "file:///workspace/guide.md",
+            "range": {
+                "start": { "line": 4, "character": 0 },
+                "end": { "line": 4, "character": 7 }
+            }
+        })
+    );
+
+    journey.finish().await.unwrap();
+}
