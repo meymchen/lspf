@@ -20,6 +20,7 @@ jq -e '
     "native-lifecycle",
     "native-matrix",
     "packaged-crate",
+    "performance-baseline",
     "public-api",
     "public-docs",
     "security",
