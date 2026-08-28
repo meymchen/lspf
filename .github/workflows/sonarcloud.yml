@@ -59,7 +59,7 @@ jobs:
           cache-dependency-path: tools/vscode-test-client/package-lock.json
       - name: Generate TypeScript coverage
         run: |
-          npm --prefix tools/vscode-test-client ci
+          npm --prefix tools/vscode-test-client ci --ignore-scripts
           mkdir -p coverage/vscode-test-client
           npm --prefix tools/vscode-test-client run test:coverage
           sed -i 's|^SF:|SF:tools/vscode-test-client/|' coverage/vscode-test-client/lcov.info
@@ -74,6 +74,8 @@ jobs:
             # mandatory
             -Dsonar.projectKey=meymchen_lspf
             -Dsonar.organization=meymchen
+            -Dsonar.tests=.
+            -Dsonar.test.inclusions=tools/vscode-test-client/test/**/*.test.ts
             -Dsonar.javascript.lcov.reportPaths=coverage/vscode-test-client/lcov.info
             # Comma-separated paths to directories containing main source files.
             #-Dsonar.sources= # optional, default is project base directory
