@@ -126,13 +126,16 @@ impl WireEvent {
 /// Cloneable view of all traffic observed by one in-memory connection.
 #[derive(Clone, Debug)]
 pub struct WireCapture {
-    events: Arc<Mutex<Vec<WireEvent>>>,
+    events: Option<Arc<Mutex<Vec<WireEvent>>>>,
 }
 
 impl WireCapture {
     /// Return a stable snapshot in the order messages crossed the seam.
     pub fn snapshot(&self) -> Vec<WireEvent> {
-        self.events.lock().unwrap().clone()
+        self.events
+            .as_ref()
+            .map(|events| events.lock().unwrap().clone())
+            .unwrap_or_default()
     }
 
     fn record(events: &mut Vec<WireEvent>, direction: WireDirection, message: RawMessage) {
@@ -150,7 +153,10 @@ impl WireCapture {
         message: RawMessage,
         deliver: impl FnOnce(RawMessage) -> Result<(), E>,
     ) -> Result<(), TransportError> {
-        let mut events = self.events.lock().unwrap();
+        let Some(events) = &self.events else {
+            return deliver(message).map_err(|_| TransportError::Closed);
+        };
+        let mut events = events.lock().unwrap();
         deliver(message.clone()).map_err(|_| TransportError::Closed)?;
         Self::record(&mut events, direction, message);
         Ok(())
@@ -167,11 +173,25 @@ pub struct MemoryTransport {
 impl MemoryTransport {
     /// Create one endpoint Transport and its controlling peer.
     pub fn pair() -> (Self, ScriptedPeer) {
+        Self::pair_with_capture(WireCapture {
+            events: Some(Arc::new(Mutex::new(Vec::new()))),
+        })
+    }
+
+    /// Create an in-memory Transport that forwards messages without retaining
+    /// wire history.
+    ///
+    /// Prefer this for long-lived or high-volume workloads where cloning every
+    /// message into a [`WireCapture`] would make the test harness itself grow
+    /// with total traffic. [`ScriptedPeer::capture`] remains available for a
+    /// uniform interface, but its snapshot stays empty for this pair.
+    pub fn pair_uncaptured() -> (Self, ScriptedPeer) {
+        Self::pair_with_capture(WireCapture { events: None })
+    }
+
+    fn pair_with_capture(capture: WireCapture) -> (Self, ScriptedPeer) {
         let (to_endpoint, incoming) = mpsc::unbounded_channel();
         let (outgoing, from_endpoint) = mpsc::unbounded_channel();
-        let capture = WireCapture {
-            events: Arc::new(Mutex::new(Vec::new())),
-        };
         (
             Self {
                 incoming,

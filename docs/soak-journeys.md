@@ -26,7 +26,10 @@ The harness samples resident memory and live resource counts once per second.
 Structured connection telemetry supplies the actual admitted-request,
 Document, and outbound-queue counts. The harness also records live handler
 tasks, progress handles, and connections. Traffic totals record operations and
-payload bytes.
+payload bytes. Its in-memory Transport does not retain wire history: ordinary
+`MemoryTransport::pair` capture is useful for protocol assertions, but cloning
+every message would make the harness grow with cumulative soak traffic instead
+of the framework's live resources.
 
 Every connection uses these limits:
 

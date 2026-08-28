@@ -298,7 +298,7 @@ impl ActiveConnection {
     where
         S: Send + Sync + 'static,
     {
-        let (transport, mut peer) = MemoryTransport::pair();
+        let (transport, mut peer) = MemoryTransport::pair_uncaptured();
         counts.connections.fetch_add(1, Ordering::AcqRel);
         let serving = tokio::spawn(server.serve(transport));
         peer.send(request(

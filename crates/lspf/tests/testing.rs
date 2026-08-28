@@ -68,6 +68,21 @@ async fn capture_excludes_messages_that_never_cross_the_transport_seam() {
 }
 
 #[tokio::test]
+async fn uncaptured_pair_forwards_messages_without_retaining_wire_history() {
+    let (transport, mut peer) = MemoryTransport::pair_uncaptured();
+    let capture = peer.capture();
+    let (mut reader, mut writer) = transport.split();
+
+    peer.send(notification("test/inbound")).unwrap();
+    assert_eq!(reader.recv().await.unwrap().method(), Some("test/inbound"));
+
+    writer.send(notification("test/outbound")).await.unwrap();
+    assert_eq!(peer.recv().await.unwrap().method(), Some("test/outbound"));
+
+    assert!(capture.snapshot().is_empty());
+}
+
+#[tokio::test]
 async fn peer_scripts_transport_failures() {
     let (transport, peer) = MemoryTransport::pair();
     let (mut reader, _writer) = transport.split();
