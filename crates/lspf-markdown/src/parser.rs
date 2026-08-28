@@ -59,7 +59,7 @@ pub(crate) fn content_lines(text: &str) -> Vec<SourceLine<'_>> {
     let mut lines = Vec::new();
     let mut start = 0;
     let mut fence = None;
-    let mut list_indent = None;
+    let mut list_indents = Vec::new();
     for line in text.split_inclusive('\n') {
         let (content, quote_prefix) = blockquote_content(line);
         let (indent_bytes, indent_columns) = indentation(content);
@@ -86,8 +86,8 @@ pub(crate) fn content_lines(text: &str) -> Vec<SourceLine<'_>> {
             continue;
         }
         if fence.is_none() {
-            let in_list = list_indent.is_some_and(|list_indent| {
-                indent_columns >= list_indent && indent_columns < list_indent + 4
+            let in_list = list_indents.iter().any(|list_indent| {
+                indent_columns >= *list_indent && indent_columns < *list_indent + 4
             });
             if indent_columns < 4 || in_list {
                 lines.push(SourceLine {
@@ -97,9 +97,23 @@ pub(crate) fn content_lines(text: &str) -> Vec<SourceLine<'_>> {
             }
         }
         if let Some(indent) = list_content_indent(trimmed) {
-            list_indent = Some(indent_columns + indent);
+            let absolute_indent = indent_columns + indent;
+            while list_indents
+                .last()
+                .is_some_and(|indent| *indent >= absolute_indent)
+            {
+                list_indents.pop();
+            }
+            list_indents.push(absolute_indent);
         } else if !trimmed.trim().is_empty() && indent_columns == 0 {
-            list_indent = None;
+            list_indents.clear();
+        } else if !trimmed.trim().is_empty() {
+            while list_indents
+                .last()
+                .is_some_and(|indent| *indent > indent_columns)
+            {
+                list_indents.pop();
+            }
         }
         start += line.len();
     }
