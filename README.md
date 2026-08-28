@@ -285,9 +285,22 @@ lookup — verified end to end by
 [`crates/lspf-hello/tests/e2e.rs`](./crates/lspf-hello/tests/e2e.rs).
 To wire it into a real editor instead, see [Editor setup](#editor-setup).
 
+For a maintained, task-focused server rather than a template, install the
+first-party Markdown link server:
+
+```bash
+cargo install --path crates/lspf-markdown
+```
+
+The resulting `lspf-markdown` binary diagnoses missing local link targets after
+open and incremental edits, describes resolved targets on hover, and navigates
+definitions to the target document's first heading. Its public-Transport test
+journeys live in
+[`crates/lspf-markdown/tests/server_journey.rs`](./crates/lspf-markdown/tests/server_journey.rs).
+
 ## Editor setup
 
-This repository is a Cargo workspace with two members:
+This repository is a Cargo workspace with three members:
 
 - [`crates/lspf`](./crates/lspf) — the framework library you depend on
   (`lspf = "0.5.2"`).
@@ -299,6 +312,10 @@ This repository is a Cargo workspace with two members:
   `textDocument/didOpen`, it publishes an informational diagnostic
   ("lspf saw this document open"). Fork it as the starting point for your
   own language server.
+- [`crates/lspf-markdown`](./crates/lspf-markdown) — the installable
+  **reference server**. It builds the `lspf-markdown` stdio binary and applies
+  the framework's public document, workspace, feature, client, and testing
+  interfaces to real Markdown link behavior.
 
 ### Install the server
 

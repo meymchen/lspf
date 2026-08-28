@@ -1,0 +1,25 @@
+[package]
+name = "lspf-markdown"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "A first-party Markdown link language server built on lspf"
+publish = false
+
+[[bin]]
+name = "lspf-markdown"
+path = "src/main.rs"
+
+[dependencies]
+lspf.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+bytes.workspace = true
+lspf = { path = "../lspf", features = ["testing"] }
+serde.workspace = true
+serde_json.workspace = true
+tokio = { version = "1", features = ["macros", "rt", "time"] }
