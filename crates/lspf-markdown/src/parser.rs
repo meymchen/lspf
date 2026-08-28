@@ -97,7 +97,7 @@ pub(crate) fn content_lines(text: &str) -> Vec<SourceLine<'_>> {
             }
         }
         if let Some(indent) = list_content_indent(trimmed) {
-            list_indent = Some(indent);
+            list_indent = Some(indent_columns + indent);
         } else if !trimmed.trim().is_empty() && indent_columns == 0 {
             list_indent = None;
         }

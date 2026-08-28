@@ -618,6 +618,37 @@ async fn diagnostics_distinguish_tab_code_from_list_continuation_links() {
 }
 
 #[tokio::test]
+async fn diagnostics_follow_links_in_nested_list_continuations() {
+    let uri = lspf::types::Uri::from_str("file:///workspace/readme.md").unwrap();
+    let mut journey = ServerJourney::start(lspf_markdown::server(MemoryFileProvider::new()))
+        .await
+        .unwrap();
+
+    journey
+        .peer()
+        .send(notification(
+            "textDocument/didOpen",
+            &DidOpenTextDocumentParams {
+                text_document: TextDocumentItem {
+                    uri,
+                    language_id: "markdown".into(),
+                    version: 1,
+                    text: "- outer\n  - inner\n      [guide](missing.md)\n".into(),
+                },
+            },
+        ))
+        .unwrap();
+
+    let published = diagnostics(&mut journey).await;
+    assert_eq!(published.diagnostics.len(), 1);
+    assert_eq!(
+        published.diagnostics[0].message,
+        "local link target does not exist: missing.md"
+    );
+    journey.finish().await.unwrap();
+}
+
+#[tokio::test]
 async fn diagnostics_ignore_links_in_blockquoted_fences() {
     let uri = lspf::types::Uri::from_str("file:///workspace/readme.md").unwrap();
     let mut journey = ServerJourney::start(lspf_markdown::server(MemoryFileProvider::new()))
