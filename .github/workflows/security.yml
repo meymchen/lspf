@@ -43,6 +43,8 @@ jobs:
         run: bash ci/test-gate-c-evidence-workflow.sh
       - name: Test performance baseline workflow contract
         run: bash ci/test-performance-baseline-workflow.sh
+      - name: Test soak journey workflow contract
+        run: bash ci/test-soak-journey-workflow.sh
       - name: Test CI pull-request fast-path contract
         run: bash ci/test-ci-fast-path.sh
       - name: Enforce Action pins and minimal job permissions

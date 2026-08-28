@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "workloadVersion": 1,
+  "maximumRunSeconds": 600,
+  "maximumPeakRssMiB": 512,
+  "maximumUnexplainedGrowthMiB": 32,
+  "minimumSamplesPerScenario": 30
+}

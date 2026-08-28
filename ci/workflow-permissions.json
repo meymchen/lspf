@@ -17,6 +17,7 @@
       "wasm": { "contents": "read" },
       "test-coverage": { "contents": "read" },
       "performance-baseline": { "contents": "read" },
+      "bounded-memory-soak": { "contents": "read" },
       "gate-a-evidence": { "contents": "read" },
       "gate-b-evidence": { "contents": "read" },
       "gate-c-evidence": { "contents": "read" }
