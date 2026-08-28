@@ -27,8 +27,9 @@ fi
 
 test_root=$(mktemp -d)
 artifact_name="crash-contract-$$"
-artifact_path="$repo_root/fuzz/artifacts/envelope/$artifact_name"
-trap 'rm -rf "$test_root"; rm -f "$artifact_path" "$artifact_path.minimized"' EXIT
+artifact_root="$test_root/artifacts"
+artifact_path="$artifact_root/envelope/$artifact_name"
+trap 'rm -rf "$test_root"' EXIT
 fake_cargo="$test_root/cargo"
 invocations="$test_root/invocations"
 
@@ -51,6 +52,7 @@ EOF
 chmod +x "$fake_cargo"
 
 if FUZZ_CARGO_BIN="$fake_cargo" \
+    FUZZ_ARTIFACT_ROOT="$artifact_root" \
     FUZZ_TEST_ARTIFACT="$artifact_name" \
     FUZZ_TEST_INVOCATIONS="$invocations" \
     "$runner" --all
