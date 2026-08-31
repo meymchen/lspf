@@ -14,6 +14,21 @@ workflow_yaml_to_json "$ci_workflow" | jq -e '
 ' >/dev/null
 
 ci_json="$(workflow_yaml_to_json "$ci_workflow")"
+
+# `main` requires status checks. A path filter that skips this workflow leaves
+# every required check pending rather than passing it vacuously, so a pull
+# request touching only filtered paths can never merge without an admin bypass.
+# The fast path belongs in job-level `if` conditions, which do report a result;
+# it must never come back as a `pull_request` path filter.
+#
+# YAML 1.1 parsers read the `on` key as the boolean `true`, so accept both
+# spellings: yq keeps `on`, while the `PyYAML` fallback yields `true`.
+jq -e '
+  (.on // .["true"]).pull_request // {}
+  | (has("paths") or has("paths-ignore"))
+  | not
+' <<<"$ci_json" >/dev/null
+
 for job in feature-matrix msrv native-matrix test-coverage performance-baseline \
     bounded-memory-soak gate-b-evidence gate-c-evidence
 do

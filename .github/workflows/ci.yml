@@ -1,14 +1,20 @@
 name: CI
 
-# The `paths-ignore` lists below are duplicated on purpose: the Actions workflow
-# parser does not support YAML anchors, so a shared alias would parse locally
-# under yq and then fail on GitHub. Keep the two lists identical.
+# `pull_request` deliberately carries no path filter, and must not grow one.
+# `main` requires status checks, and GitHub never creates a check run for a
+# workflow that a path filter skipped: the required check stays "Expected --
+# waiting for status" and blocks the pull request forever, rather than passing
+# vacuously. A pull request that only edits an ADR would need an admin bypass to
+# merge. Running the pull-request jobs on those changes is what the checks cost.
 #
-# These paths cannot change what the workspace builds, tests, documents, or
-# packages. `SECURITY.md` is deliberately absent: Gate A cites it as the
-# implementation of the support-matrix and compatibility-policy claims.
-# `README.md` and `docs/guides/**` are absent too, because they are compiled
-# into rustdoc through `#[doc = include_str!]` and their examples are doctested.
+# `push` keeps the list, where nothing is blocked and the saving is largest: a
+# docs-only commit on `main` skips the release-oriented matrices, coverage, soak
+# journeys, and evidence gates. These paths cannot change what the workspace
+# builds, tests, documents, or packages. `SECURITY.md` is deliberately absent:
+# Gate A cites it as the implementation of the support-matrix and
+# compatibility-policy claims. `README.md` and `docs/guides/**` are absent too,
+# because they are compiled into rustdoc through `#[doc = include_str!]` and
+# their examples are doctested.
 on:
   push:
     branches: [main]
@@ -21,14 +27,6 @@ on:
       - AGENTS.md
       - CLAUDE.md
   pull_request:
-    paths-ignore:
-      - docs/adr/**
-      - docs/agents/**
-      - .vscode/**
-      - .zed/**
-      - CONTEXT.md
-      - AGENTS.md
-      - CLAUDE.md
 
 env:
   CARGO_TERM_COLOR: always
