@@ -240,8 +240,19 @@ async fn progress_journey(
         }
         let expected_hooks = usize::try_from(operations)? + batch;
         tokio::time::timeout(Duration::from_secs(5), async {
-            while observation.hooks_seen.load(Ordering::Acquire) < expected_hooks {
-                observation.hook_notify.notified().await;
+            // Register the waiter before sampling the counter. `notify_waiters`
+            // stores no permit, so a hook that lands between an unregistered
+            // load and the following await is dropped; when that hook is the
+            // batch's last, this loop waits forever and the timeout above turns
+            // it into "progress scenario failed: deadline has elapsed".
+            let mut notified = std::pin::pin!(observation.hook_notify.notified());
+            loop {
+                notified.as_mut().enable();
+                if observation.hooks_seen.load(Ordering::Acquire) >= expected_hooks {
+                    break;
+                }
+                notified.as_mut().await;
+                notified.set(observation.hook_notify.notified());
             }
         })
         .await?;

@@ -54,6 +54,15 @@ pub fn parse(body: Bytes) -> RawMessage {
     if !params_are_structured(env.params.0) {
         return invalid_request();
     }
+    // `params` and `result` are forwarded verbatim, so anything accepted here
+    // must still be JSON a strict peer can parse.
+    if [env.params.0, env.result.0]
+        .into_iter()
+        .flatten()
+        .any(|value| has_unpaired_surrogate_escape(value.get()))
+    {
+        return protocol_error(-32700, "Parse error");
+    }
 
     let has_params = env.params.0.is_some();
     let has_id = env.id.0.is_some();
@@ -101,6 +110,71 @@ pub fn parse(body: Bytes) -> RawMessage {
 
 fn invalid_request() -> RawMessage {
     protocol_error(-32600, "Invalid Request")
+}
+
+/// Report whether raw JSON text contains a UTF-16 surrogate escape that is not
+/// part of a valid pair.
+///
+/// `params` and `result` are forwarded byte for byte, so an escape that no
+/// strict parser will accept would otherwise survive the round trip and be
+/// re-emitted to a peer. `RawValue` only guarantees that `\u` is followed by
+/// four hex digits; surrogate pairing is checked when a `String` is
+/// materialized, which never happens for these two fields.
+///
+/// This is one pass over bytes the caller is about to copy anyway, so it does
+/// not change the cost class of accepting a message.
+fn has_unpaired_surrogate_escape(text: &str) -> bool {
+    fn code_unit(bytes: &[u8]) -> Option<u32> {
+        let digits = bytes.get(..4)?;
+        u32::from_str_radix(std::str::from_utf8(digits).ok()?, 16).ok()
+    }
+
+    const HIGH: std::ops::Range<u32> = 0xD800..0xDC00;
+    const LOW: std::ops::Range<u32> = 0xDC00..0xE000;
+
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    let mut in_string = false;
+    while index < bytes.len() {
+        if !in_string {
+            in_string = bytes[index] == b'"';
+            index += 1;
+            continue;
+        }
+        match bytes[index] {
+            b'"' => {
+                in_string = false;
+                index += 1;
+            }
+            b'\\' if bytes.get(index + 1) == Some(&b'u') => {
+                let Some(unit) = code_unit(&bytes[index + 2..]) else {
+                    return true;
+                };
+                index += 6;
+                if HIGH.contains(&unit) {
+                    // A high surrogate is well formed only when the very next
+                    // escape is a low surrogate.
+                    if bytes.get(index) != Some(&b'\\') || bytes.get(index + 1) != Some(&b'u') {
+                        return true;
+                    }
+                    let Some(low) = code_unit(&bytes[index + 2..]) else {
+                        return true;
+                    };
+                    if !LOW.contains(&low) {
+                        return true;
+                    }
+                    index += 6;
+                } else if LOW.contains(&unit) {
+                    // A low surrogate reached without a high one before it.
+                    return true;
+                }
+            }
+            // Any other two-character escape, including `\\` and `\"`.
+            b'\\' => index += 2,
+            _ => index += 1,
+        }
+    }
+    false
 }
 
 fn params_are_structured(params: Option<&RawValue>) -> bool {
@@ -282,6 +356,55 @@ mod tests {
                 RawMessage::ProtocolError { error } => assert_eq!(error.code, -32600),
                 other => panic!("expected invalid request response, got {other:?}"),
             }
+        }
+    }
+
+    // `params` and `result` are forwarded byte for byte, so an unpaired
+    // surrogate escape would otherwise be re-emitted as JSON a strict peer
+    // cannot decode. Found by the `envelope` fuzz target.
+    #[test]
+    fn rejects_unpaired_surrogate_escapes_in_forwarded_payloads() {
+        for body in [
+            br#"{"jsonrpc":"2.0","method":"m","params":{"a":"\uDBFE"}}"#.as_slice(),
+            br#"{"jsonrpc":"2.0","method":"m","params":["\uDC00"]}"#.as_slice(),
+            br#"{"jsonrpc":"2.0","id":1,"method":"m","params":["\uD800\uD800"]}"#.as_slice(),
+            br#"{"jsonrpc":"2.0","id":1,"result":"\uDBFE"}"#.as_slice(),
+        ] {
+            match parse(Bytes::copy_from_slice(body)) {
+                RawMessage::ProtocolError { error } => assert_eq!(
+                    error.code,
+                    -32700,
+                    "expected a parse error for {}",
+                    String::from_utf8_lossy(body)
+                ),
+                other => panic!("expected parse error, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn accepts_well_formed_escapes_that_only_look_like_surrogates() {
+        for body in [
+            // A valid pair encoding U+1F600.
+            b"{\"jsonrpc\":\"2.0\",\"method\":\"m\",\"params\":[\"\\uD83D\\uDE00\"]}".as_slice(),
+            // An escaped backslash, so `uDBFE` is literal text, not an escape.
+            b"{\"jsonrpc\":\"2.0\",\"method\":\"m\",\"params\":[\"\\\\uDBFE\"]}".as_slice(),
+            // An escaped quote must not end the string scan early.
+            b"{\"jsonrpc\":\"2.0\",\"method\":\"m\",\"params\":[\"\\\"\\uD83D\\uDE00\"]}"
+                .as_slice(),
+            // Surrogate-looking text outside any string.
+            br#"{"jsonrpc":"2.0","method":"m","params":{"uDBFE":1}}"#.as_slice(),
+        ] {
+            let msg = parse(Bytes::copy_from_slice(body));
+            assert!(
+                !matches!(msg, RawMessage::ProtocolError { .. }),
+                "wrongly rejected {}",
+                String::from_utf8_lossy(body)
+            );
+            // Whatever is accepted must re-serialize into decodable JSON.
+            let out = serialize(&msg).unwrap();
+            serde_json::from_slice::<serde_json::Value>(&out)
+                .expect("accepted envelope re-serializes as valid JSON");
         }
     }
 
