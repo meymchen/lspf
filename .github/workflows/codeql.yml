@@ -1,0 +1,73 @@
+name: CodeQL
+
+# This replaces GitHub's code scanning "default setup", which cannot express
+# `paths-ignore`. The Rust extractor resolves every Cargo workspace it finds
+# under the checkout, and this repository has three: the root workspace, `fuzz`,
+# and `editor-validation/zed-extension`. Each carries its own lockfile, so each
+# costs a separate dependency resolution against the registry proxy, and each
+# contributes its dependency sources to the database that the extractor's
+# consistency and summary queries then have to walk. Measured on the default
+# setup, resolving manifests took 51s of a 2m05s extraction while the repository's
+# own 55k lines took 3.5s. Excluding the two auxiliary workspaces is the change
+# that pays for this file existing; `ci/test-codeql-workflow.sh` holds it in place.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # 06:00 Wednesday Singapore time. GitHub cron has no timezone field and is
+    # always UTC, so SGT (UTC+8, no DST) lands this on Tuesday at 22:00: the
+    # day-of-week field reading `2` is deliberate, not an off-by-one. Weekly
+    # keeps alerts fresh against query-pack updates when the code is quiet.
+    - cron: '0 22 * * 2'
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  analyze:
+    name: analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: actions
+            build-mode: none
+          - language: javascript-typescript
+            build-mode: none
+          - language: rust
+            build-mode: none
+            # Scoped to Rust rather than set globally: these directories hold no
+            # JavaScript or workflow files today, so excluding them repository-wide
+            # would be a no-op that quietly starts hiding files from the other
+            # extractors the moment someone adds one.
+            #
+            # `fuzz` is `publish = false` harness code driven by libfuzzer, and
+            # `editor-validation/zed-extension` is a manual-validation shim around
+            # `zed_extension_api`. Neither ships to users, and both are excluded
+            # here for extraction cost, not because they are uninteresting.
+            config: |
+              paths-ignore:
+                - fuzz
+                - editor-validation
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          config: ${{ matrix.config }}
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          category: /language:${{ matrix.language }}
