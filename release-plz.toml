@@ -3,6 +3,11 @@
 # the main crate.
 git_tag_enable = false
 git_release_enable = false
+# Publishing is a human decision. release-plz opens the release pull request and
+# CI runs on it; merging that pull request is what publishes to crates.io.
+# Without this, `release-plz release` publishes from any push to `main` that
+# happens to carry an unreleased version number.
+release_always = false
 
 [[package]]
 name = "lspf"

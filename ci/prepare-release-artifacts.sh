@@ -26,6 +26,19 @@ if ! git diff --quiet "$revision" --; then
     exit 1
 fi
 
+# `release_always = false` makes merging the release pull request the thing that
+# publishes, and release-plz then releases that pull request's last commit
+# whenever it exists on `main`. Under a squash or rebase merge that commit is
+# this revision; under a merge commit it is the second parent, whose tree can
+# differ from the one packaged, signed, and attested here. Refuse to mint
+# provenance that would name a different tree than the one reaching crates.io.
+parent_count=$(($(git rev-list --parents -n 1 "$revision" | wc -w) - 1))
+if ((parent_count > 1)); then
+    printf 'release revision %s is a merge commit with %d parents; merge release pull requests with squash or rebase\n' \
+        "$revision" "$parent_count" >&2
+    exit 1
+fi
+
 crate_version="$(cargo metadata --no-deps --format-version 1 \
     | jq -er --arg name "$crate_name" \
         '.packages[] | select(.name == $name) | .version')"
