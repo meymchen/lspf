@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-workflow="$repo_root/.github/workflows/release-plz.yml"
+workflow="$repo_root/.github/workflows/ci.yml"
 security_workflow="$repo_root/.github/workflows/security.yml"
 permissions_policy="$repo_root/ci/workflow-permissions.json"
 yq_bin="${YQ_BIN:-yq}"
@@ -72,7 +72,7 @@ $yq_bin -e '
 ' "$security_workflow" >/dev/null
 
 jq -e '
-    .workflows[".github/workflows/release-plz.yml"]["release-plz-release"] == {
+    .workflows[".github/workflows/ci.yml"]["release-plz-release"] == {
         "attestations": "write",
         "contents": "write",
         "id-token": "write",
