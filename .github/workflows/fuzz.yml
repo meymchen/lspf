@@ -2,7 +2,17 @@ name: Fuzz and Gate D verification
 
 on:
   schedule:
-    - cron: "17 4 * * *"
+    # 06:00 Wednesday Singapore time. GitHub cron has no timezone field and is
+    # always UTC, so SGT (UTC+8, no DST) lands this on Tuesday at 22:00: the
+    # day-of-week field reading `2` is deliberate, not an off-by-one.
+    #
+    # This is weekly, where the previous daily cadence existed to keep crash
+    # bisection inside a 24-hour window. At roughly 4.7 pushes a day, a weekly
+    # sweep means a reported crash is attributable to ~33 commits rather than
+    # ~5. Bisecting is `cargo +nightly fuzz run <target> <reproducer>` against
+    # candidate revisions, and the retained reproducer makes that mechanical;
+    # the cost is the operator's time, which is the trade being made here.
+    - cron: "0 22 * * 2"
   workflow_dispatch:
 
 permissions: {}
