@@ -785,7 +785,10 @@ async fn connection_messages_completion_and_close_use_the_stable_schema_without_
 
     let text = logs.text();
     for secret in ["secret-params", "secret-result", "secret-document-text"] {
-        assert!(!text.contains(secret), "trace leaked {secret}: {text}");
+        assert!(
+            !text.contains(secret),
+            "trace output contained a redaction test fixture"
+        );
     }
 }
 

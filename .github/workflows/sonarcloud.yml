@@ -64,7 +64,7 @@ jobs:
           npm --prefix tools/vscode-test-client run test:coverage
           sed -i 's|^SF:|SF:tools/vscode-test-client/|' coverage/vscode-test-client/lcov.info
       - name: Analyze with SonarCloud
-        uses: SonarSource/sonarcloud-github-action@ffc3010689be73b8e5ae0c57ce35968afd7909e8 # v5
+        uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f # v8.2.1
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}   # Generate a token on Sonarcloud.io, add it to the secrets of this repo with the name SONAR_TOKEN (Settings > Secrets > Actions > add new repository secret)
         with:
@@ -74,7 +74,8 @@ jobs:
             # mandatory
             -Dsonar.projectKey=meymchen_lspf
             -Dsonar.organization=meymchen
-            -Dsonar.tests=.
+            -Dsonar.sources=crates/lspf/src,crates/lspf-hello/src,crates/lspf-markdown/src,tools/vscode-test-client/src
+            -Dsonar.tests=crates/lspf/tests,crates/lspf-hello/tests,crates/lspf-markdown/tests,tools/vscode-test-client/test
             -Dsonar.test.inclusions=tools/vscode-test-client/test/**/*.test.ts
             -Dsonar.javascript.lcov.reportPaths=coverage/vscode-test-client/lcov.info
             # Comma-separated paths to directories containing main source files.
