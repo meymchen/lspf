@@ -9,37 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.9.2](https://github.com/meymchen/lspf/compare/v0.9.1...v0.9.2) - 2026-08-31
 
-### Fixed
-
-- reject unpaired surrogate escapes and close a soak wakeup race ([#262](https://github.com/meymchen/lspf/pull/262))
-- *(ci)* avoid retaining soak wire history
-- *(ci)* shard bounded-memory soak journeys
-- *(ci)* make soak queue sampling deterministic ([#233](https://github.com/meymchen/lspf/pull/233))
-
-### Other
-
-- Build a first-party Markdown link language server ([#234](https://github.com/meymchen/lspf/pull/234))
-- Run bounded-memory soak journeys ([#186](https://github.com/meymchen/lspf/pull/186)) ([#232](https://github.com/meymchen/lspf/pull/232))
-- Establish reproducible performance baselines ([#231](https://github.com/meymchen/lspf/pull/231))
-- Model protocol session concurrency ([#230](https://github.com/meymchen/lspf/pull/230))
-- Fuzz protocol and document boundaries ([#228](https://github.com/meymchen/lspf/pull/228))
-- Publish reusable protocol testing utilities ([#227](https://github.com/meymchen/lspf/pull/227))
-- Record Gate C endpoint evidence ([#226](https://github.com/meymchen/lspf/pull/226))
-- Publish the Client adoption guide and remove localization references ([#225](https://github.com/meymchen/lspf/pull/225))
-- Prove public-only Server and Client conformance ([#224](https://github.com/meymchen/lspf/pull/224))
-- Implement supervised stdio child connection ([#178](https://github.com/meymchen/lspf/pull/178)) ([#223](https://github.com/meymchen/lspf/pull/223))
-- Expose ServerHandle and ClientContext reverse interactions ([#221](https://github.com/meymchen/lspf/pull/221))
-
 ### Added
 
 - Add `MemoryTransport::pair_uncaptured` for long-lived and high-volume tests
   that must not retain a clone of every message as wire history.
 - Run bounded-memory request, cancellation, edit, progress, slow-peer,
-  reconnect, and shutdown soak journeys with retained time-series evidence.
+  reconnect, and shutdown soak journeys with retained time-series evidence
+  ([#186](https://github.com/meymchen/lspf/pull/186)) ([#232](https://github.com/meymchen/lspf/pull/232)).
 - Publish a Client adoption guide with compiling custom-Transport and
-  supervised-stdio-child walkthroughs.
+  supervised-stdio-child walkthroughs
+  ([#225](https://github.com/meymchen/lspf/pull/225)).
 - Launch, drive, and deterministically reclaim stdio language-server children
-  through `ClientBuilder::spawn` and `ChildConnection`.
+  through `ClientBuilder::spawn` and `ChildConnection`
+  ([#178](https://github.com/meymchen/lspf/pull/178)) ([#223](https://github.com/meymchen/lspf/pull/223)).
+- Build a first-party Markdown link language server ([#234](https://github.com/meymchen/lspf/pull/234))
+- Publish reusable protocol testing utilities ([#227](https://github.com/meymchen/lspf/pull/227))
+- Expose ServerHandle and ClientContext reverse interactions ([#221](https://github.com/meymchen/lspf/pull/221))
+
+### Fixed
+
+- Reject unpaired UTF-16 surrogate escapes in forwarded `params` and `result`
+  with a -32700 parse error instead of passing them through to the peer. Such
+  an escape denotes a character with no UTF-8 encoding, so forwarding it could
+  hand a peer JSON that peer cannot decode
+  ([#262](https://github.com/meymchen/lspf/pull/262)).
+
+### Other
+
+- Establish reproducible performance baselines ([#231](https://github.com/meymchen/lspf/pull/231))
+- Model protocol session concurrency ([#230](https://github.com/meymchen/lspf/pull/230))
+- Fuzz protocol and document boundaries ([#228](https://github.com/meymchen/lspf/pull/228))
+- Record Gate C endpoint evidence ([#226](https://github.com/meymchen/lspf/pull/226))
+- Prove public-only Server and Client conformance ([#224](https://github.com/meymchen/lspf/pull/224))
 
 ## [0.9.1](https://github.com/meymchen/lspf/compare/v0.9.0...v0.9.1) - 2026-08-26
 
