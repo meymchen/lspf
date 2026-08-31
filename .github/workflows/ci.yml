@@ -453,11 +453,30 @@ jobs:
   # release gates live here rather than in a separate workflow so that one push
   # runs them once: `needs` reuses the very jobs CI already ran for this
   # revision, which keeps "not published without passing its gates" structural.
+  #
+  # Keep this list identical to `gate-a-evidence`'s. Gate A is what declares a
+  # revision releasable, so the checks that establish its evidence must be
+  # exactly the checks a publish has to clear; `gate-a-evidence` itself cannot
+  # be depended on, because it runs under `always()` and therefore succeeds even
+  # when the gates it reports on failed.
   release-plz-release:
     name: Release-plz release
     if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
-    needs: [public-docs, packaged-crate, security]
+    needs:
+      - markdownlint
+      - public-docs
+      - packaged-crate
+      - security
+      - public-api
+      - msrv
+      - feature-contract
+      - native-matrix
+      - test
+      - native-lifecycle
+      - wasm
+      - test-coverage
+      - performance-baseline
     permissions:
       attestations: write
       contents: write
@@ -473,10 +492,31 @@ jobs:
         uses: ./.github/actions/setup-rust
         with:
           cache: "false"
+      # Most pushes to `main` release nothing, and packaging, signing, and
+      # attesting every one of them would write a Sigstore transparency-log
+      # entry per commit and retain a 90-day artifact for a release that never
+      # happened. `git_tag_name` is `v{{ version }}`, so an absent tag for the
+      # manifest version is precisely release-plz's own "this revision is still
+      # unreleased". Everything this gates stays *ahead* of `release-plz
+      # release`, so failing to produce provenance still blocks the publish.
+      - name: Detect whether this revision is still unreleased
+        id: pending
+        run: |
+          version="$(cargo metadata --no-deps --format-version 1 \
+            | jq -er '.packages[] | select(.name == "lspf") | .version')"
+          if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+            echo "Tag v$version already exists; skipping the release pipeline"
+            echo "pending=false" >>"$GITHUB_OUTPUT"
+          else
+            echo "Tag v$version is absent; preparing release artifacts"
+            echo "pending=true" >>"$GITHUB_OUTPUT"
+          fi
       - name: Prepare release artifacts from the validated revision
         id: artifacts
+        if: steps.pending.outputs.pending == 'true'
         run: bash ci/prepare-release-artifacts.sh "$GITHUB_SHA" "$RUNNER_TEMP/release-artifacts"
       - name: Generate crate SBOM
+        if: steps.pending.outputs.pending == 'true'
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
           file: ${{ steps.artifacts.outputs.crate }}
@@ -486,6 +526,7 @@ jobs:
           upload-release-assets: false
       - name: Generate build provenance statement
         id: provenance
+        if: steps.pending.outputs.pending == 'true'
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: |
@@ -496,11 +537,13 @@ jobs:
             ${{ steps.artifacts.outputs.directory }}/lspf-CHANGELOG.md
       - name: Generate SBOM attestation
         id: sbom-attestation
+        if: steps.pending.outputs.pending == 'true'
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: ${{ steps.artifacts.outputs.crate }}
           sbom-path: ${{ steps.artifacts.outputs.sbom }}
       - name: Retain attestation statements and artifact hashes
+        if: steps.pending.outputs.pending == 'true'
         env:
           ARTIFACT_DIRECTORY: ${{ steps.artifacts.outputs.directory }}
           CRATE_PATH: ${{ steps.artifacts.outputs.crate }}
@@ -523,6 +566,7 @@ jobs:
             sbom-attestation.jsonl \
             > SHA256SUMS
       - name: Retain traceable release artifacts
+        if: steps.pending.outputs.pending == 'true'
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: lspf-${{ steps.artifacts.outputs.version }}-release-artifacts
@@ -538,7 +582,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Attach artifacts to the GitHub release
-        if: steps.release.outputs.releases_created == 'true'
+        if: steps.pending.outputs.pending == 'true' && steps.release.outputs.releases_created == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -565,10 +609,17 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      # Cached, unlike the other release job: this one compiles
+      # `cargo-semver-checks` from source on every push to `main`.
       - name: Install Rust toolchain
         uses: ./.github/actions/setup-rust
-        with:
-          cache: "false"
+      # release-plz's `semver_check` defaults to on but shells out to
+      # `cargo-semver-checks`, so without this install it silently does nothing
+      # and every breaking change is proposed as a minor bump. Keep the version
+      # pinned to the one the `public-api` job uses, so the bump release-plz
+      # picks and the compatibility gate agree on what counts as breaking.
+      - name: Install cargo-semver-checks
+        run: cargo install cargo-semver-checks --version 0.50.0 --locked
       # A branch pushed with the default `GITHUB_TOKEN` starts no workflow run,
       # by design, so release pull requests arrive with CI never having run on
       # them. Mint an App token instead, whose pushes are ordinary events.
