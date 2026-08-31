@@ -28,8 +28,14 @@ pub fn envelope(data: &[u8]) {
 
     let parsed = envelope::parse(Bytes::copy_from_slice(data));
     let serialized = envelope::serialize(&parsed).expect("parsed envelope must serialize");
-    serde_json::from_slice::<serde_json::Value>(&serialized)
-        .expect("serialized envelope must be valid JSON");
+    // Assert well-formedness, not `serde_json::Value` representability. `Value`
+    // stores every number as an `f64`, so asserting on it rejects large but
+    // perfectly legal JSON such as `1e999`, which the framework forwards
+    // verbatim and any peer is free to accept. Escapes that genuinely cannot
+    // reach the wire, unpaired UTF-16 surrogates, are rejected by
+    // `envelope::parse` instead and covered by its own tests.
+    serde_json::from_slice::<&serde_json::value::RawValue>(&serialized)
+        .expect("serialized envelope must be well-formed JSON");
 
     if !matches!(parsed, crate::RawMessage::ProtocolError { .. }) {
         let reparsed = envelope::parse(Bytes::from(serialized.clone()));
