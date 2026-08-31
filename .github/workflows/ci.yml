@@ -569,9 +569,25 @@ jobs:
         uses: ./.github/actions/setup-rust
         with:
           cache: "false"
+      # A branch pushed with the default `GITHUB_TOKEN` starts no workflow run,
+      # by design, so release pull requests arrive with CI never having run on
+      # them. Mint an App token instead, whose pushes are ordinary events.
+      #
+      # The App id is a repository variable rather than a secret because it is
+      # not sensitive, and because `vars` can gate this step while `secrets`
+      # cannot. Until that variable is set the step is skipped and release-plz
+      # falls back to `GITHUB_TOKEN`, so this is safe to merge before the App
+      # exists; it only means release pull requests keep arriving unchecked.
+      - name: Generate a token whose pushes trigger workflows
+        id: app-token
+        if: ${{ vars.RELEASE_PLZ_APP_ID != '' }}
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.RELEASE_PLZ_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PLZ_APP_PRIVATE_KEY }}
       - name: Run release-plz
         uses: release-plz/action@2eb1d8bcb770b4c48ccfaad919734b38b51958c9 # v0.5
         with:
           command: release-pr
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
