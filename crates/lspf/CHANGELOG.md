@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.3](https://github.com/meymchen/lspf/compare/v0.9.2...v0.9.3) - 2026-08-31
+
+### Fixed
+
+- *(fuzzing)* assert well-formed JSON rather than Value representability ([#265](https://github.com/meymchen/lspf/pull/265))
+
 ## [0.9.2](https://github.com/meymchen/lspf/compare/v0.9.1...v0.9.2) - 2026-08-31
 
 ### Added
