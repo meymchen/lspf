@@ -3,24 +3,38 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$repo_root/ci/workflow-test-helpers.sh"
-ci_workflow="$repo_root/.github/workflows/ci.yml"
+fuzz_workflow="$repo_root/.github/workflows/fuzz.yml"
 security_workflow="$repo_root/.github/workflows/security.yml"
 permissions_policy="$repo_root/ci/workflow-permissions.json"
 
-ci_json="$(workflow_yaml_to_json "$ci_workflow")"
-job="$(jq -c '.jobs["gate-d-evidence"]' <<<"$ci_json")"
+fuzz_json="$(workflow_yaml_to_json "$fuzz_workflow")"
+job="$(jq -c '.jobs["gate-d-evidence"]' <<<"$fuzz_json")"
 if [[ $job == null ]]; then
     echo 'Gate D evidence job is missing' >&2
     exit 1
 fi
 
+# Gate D runs on a schedule rather than per push. The cadence itself is a tuning
+# knob, so this asserts that both triggers exist without pinning the cron
+# expression; the retention and permission assertions below are the contract.
+#
+# The trigger block is read as `.on // .["true"]` because the two backends of
+# `workflow_yaml_to_json` disagree about this one key: yq follows YAML 1.2 and
+# keeps `on` a string, while PyYAML follows YAML 1.1 and resolves it to the
+# boolean `true`.
+jq -e '
+  (.on // .["true"]) as $triggers
+  | ($triggers.schedule | type == "array" and length > 0)
+    and ($triggers | has("workflow_dispatch"))
+' <<<"$fuzz_json" >/dev/null
+
 jq -e '
   . != null
   and .name == "Gate D verification evidence"
-  and .if == "${{ github.event_name == '\''push'\'' }}"
+  and (.if == null)
   and .["runs-on"] == "ubuntu-latest"
   and .["timeout-minutes"] == 60
-  and .permissions == {"contents": "read"}
+  and .permissions == {"contents": "read", "issues": "write"}
   and any(.steps[];
     ((.uses // "") == "./.github/actions/setup-rust")
     and .with.toolchain == "nightly"
@@ -42,6 +56,11 @@ jq -e '
     and .with.path == "${{ runner.temp }}/gate-d-evidence"
     and .with["if-no-files-found"] == "error"
     and .with["retention-days"] == 90)
+  and any(.steps[];
+    .name == "Report the failure once"
+    and .if == "${{ failure() }}"
+    and (.run | contains("gh issue list --label gate-d-failure"))
+    and (.run | contains("gh issue create")))
 ' <<<"$job" >/dev/null
 
 workflow_yaml_to_json "$security_workflow" | jq -e '
@@ -50,8 +69,8 @@ workflow_yaml_to_json "$security_workflow" | jq -e '
 ' >/dev/null
 
 jq -e '
-  .workflows[".github/workflows/ci.yml"]["gate-d-evidence"]
-    == {"contents": "read"}
+  .workflows[".github/workflows/fuzz.yml"]["gate-d-evidence"]
+    == {"contents": "read", "issues": "write"}
 ' "$permissions_policy" >/dev/null
 
 echo 'Gate D evidence workflow contract verified'

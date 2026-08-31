@@ -21,21 +21,6 @@
       "gate-a-evidence": { "contents": "read" },
       "gate-b-evidence": { "contents": "read" },
       "gate-c-evidence": { "contents": "read" },
-      "gate-d-evidence": { "contents": "read" }
-    },
-    ".github/workflows/packaged-crate.yml": {
-      "packaged-crate": { "contents": "read" }
-    },
-    ".github/workflows/public-docs.yml": {
-      "public-docs": { "contents": "read" }
-    },
-    ".github/workflows/fuzz.yml": {
-      "protocol-boundaries": { "contents": "read" }
-    },
-    ".github/workflows/release-plz.yml": {
-      "public-docs": { "contents": "read" },
-      "packaged-crate": { "contents": "read" },
-      "security": { "contents": "read" },
       "release-plz-release": {
         "attestations": "write",
         "contents": "write",
@@ -45,6 +30,18 @@
       "release-plz-pr": {
         "contents": "write",
         "pull-requests": "write"
+      }
+    },
+    ".github/workflows/packaged-crate.yml": {
+      "packaged-crate": { "contents": "read" }
+    },
+    ".github/workflows/public-docs.yml": {
+      "public-docs": { "contents": "read" }
+    },
+    ".github/workflows/fuzz.yml": {
+      "gate-d-evidence": {
+        "contents": "read",
+        "issues": "write"
       }
     },
     ".github/workflows/security.yml": {

@@ -1,8 +1,8 @@
-name: Fuzz
+name: Fuzz and Gate D verification
 
 on:
   schedule:
-    - cron: "17 4 * * 1"
+    - cron: "17 4 * * *"
   workflow_dispatch:
 
 permissions: {}
@@ -12,26 +12,61 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  protocol-boundaries:
-    name: all bounded fuzz targets
+  gate-d-evidence:
+    name: Gate D verification evidence
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     permissions:
       contents: read
+      issues: write
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: ./.github/actions/setup-rust
         with:
           toolchain: nightly
           cache: "false"
-      - run: cargo install cargo-fuzz --locked
-      - name: Run every fuzz target
-        run: bash ci/run-fuzz.sh --all
-      - name: Retain minimized reproducible inputs
-        if: failure()
+      - name: Install the fuzz runner
+        run: cargo install cargo-fuzz --locked
+      - name: Run revision-locked Gate D verification
+        run: >-
+          bash ci/run-gate-d-evidence.sh
+          "$GITHUB_SHA"
+          "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          "$RUNNER_TEMP/gate-d-evidence"
+      - name: Retain Gate D verification evidence
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: fuzz-reproducers
-          path: fuzz/artifacts
+          name: gate-d-verification-evidence
+          path: ${{ runner.temp }}/gate-d-evidence
           if-no-files-found: error
           retention-days: 90
+      # One open issue at a time: a passing run does not prove that the crash a
+      # previous run reported was fixed, so nothing here closes the issue.
+      - name: Report the failure once
+        if: ${{ failure() }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # Both `gh issue list --label` and `gh issue create --label` fail on a
+          # label that does not exist, so provision it here rather than relying
+          # on undocumented repository setup. Creating it twice is not an error.
+          gh label create gate-d-failure \
+            --description "Scheduled Gate D verification is failing" \
+            --color B60205 2>/dev/null || true
+          if [ -n "$(gh issue list --label gate-d-failure --state open --limit 1 --json number --jq '.[].number')" ]; then
+            echo 'An open gate-d-failure issue already tracks this; not filing another.'
+            exit 0
+          fi
+          gh issue create \
+            --title "Gate D verification failed on $GITHUB_SHA" \
+            --label gate-d-failure \
+            --body "$(printf '%s\n' \
+              "Gate D verification failed for [\`$GITHUB_SHA\`]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$GITHUB_SHA)." \
+              "" \
+              "Run: $RUN_URL" \
+              "" \
+              "The retained \`gate-d-verification-evidence\` artifact holds the component logs and any minimized fuzz reproducers." \
+              "" \
+              "This issue stays open until someone confirms the underlying defect is fixed; later runs will not file duplicates while it is open.")"
