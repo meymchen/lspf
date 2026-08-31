@@ -32,6 +32,12 @@
         "pull-requests": "write"
       }
     },
+    ".github/workflows/codeql.yml": {
+      "analyze": {
+        "contents": "read",
+        "security-events": "write"
+      }
+    },
     ".github/workflows/packaged-crate.yml": {
       "packaged-crate": { "contents": "read" }
     },
