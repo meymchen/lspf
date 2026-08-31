@@ -2,17 +2,23 @@ name: Fuzz and Gate D verification
 
 on:
   schedule:
-    # 06:00 Wednesday Singapore time. GitHub cron has no timezone field and is
-    # always UTC, so SGT (UTC+8, no DST) lands this on Tuesday at 22:00: the
-    # day-of-week field reading `2` is deliberate, not an off-by-one.
+    # 06:00 Wednesday and Saturday Singapore time. GitHub cron has no timezone
+    # field and is always UTC, so SGT (UTC+8, no DST) lands these on Tuesday and
+    # Friday at 22:00: the day-of-week field reading `2,5` is deliberate, not an
+    # off-by-one.
     #
-    # This is weekly, where the previous daily cadence existed to keep crash
-    # bisection inside a 24-hour window. At roughly 4.7 pushes a day, a weekly
-    # sweep means a reported crash is attributable to ~33 commits rather than
-    # ~5. Bisecting is `cargo +nightly fuzz run <target> <reproducer>` against
-    # candidate revisions, and the retained reproducer makes that mechanical;
-    # the cost is the operator's time, which is the trade being made here.
-    - cron: "0 22 * * 2"
+    # Two fixed weekdays approximate "every three days" without the wart that
+    # `*/3` in the day-of-month field carries, where the 31st is followed by the
+    # 1st a single day later. The gap here alternates 3 and 4 days and is
+    # identical every week.
+    #
+    # The cadence is a bisection-window knob. It was daily before #272, at
+    # roughly 4.7 pushes a day, so a reported crash was attributable to ~5
+    # commits; here it is ~14-19. Bisecting is `cargo +nightly fuzz run <target>
+    # <reproducer>` against candidate revisions and the retained reproducer
+    # makes that mechanical, so what widens is the operator's time to attribute
+    # a crash, not the ability to.
+    - cron: "0 22 * * 2,5"
   workflow_dispatch:
 
 permissions: {}
