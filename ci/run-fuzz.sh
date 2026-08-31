@@ -53,7 +53,16 @@ check_contract() {
         fi
     done
 
-    if ! grep -q 'bash ci/run-fuzz.sh --all' "$workflow"; then
+    # The scheduled workflow may sweep every target directly, or reach it
+    # through Gate D verification, which runs the same `--all` sweep as one of
+    # its components. Follow the second hop rather than accepting the mere
+    # mention of the Gate D script, so this keeps proving that a scheduled run
+    # covers every target.
+    local gate_d="$repo_root/ci/run-gate-d-evidence.sh"
+    if ! grep -q 'bash ci/run-fuzz.sh --all' "$workflow" \
+        && ! { grep -q 'bash ci/run-gate-d-evidence.sh' "$workflow" \
+            && grep -q 'bash ci/run-fuzz.sh --all' "$gate_d"; }
+    then
         echo "scheduled workflow does not run every fuzz target" >&2
         return 1
     fi
