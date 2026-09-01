@@ -34,7 +34,7 @@ use gen_lsp_types::{
     DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
     InitializeParams, InitializedParams, LspErrorCodes, Save, ServerInfo, SetTraceParams,
     TextDocumentSyncKind, TextDocumentSyncOptions, TraceValue, WillSaveTextDocumentParams,
-    WorkDoneProgressCancelParams, WorkspaceFoldersServerCapabilities, WorkspaceOptions,
+    WorkDoneProgressCancelParams, WorkspaceFoldersServerCapabilities,
 };
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
@@ -1139,18 +1139,12 @@ where
         // engine advertises its support itself. Registration-contributed
         // workspace fields (the file-operation families) come from the frozen
         // catalog and are preserved beside the protocol-owned field.
-        let file_operations = standard_capabilities
-            .workspace
-            .take()
-            .and_then(|workspace| workspace.file_operations);
-        standard_capabilities.workspace = Some(WorkspaceOptions {
-            workspace_folders: Some(WorkspaceFoldersServerCapabilities {
-                supported: Some(true),
-                change_notifications: Some(true.into()),
-            }),
-            file_operations,
-            ..WorkspaceOptions::default()
+        let mut workspace = standard_capabilities.workspace.take().unwrap_or_default();
+        workspace.workspace_folders = Some(WorkspaceFoldersServerCapabilities {
+            supported: Some(true),
+            change_notifications: Some(true.into()),
         });
+        standard_capabilities.workspace = Some(workspace);
 
         // `on_initialize` may contribute optional ServerInfo but cannot
         // register routes or replace the generated capabilities.

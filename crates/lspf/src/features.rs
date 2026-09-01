@@ -32,18 +32,20 @@ use gen_lsp_types::{
     DocumentLinkOptions, DocumentLinkRequest, DocumentLinkResolveRequest as DocumentLinkResolve,
     DocumentOnTypeFormattingOptions, DocumentOnTypeFormattingRequest as OnTypeFormatting,
     DocumentRangeFormattingOptions, DocumentRangeFormattingRequest as RangeFormatting,
-    DocumentSymbolOptions, DocumentSymbolRequest, FileOperationRegistrationOptions,
-    FoldingRangeOptions as FoldingProviderOptions, FoldingRangeRequest, HoverRequest,
-    ImplementationRegistrationOptions, ImplementationRequest as GotoImplementation,
-    InlayHintOptions, InlayHintRequest, InlayHintResolveRequest, InlineValueOptions,
+    DocumentRangesFormattingRequest, DocumentSymbolOptions, DocumentSymbolRequest,
+    FileOperationRegistrationOptions, FoldingRangeOptions as FoldingProviderOptions,
+    FoldingRangeRequest, HoverRequest, ImplementationRegistrationOptions,
+    ImplementationRequest as GotoImplementation, InlayHintOptions, InlayHintRequest,
+    InlayHintResolveRequest, InlineCompletionOptions, InlineCompletionRequest, InlineValueOptions,
     InlineValueRequest, LinkedEditingRangeOptions, LinkedEditingRangeRequest as LinkedEditingRange,
     MonikerOptions, MonikerRequest, PrepareRenameRequest, ReferenceOptions as ReferencesOptions,
     ReferencesRequest as References, RenameOptions, RenameRequest as Rename, SelectionRangeOptions,
     SelectionRangeRequest, SemanticTokensDeltaRequest as SemanticTokensFullDeltaRequest,
     SemanticTokensOptions, SemanticTokensRangeRequest,
     SemanticTokensRequest as SemanticTokensFullRequest, SignatureHelpOptions, SignatureHelpRequest,
-    TypeDefinitionRegistrationOptions, TypeDefinitionRequest as GotoTypeDefinition,
-    TypeHierarchyOptions, TypeHierarchyPrepareRequest as TypeHierarchyPrepare,
+    TextDocumentContentOptions, TextDocumentContentRequest, TypeDefinitionRegistrationOptions,
+    TypeDefinitionRequest as GotoTypeDefinition, TypeHierarchyOptions,
+    TypeHierarchyPrepareRequest as TypeHierarchyPrepare,
     TypeHierarchySubtypesRequest as TypeHierarchySubtypes,
     TypeHierarchySupertypesRequest as TypeHierarchySupertypes,
     WillCreateFilesRequest as WillCreateFiles, WillDeleteFilesRequest as WillDeleteFiles,
@@ -77,6 +79,11 @@ pub(crate) mod sealed {
         /// Record this feature's contribution to the capability catalog, or
         /// return a [`BuildError`] if it conflicts with an existing one.
         fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError>;
+
+        /// Classify a second registration of this descriptor's request method.
+        fn duplicate_error(&self, method: String) -> BuildError {
+            BuildError::DuplicateMethod(method)
+        }
     }
 }
 
@@ -422,6 +429,84 @@ impl sealed::Sealed for RangeFormattingFeature {
 }
 impl FeatureSpec for RangeFormattingFeature {
     type Marker = RangeFormatting;
+}
+
+/// The `textDocument/rangesFormatting` feature descriptor.
+pub struct RangesFormattingFeature {
+    options: DocumentRangeFormattingOptions,
+}
+
+/// Describe multiple-ranges formatting and its shared range provider options.
+pub fn ranges_formatting(options: DocumentRangeFormattingOptions) -> RangesFormattingFeature {
+    RangesFormattingFeature { options }
+}
+
+#[allow(private_interfaces)]
+impl sealed::Sealed for RangesFormattingFeature {
+    fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
+        caps.set_ranges_formatting(self.options)
+    }
+
+    fn duplicate_error(&self, _method: String) -> BuildError {
+        BuildError::ConflictingCapability {
+            field: "documentRangeFormattingProvider",
+        }
+    }
+}
+impl FeatureSpec for RangesFormattingFeature {
+    type Marker = DocumentRangesFormattingRequest;
+}
+
+/// The `textDocument/inlineCompletion` feature descriptor.
+pub struct InlineCompletionFeature {
+    options: InlineCompletionOptions,
+}
+
+/// Describe inline completion and its provider options.
+pub fn inline_completion(options: InlineCompletionOptions) -> InlineCompletionFeature {
+    InlineCompletionFeature { options }
+}
+
+#[allow(private_interfaces)]
+impl sealed::Sealed for InlineCompletionFeature {
+    fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
+        caps.set_inline_completion(self.options)
+    }
+
+    fn duplicate_error(&self, _method: String) -> BuildError {
+        BuildError::ConflictingCapability {
+            field: "inlineCompletionProvider",
+        }
+    }
+}
+impl FeatureSpec for InlineCompletionFeature {
+    type Marker = InlineCompletionRequest;
+}
+
+/// The `workspace/textDocumentContent` feature descriptor.
+pub struct TextDocumentContentFeature {
+    options: TextDocumentContentOptions,
+}
+
+/// Describe virtual text-document content and the URI schemes it serves.
+pub fn text_document_content(options: TextDocumentContentOptions) -> TextDocumentContentFeature {
+    TextDocumentContentFeature { options }
+}
+
+#[allow(private_interfaces)]
+impl sealed::Sealed for TextDocumentContentFeature {
+    fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
+        caps.set_text_document_content(self.options.clone())
+    }
+
+    fn duplicate_error(&self, _method: String) -> BuildError {
+        BuildError::ConflictingCapability {
+            field: "workspace.textDocumentContent",
+        }
+    }
+}
+impl FeatureSpec for TextDocumentContentFeature {
+    type Marker = TextDocumentContentRequest;
 }
 
 /// The `textDocument/onTypeFormatting` feature descriptor.

@@ -23,11 +23,11 @@ use gen_lsp_types::{
     DocumentOnTypeFormattingOptions, DocumentRangeFormattingOptions, DocumentSymbolOptions,
     ExecuteCommandOptions, FileOperationOptions, FileOperationRegistrationOptions,
     FoldingRangeOptions, Full, ImplementationRegistrationOptions, InlayHintOptions,
-    InlineValueOptions, LinkedEditingRangeOptions, MonikerOptions, ReferenceOptions, RenameOptions,
-    SelectionRangeOptions, SemanticTokensFullDelta, SemanticTokensOptions,
-    SemanticTokensOptionsRange, ServerCapabilities, SignatureHelpOptions,
-    TypeDefinitionRegistrationOptions, TypeHierarchyOptions, WorkspaceOptions,
-    WorkspaceSymbolOptions,
+    InlineCompletionOptions, InlineValueOptions, LinkedEditingRangeOptions, MonikerOptions,
+    ReferenceOptions, RenameOptions, SelectionRangeOptions, SemanticTokensFullDelta,
+    SemanticTokensOptions, SemanticTokensOptionsRange, ServerCapabilities, SignatureHelpOptions,
+    TextDocumentContentOptions, TypeDefinitionRegistrationOptions, TypeHierarchyOptions,
+    WorkspaceOptions, WorkspaceSymbolOptions,
 };
 
 use crate::error::BuildError;
@@ -53,6 +53,7 @@ pub(crate) struct CapabilityBuilder {
     type_hierarchy: BaseDependentFamily<TypeHierarchyOptions>,
     color: BaseDependentFamily<DocumentColorOptions>,
     semantic_tokens: SemanticTokensFamily,
+    range_formatting: RangeFormattingFamily,
     completion: CompletionFamily,
     diagnostics: DiagnosticFamily,
     workspace_symbols: WorkspaceSymbolFamily,
@@ -64,6 +65,7 @@ pub(crate) struct CapabilityBuilder {
     file_create: FileOperationFamily,
     file_rename: FileOperationFamily,
     file_delete: FileOperationFamily,
+    text_document_content: Option<TextDocumentContentOptions>,
     will_save_wait_until: bool,
 }
 
@@ -128,6 +130,18 @@ fn contribute_singular<T: PartialEq>(
     }
 }
 
+fn contribute_unique<T>(
+    target: &mut Option<T>,
+    contribution: T,
+    field: &'static str,
+) -> Result<(), BuildError> {
+    if target.is_some() {
+        return Err(BuildError::ConflictingCapability { field });
+    }
+    *target = Some(contribution);
+    Ok(())
+}
+
 /// The complete capability object frozen from the registration catalog.
 pub(crate) type GeneratedCapabilities = ServerCapabilities;
 
@@ -140,6 +154,76 @@ struct SemanticTokensFamily {
     declared_full: Option<bool>,
     declared_delta: Option<bool>,
     declared_range: Option<bool>,
+}
+
+#[derive(Clone, Default)]
+struct RangeFormattingFamily {
+    shared_options: Option<DocumentRangeFormattingOptions>,
+    range: bool,
+    ranges: bool,
+    declared_ranges: Option<bool>,
+}
+
+#[derive(Clone, Copy)]
+enum RangeFormattingMode {
+    Range,
+    Ranges,
+}
+
+impl RangeFormattingFamily {
+    fn contribute(
+        &mut self,
+        mut options: DocumentRangeFormattingOptions,
+        mode: RangeFormattingMode,
+    ) -> Result<(), BuildError> {
+        let field = "documentRangeFormattingProvider";
+        let declared_ranges = options.ranges_support.take();
+        if self
+            .shared_options
+            .as_ref()
+            .is_some_and(|existing| *existing != options)
+        {
+            return Err(BuildError::ConflictingCapability { field });
+        }
+
+        let mut next = self.clone();
+        next.shared_options = Some(options);
+        match (next.declared_ranges, declared_ranges) {
+            (Some(existing), Some(value)) if existing != value => {
+                return Err(BuildError::ConflictingCapability { field });
+            }
+            (None, Some(value)) => next.declared_ranges = Some(value),
+            _ => {}
+        }
+        let registered = match mode {
+            RangeFormattingMode::Range => &mut next.range,
+            RangeFormattingMode::Ranges => &mut next.ranges,
+        };
+        if *registered {
+            return Err(BuildError::ConflictingCapability { field });
+        }
+        *registered = true;
+        *self = next;
+        Ok(())
+    }
+
+    fn validate(&self) -> Result<(), BuildError> {
+        if self
+            .declared_ranges
+            .is_some_and(|declared| declared != self.ranges)
+        {
+            return Err(BuildError::ConflictingCapability {
+                field: "documentRangeFormattingProvider",
+            });
+        }
+        Ok(())
+    }
+
+    fn finish(mut self) -> Option<DocumentRangeFormattingOptions> {
+        let mut options = self.shared_options.take()?;
+        options.ranges_support = self.ranges.then_some(true);
+        Some(options)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -452,10 +536,37 @@ impl CapabilityBuilder {
         &mut self,
         options: DocumentRangeFormattingOptions,
     ) -> Result<(), BuildError> {
-        contribute_singular(
-            &mut self.caps.document_range_formatting_provider,
+        self.range_formatting
+            .contribute(options, RangeFormattingMode::Range)
+    }
+
+    pub(crate) fn set_ranges_formatting(
+        &mut self,
+        options: DocumentRangeFormattingOptions,
+    ) -> Result<(), BuildError> {
+        self.range_formatting
+            .contribute(options, RangeFormattingMode::Ranges)
+    }
+
+    pub(crate) fn set_inline_completion(
+        &mut self,
+        options: InlineCompletionOptions,
+    ) -> Result<(), BuildError> {
+        contribute_unique(
+            &mut self.caps.inline_completion_provider,
             options.into(),
-            "documentRangeFormattingProvider",
+            "inlineCompletionProvider",
+        )
+    }
+
+    pub(crate) fn set_text_document_content(
+        &mut self,
+        options: TextDocumentContentOptions,
+    ) -> Result<(), BuildError> {
+        contribute_unique(
+            &mut self.text_document_content,
+            options,
+            "workspace.textDocumentContent",
         )
     }
 
@@ -921,6 +1032,7 @@ impl CapabilityBuilder {
         self.type_hierarchy.validate("typeHierarchyProvider")?;
         self.color.validate("colorProvider")?;
         self.semantic_tokens.validate()?;
+        self.range_formatting.validate()?;
 
         let clash = || BuildError::ConflictingCapability {
             field: "completionProvider",
@@ -1052,6 +1164,9 @@ impl CapabilityBuilder {
         if let Some(options) = self.semantic_tokens.finish() {
             self.caps.semantic_tokens_provider = Some(options.into());
         }
+        if let Some(options) = self.range_formatting.finish() {
+            self.caps.document_range_formatting_provider = Some(options.into());
+        }
         if let Some(mut options) = self.completion.options {
             if self.completion.resolve {
                 options.resolve_provider = Some(true);
@@ -1108,20 +1223,21 @@ impl CapabilityBuilder {
         // shared filters value. The `workspace` object appears only when at
         // least one side registered; the engine layers its protocol-owned
         // `workspaceFolders` field on beside this without overwriting it.
-        if [&self.file_create, &self.file_rename, &self.file_delete]
+        let file_operations = [&self.file_create, &self.file_rename, &self.file_delete]
             .iter()
             .any(|family| family.will || family.did)
-        {
-            let file_operations = FileOperationOptions {
+            .then(|| FileOperationOptions {
                 did_create: self.file_create.did_options(),
                 will_create: self.file_create.will_options(),
                 did_rename: self.file_rename.did_options(),
                 will_rename: self.file_rename.will_options(),
                 did_delete: self.file_delete.did_options(),
                 will_delete: self.file_delete.will_options(),
-            };
+            });
+        if file_operations.is_some() || self.text_document_content.is_some() {
             self.caps.workspace = Some(WorkspaceOptions {
-                file_operations: Some(file_operations),
+                file_operations,
+                text_document_content: self.text_document_content.map(Into::into),
                 ..WorkspaceOptions::default()
             });
         }

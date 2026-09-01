@@ -21,7 +21,7 @@
 //! [`on_exit`]: ServerBuilder::on_exit
 //! [`on_error`]: ServerBuilder::on_error
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -343,6 +343,7 @@ where
 /// whether to record it (the builder) or abort the transaction (the registrar).
 pub(crate) struct Registrations<S> {
     requests: HashMap<String, ErasedRequestHandler<S>>,
+    feature_requests: HashSet<String>,
     notifications: HashMap<String, ErasedNotificationHandler<S>>,
     /// Post-validation hooks for protocol-owned notifications, kept apart from
     /// `notifications` so no ordinary route can ever shadow a built-in.
@@ -356,6 +357,7 @@ impl<S: Send + Sync + 'static> Registrations<S> {
     fn new() -> Self {
         Self {
             requests: HashMap::new(),
+            feature_requests: HashSet::new(),
             notifications: HashMap::new(),
             built_in_hooks: HashMap::new(),
             commands: HashMap::new(),
@@ -381,9 +383,18 @@ impl<S: Send + Sync + 'static> Registrations<S> {
         Fut: Future<Output = Result<<F::Marker as Request>::Result, LspError>> + TaskSend + 'static,
     {
         let method = <F::Marker as Request>::METHOD.to_string();
+        if self.requests.contains_key(&method) {
+            return if self.feature_requests.contains(&method) {
+                Err(spec.duplicate_error(method))
+            } else {
+                Err(BuildError::DuplicateMethod(method))
+            };
+        }
         let erased = erase_request::<S, F::Marker, H, Fut>(handler);
-        self.insert_request(method, erased)?;
-        spec.contribute(&mut self.capabilities)
+        self.insert_request(method.clone(), erased)?;
+        spec.contribute(&mut self.capabilities)?;
+        self.feature_requests.insert(method);
+        Ok(())
     }
 
     /// Register a typed custom request handler (contributes no capability).
