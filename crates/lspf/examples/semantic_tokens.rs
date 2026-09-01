@@ -105,7 +105,7 @@ async fn full(
     _: CancellationToken,
 ) -> Result<Option<SemanticTokensResult>, LspError> {
     let text = example_support::text(&ctx, &params.text_document.uri)?;
-    Ok(Some(tokens(&text, 0, u32::MAX).into()))
+    Ok(Some(tokens(&text, 0, u32::MAX)))
 }
 
 async fn delta(
@@ -125,9 +125,11 @@ async fn range(
     _: CancellationToken,
 ) -> Result<Option<SemanticTokensRangeResult>, LspError> {
     let text = example_support::text(&ctx, &params.text_document.uri)?;
-    Ok(Some(
-        tokens(&text, params.range.start.line, params.range.end.line).into(),
-    ))
+    Ok(Some(tokens(
+        &text,
+        params.range.start.line,
+        params.range.end.line,
+    )))
 }
 
 fn options() -> SemanticTokensOptions {

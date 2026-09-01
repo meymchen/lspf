@@ -502,6 +502,15 @@ Before opening a PR, please skim:
   either justify the deviation in the PR description or write a new
   ADR.
 
+Install the repository's pre-commit hooks with [prek](https://prek.j178.dev/):
+
+```bash
+prek install
+```
+
+The hooks run `cargo fmt --check` and Clippy for staged Rust changes. To check
+all tracked Rust files without creating a commit, run `prek run --all-files`.
+
 Lint all Markdown with the repository's shared configuration (Node.js 24):
 
 ```bash

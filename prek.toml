@@ -1,0 +1,22 @@
+[[repos]]
+repo = "local"
+hooks = [
+  {
+    id = "cargo-fmt",
+    name = "cargo fmt --check",
+    language = "system",
+    entry = "cargo fmt --all -- --check",
+    pass_filenames = false,
+    files = '(^|/)(Cargo\.(toml|lock)|rust-toolchain(\.toml)?|.*\.rs)$',
+    stages = ["pre-commit"],
+  },
+  {
+    id = "cargo-clippy",
+    name = "cargo clippy",
+    language = "system",
+    entry = "cargo clippy -p lspf --all-targets --locked --no-default-features --features stdio,tcp,websocket,proposed,testing -- -D warnings",
+    pass_filenames = false,
+    files = '(^|/)(Cargo\.(toml|lock)|rust-toolchain(\.toml)?|.*\.rs)$',
+    stages = ["pre-commit"],
+  },
+]
