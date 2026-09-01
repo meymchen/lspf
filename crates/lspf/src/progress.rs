@@ -531,7 +531,8 @@ mod tests {
         OutboundRegistry,
         mpsc::UnboundedReceiver<RawMessage>,
     ) {
-        let (outgoing, receiver) = OutboundQueue::new(crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD);
+        let (outgoing, receiver) =
+            OutboundQueue::new(crate::ResourcePolicy::default().max_outbound_messages);
         let outbound = OutboundRegistry::default();
         let client = ClientHandle::new(outgoing, outbound.clone(), None);
         (client, outbound, receiver)

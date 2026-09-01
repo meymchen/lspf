@@ -1632,7 +1632,8 @@ mod tests {
     }
 
     fn make_client() -> (ClientHandle, UnboundedReceiver<RawMessage>) {
-        let (outgoing, receiver) = OutboundQueue::new(crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD);
+        let (outgoing, receiver) =
+            OutboundQueue::new(crate::ResourcePolicy::default().max_outbound_messages);
         let client = ClientHandle::new(outgoing, OutboundRegistry::default(), None);
         (client, receiver)
     }
@@ -1640,7 +1641,7 @@ mod tests {
     #[test]
     fn serialization_failure_is_reported_without_enqueuing() {
         let (outgoing, mut receiver) =
-            OutboundQueue::new(crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD);
+            OutboundQueue::new(crate::ResourcePolicy::default().max_outbound_messages);
         let client = ClientHandle::new(outgoing, OutboundRegistry::default(), None);
 
         assert!(matches!(
@@ -1653,7 +1654,7 @@ mod tests {
     #[test]
     fn closed_connection_is_reported_before_enqueue() {
         let (outgoing, mut receiver) =
-            OutboundQueue::new(crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD);
+            OutboundQueue::new(crate::ResourcePolicy::default().max_outbound_messages);
         let client = ClientHandle::new(outgoing, OutboundRegistry::default(), None);
         client.close_connection();
 
@@ -1667,7 +1668,7 @@ mod tests {
     #[test]
     fn outbound_closure_rejects_every_new_notification() {
         let (outgoing, mut receiver) =
-            OutboundQueue::new(crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD);
+            OutboundQueue::new(crate::ResourcePolicy::default().max_outbound_messages);
         let client = ClientHandle::new(outgoing, OutboundRegistry::default(), None);
         client.close_connection();
         client.close_outbound();
@@ -2090,7 +2091,8 @@ mod tests {
 
         // A client whose outbound queue is closed (receiver dropped, so all
         // sends fail).
-        let (outgoing, receiver) = OutboundQueue::new(crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD);
+        let (outgoing, receiver) =
+            OutboundQueue::new(crate::ResourcePolicy::default().max_outbound_messages);
         let client = ClientHandle::new(outgoing, OutboundRegistry::default(), None);
         drop(receiver);
         let client2 = client.clone();

@@ -1525,7 +1525,8 @@ mod tests {
     /// finishes after its own entry was claimed.
     #[test]
     fn a_stale_reservation_cannot_claim_a_reused_request_id() {
-        let (out_tx, mut out_rx) = OutboundQueue::new(crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD);
+        let (out_tx, mut out_rx) =
+            OutboundQueue::new(crate::ResourcePolicy::default().max_outbound_messages);
         let registry = InboundRegistry::new(2);
         let id = RequestId::Number(2);
         let session = CancellationToken::new();
@@ -1629,7 +1630,8 @@ mod tests {
             .reserve(RequestId::Number(2), Some(&session))
             .expect("the one slot is available");
         let permit = Arc::clone(&accepted.reservation._permit);
-        let (out_tx, _out_rx) = OutboundQueue::new(crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD);
+        let (out_tx, _out_rx) =
+            OutboundQueue::new(crate::ResourcePolicy::default().max_outbound_messages);
         registry.complete(&out_tx, accepted.reservation, encode_body(&"done"));
 
         let mut tasks = TaskGroup::new(default_runtime());
@@ -1823,7 +1825,8 @@ mod tests {
 
     #[tokio::test]
     async fn requests_responses_and_notifications_share_one_depth_counter() {
-        let (queue, _rx) = OutboundQueue::new(crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD);
+        let (queue, _rx) =
+            OutboundQueue::new(crate::ResourcePolicy::default().max_outbound_messages);
         let client = ClientHandle::new(queue.clone(), OutboundRegistry::default(), None);
 
         client

@@ -1086,11 +1086,7 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
     /// The historical method name is retained for source compatibility; the
     /// value is now a hard queue budget. Zero is rejected by [`build`](Self::build).
     pub fn outbound_warning_threshold(mut self, threshold: usize) -> Self {
-        if threshold == 0 {
-            self.record(BuildError::InvalidOutboundWarningThreshold);
-        } else {
-            self.resource_policy.max_outbound_messages = threshold;
-        }
+        self.resource_policy.max_outbound_messages = threshold;
         self
     }
 
@@ -2092,10 +2088,6 @@ mod tests {
             .build()
             .expect("the default threshold builds");
         assert_eq!(server.resource_policy.max_outbound_messages, 1024);
-        assert_eq!(
-            server.resource_policy.max_outbound_messages,
-            crate::DEFAULT_OUTBOUND_WARNING_THRESHOLD
-        );
     }
 
     #[test]
@@ -2108,16 +2100,21 @@ mod tests {
     }
 
     #[test]
-    fn a_zero_outbound_warning_threshold_is_a_build_error() {
+    fn a_zero_outbound_warning_threshold_is_a_resource_policy_build_error() {
         let err = Server::builder(DummyState)
             .outbound_warning_threshold(0)
             .build()
             .err()
             .expect("a zero threshold must fail the build");
-        assert_eq!(err, BuildError::InvalidOutboundWarningThreshold);
+        assert_eq!(
+            err,
+            BuildError::InvalidResourcePolicy {
+                field: crate::ResourcePolicyField::MaxOutboundMessages
+            }
+        );
         assert_eq!(
             err.to_string(),
-            "outbound warning threshold must be greater than zero"
+            "resource policy `max_outbound_messages` must be greater than zero when enabled"
         );
     }
 }
