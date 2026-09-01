@@ -14,9 +14,8 @@ use lspf::types::notification::{DidCloseTextDocument, DidOpenTextDocument};
 use lspf::types::request::Request;
 use lspf::types::{
     Diagnostic, DiagnosticSeverity, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-    LogMessageParams, LogTraceParams, MessageType, NumberOrString, Position, ProgressParams,
-    ProgressParamsValue, PublishDiagnosticsParams, Range, ShowMessageParams, Uri, WorkDoneProgress,
-    WorkDoneProgressBegin,
+    LogMessageParams, LogTraceParams, MessageType, Position, ProgressParams, ProgressToken,
+    PublishDiagnosticsParams, Range, ShowMessageParams, Uri, WorkDoneProgressBegin,
 };
 use lspf::{
     CancellationToken, ClientError, ClientHandle, LspError, RawMessage, RequestId, Server,
@@ -82,11 +81,12 @@ async fn trace_level(
     _ct: CancellationToken,
 ) -> Result<String, LspError> {
     let level = match ctx.workspace().trace() {
-        lspf::types::TraceValue::Off => "off",
-        lspf::types::TraceValue::Messages => "messages",
-        lspf::types::TraceValue::Verbose => "verbose",
+        lspf::types::TraceValue::Off => "off".to_string(),
+        lspf::types::TraceValue::Messages => "messages".to_string(),
+        lspf::types::TraceValue::Verbose => "verbose".to_string(),
+        lspf::types::TraceValue::Custom(value) => value.into_owned(),
     };
-    Ok(level.to_string())
+    Ok(level)
 }
 
 async fn ctx_publish(
@@ -296,9 +296,9 @@ fn diagnostics_params() -> PublishDiagnosticsParams {
         uri: Uri::from_str("file:///diagnostics.rs").expect("the URI parses"),
         diagnostics: vec![Diagnostic {
             range: Range::new(Position::new(0, 0), Position::new(0, 5)),
-            severity: Some(DiagnosticSeverity::ERROR),
+            severity: Some(DiagnosticSeverity::Error),
             source: Some("lspf-test".to_string()),
-            message: "boom".to_string(),
+            message: lspf::types::Message::String("boom".to_string()),
             ..Diagnostic::default()
         }],
         version: Some(7),
@@ -307,14 +307,14 @@ fn diagnostics_params() -> PublishDiagnosticsParams {
 
 fn show_message_params() -> ShowMessageParams {
     ShowMessageParams {
-        typ: MessageType::WARNING,
+        kind: MessageType::Warning,
         message: "disk almost full".to_string(),
     }
 }
 
 fn log_message_params() -> LogMessageParams {
     LogMessageParams {
-        typ: MessageType::INFO,
+        kind: MessageType::Info,
         message: "indexed 42 files".to_string(),
     }
 }
@@ -346,13 +346,14 @@ fn telemetry_array_params() -> TelemetryEventParams {
 
 fn progress_params() -> ProgressParams {
     ProgressParams {
-        token: NumberOrString::String("build-1".to_string()),
-        value: ProgressParamsValue::WorkDone(WorkDoneProgress::Begin(WorkDoneProgressBegin {
+        token: ProgressToken::String("build-1".to_string()),
+        value: serde_json::to_value(WorkDoneProgressBegin {
             title: "Building".to_string(),
             cancellable: None,
             message: Some("crates".to_string()),
             percentage: Some(10),
-        })),
+        })
+        .unwrap(),
     }
 }
 

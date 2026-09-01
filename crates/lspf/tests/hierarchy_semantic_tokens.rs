@@ -28,7 +28,7 @@ struct AppState;
 fn call_item(name: &str) -> CallHierarchyItem {
     CallHierarchyItem {
         name: name.to_string(),
-        kind: SymbolKind::FUNCTION,
+        kind: SymbolKind::Function,
         tags: None,
         detail: None,
         uri: "file:///a.rs".parse().unwrap(),
@@ -41,7 +41,7 @@ fn call_item(name: &str) -> CallHierarchyItem {
 fn type_item(name: &str) -> TypeHierarchyItem {
     TypeHierarchyItem {
         name: name.to_string(),
-        kind: SymbolKind::CLASS,
+        kind: SymbolKind::Class,
         tags: None,
         detail: None,
         uri: "file:///a.rs".parse().unwrap(),
@@ -171,7 +171,7 @@ fn semantic_options() -> SemanticTokensOptions {
     SemanticTokensOptions {
         work_done_progress_options: hierarchy_options(),
         legend: SemanticTokensLegend {
-            token_types: vec![SemanticTokenType::KEYWORD],
+            token_types: vec![SemanticTokenType::Keyword.to_string()],
             token_modifiers: vec![],
         },
         range: None,

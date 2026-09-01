@@ -6,9 +6,9 @@ use bytes::Bytes;
 use lspf::testing::ServerJourney;
 use lspf::types::{
     Diagnostic, DidChangeTextDocumentParams, DidOpenTextDocumentParams, GotoDefinitionParams,
-    HoverParams, PartialResultParams, Position, PublishDiagnosticsParams,
-    TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
-    TextDocumentPositionParams, VersionedTextDocumentIdentifier, WorkDoneProgressParams,
+    HoverParams, PartialResultParams, Position, PublishDiagnosticsParams, TextDocumentIdentifier,
+    TextDocumentItem, TextDocumentPositionParams, VersionedTextDocumentIdentifier,
+    WorkDoneProgressParams,
 };
 use lspf::{MemoryFileProvider, RawMessage, RequestId};
 
@@ -75,7 +75,7 @@ async fn incremental_edits_recompute_broken_local_link_diagnostics() {
                 lspf::types::Position::new(0, 10),
                 lspf::types::Position::new(0, 20),
             ),
-            severity: Some(lspf::types::DiagnosticSeverity::ERROR),
+            severity: Some(lspf::types::DiagnosticSeverity::Error),
             source: Some("lspf-markdown".into()),
             message: "local link target does not exist: missing.md".into(),
             ..Diagnostic::default()
@@ -88,17 +88,20 @@ async fn incremental_edits_recompute_broken_local_link_diagnostics() {
             "textDocument/didChange",
             &DidChangeTextDocumentParams {
                 text_document: VersionedTextDocumentIdentifier {
-                    uri: uri.clone(),
+                    text_document_identifier: TextDocumentIdentifier { uri: uri.clone() },
                     version: 2,
                 },
-                content_changes: vec![TextDocumentContentChangeEvent {
-                    range: Some(lspf::types::Range::new(
-                        lspf::types::Position::new(0, 10),
-                        lspf::types::Position::new(0, 20),
-                    )),
-                    range_length: None,
-                    text: "guide.md".into(),
-                }],
+                content_changes: vec![
+                    lspf::types::TextDocumentContentChangePartial {
+                        range: lspf::types::Range::new(
+                            lspf::types::Position::new(0, 10),
+                            lspf::types::Position::new(0, 20),
+                        ),
+                        range_length: None,
+                        text: "guide.md".into(),
+                    }
+                    .into(),
+                ],
             },
         ))
         .unwrap();
@@ -493,7 +496,7 @@ async fn shortcut_reference_links_report_broken_definition_targets() {
     );
     assert_eq!(
         published.diagnostics[0].message,
-        "local link target does not exist: missing.md"
+        lspf::types::Message::String("local link target does not exist: missing.md".to_string())
     );
     journey.finish().await.unwrap();
 }
@@ -612,7 +615,7 @@ async fn diagnostics_distinguish_tab_code_from_list_continuation_links() {
     assert_eq!(published.diagnostics.len(), 1);
     assert_eq!(
         published.diagnostics[0].message,
-        "local link target does not exist: missing.md"
+        lspf::types::Message::String("local link target does not exist: missing.md".to_string())
     );
     journey.finish().await.unwrap();
 }
@@ -643,7 +646,7 @@ async fn diagnostics_follow_links_in_nested_list_continuations() {
     assert_eq!(published.diagnostics.len(), 1);
     assert_eq!(
         published.diagnostics[0].message,
-        "local link target does not exist: missing.md"
+        lspf::types::Message::String("local link target does not exist: missing.md".to_string())
     );
     journey.finish().await.unwrap();
 }
@@ -674,7 +677,7 @@ async fn diagnostics_restore_parent_indent_after_a_deeper_list_item() {
     assert_eq!(published.diagnostics.len(), 1);
     assert_eq!(
         published.diagnostics[0].message,
-        "local link target does not exist: missing.md"
+        lspf::types::Message::String("local link target does not exist: missing.md".to_string())
     );
     journey.finish().await.unwrap();
 }

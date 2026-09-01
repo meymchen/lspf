@@ -19,7 +19,7 @@ async fn code_actions(
     ctx: ServerContext,
     params: CodeActionParams,
     _: CancellationToken,
-) -> Result<Option<CodeActionResponse>, LspError> {
+) -> Result<Option<Vec<CodeActionResponse>>, LspError> {
     let uri = params.text_document.uri;
     let text = example_support::text(&ctx, &uri)?;
     let mut actions = Vec::new();
@@ -40,7 +40,7 @@ async fn code_actions(
         };
         actions.push(CodeActionOrCommand::CodeAction(CodeAction {
             title: format!("Evaluate '{}'", line.trim()),
-            kind: Some(CodeActionKind::QUICKFIX),
+            kind: Some(CodeActionKind::QuickFix),
             edit: Some(WorkspaceEdit {
                 changes: Some(HashMap::from([(uri.clone(), vec![edit])])),
                 ..WorkspaceEdit::default()
@@ -56,7 +56,7 @@ async fn main() -> lspf::Result<()> {
     let server = Server::builder(State)
         .feature(
             lspf::features::code_action(CodeActionOptions {
-                code_action_kinds: Some(vec![CodeActionKind::QUICKFIX]),
+                code_action_kinds: Some(vec![CodeActionKind::QuickFix]),
                 ..CodeActionOptions::default()
             }),
             code_actions,

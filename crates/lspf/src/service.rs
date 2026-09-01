@@ -320,7 +320,7 @@ impl<S: Send + Sync + 'static> Service<S> for RouterService<S> {
                     let result = if call.method == "workspace/executeCommand"
                         && router.has_commands()
                     {
-                        let params: lsp_types::ExecuteCommandParams =
+                        let params: gen_lsp_types::ExecuteCommandParams =
                             match serde_json::from_value(call.params) {
                                 Ok(params) => params,
                                 Err(error) => {
@@ -333,7 +333,7 @@ impl<S: Send + Sync + 'static> Service<S> for RouterService<S> {
                                     .invoke((
                                         call.state,
                                         call.context,
-                                        params.arguments,
+                                        params.arguments.unwrap_or_default(),
                                         cancellation,
                                     ))
                                     .await

@@ -44,7 +44,7 @@ async fn inlay_hints(
                 hints.push(InlayHint {
                     position: Position::new(line_number as u32, end as u32),
                     label: InlayHintLabel::String(format!(":{number:b}")),
-                    kind: Some(InlayHintKind::TYPE),
+                    kind: Some(InlayHintKind::Type),
                     text_edits: None,
                     tooltip: None,
                     padding_left: Some(false),

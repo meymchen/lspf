@@ -7,9 +7,10 @@ use std::sync::{Arc, Mutex};
 
 use lspf::types::notification::{DidChangeTextDocument, DidOpenTextDocument};
 use lspf::types::{
-    DidChangeTextDocumentParams, DidOpenTextDocumentParams, DocumentSymbol, DocumentSymbolOptions,
-    DocumentSymbolParams, DocumentSymbolResponse, Location, Position, Range, SymbolInformation,
-    SymbolKind, Uri, WorkspaceSymbolOptions, WorkspaceSymbolParams, WorkspaceSymbolResponse,
+    BaseSymbolInformation, DidChangeTextDocumentParams, DidOpenTextDocumentParams, DocumentSymbol,
+    DocumentSymbolOptions, DocumentSymbolParams, DocumentSymbolResponse, Location, Position, Range,
+    SymbolInformation, SymbolKind, Uri, WorkspaceSymbolOptions, WorkspaceSymbolParams,
+    WorkspaceSymbolResponse,
 };
 use lspf::{CancellationToken, LspError, Server, ServerContext};
 
@@ -30,9 +31,9 @@ fn parse(text: &str) -> Vec<IndexedSymbol> {
         .enumerate()
         .filter_map(|(line_number, line)| {
             let (prefix, kind) = if line.starts_with("type ") {
-                ("type ", SymbolKind::CLASS)
+                ("type ", SymbolKind::Class)
             } else if line.starts_with("fn ") {
-                ("fn ", SymbolKind::FUNCTION)
+                ("fn ", SymbolKind::Function)
             } else {
                 return None;
             };
@@ -65,7 +66,11 @@ async fn did_open(state: Arc<State>, ctx: ServerContext, params: DidOpenTextDocu
 }
 
 async fn did_change(state: Arc<State>, ctx: ServerContext, params: DidChangeTextDocumentParams) {
-    update(&state, &ctx, &params.text_document.uri);
+    update(
+        &state,
+        &ctx,
+        &params.text_document.text_document_identifier.uri,
+    );
 }
 
 #[allow(deprecated)]
@@ -93,7 +98,7 @@ async fn document_symbols(
             children: None,
         })
         .collect();
-    Ok(Some(DocumentSymbolResponse::Nested(symbols)))
+    Ok(Some(DocumentSymbolResponse::DocumentSymbolList(symbols)))
 }
 
 #[allow(deprecated)]
@@ -112,19 +117,23 @@ async fn workspace_symbols(
                 .iter()
                 .filter(|symbol| symbol.name.to_lowercase().contains(&query))
                 .map(|symbol| SymbolInformation {
-                    name: symbol.name.clone(),
-                    kind: symbol.kind,
-                    tags: None,
                     deprecated: None,
                     location: Location {
                         uri: uri.clone(),
                         range: symbol.range,
                     },
-                    container_name: None,
+                    base_symbol_information: BaseSymbolInformation {
+                        name: symbol.name.clone(),
+                        kind: symbol.kind,
+                        tags: None,
+                        container_name: None,
+                    },
                 })
         })
         .collect();
-    Ok(Some(WorkspaceSymbolResponse::Flat(symbols)))
+    Ok(Some(WorkspaceSymbolResponse::SymbolInformationList(
+        symbols,
+    )))
 }
 
 #[tokio::main]

@@ -32,8 +32,12 @@ async fn completion(
     _params: CompletionParams,
     _ct: CancellationToken,
 ) -> Result<Option<CompletionResponse>, LspError> {
-    Ok(Some(CompletionResponse::Array(vec![
-        CompletionItem::new_simple("field".to_string(), "a field".to_string()),
+    Ok(Some(CompletionResponse::CompletionItemList(vec![
+        CompletionItem {
+            label: "field".to_string(),
+            detail: Some("a field".to_string()),
+            ..CompletionItem::default()
+        },
     ])))
 }
 
@@ -252,7 +256,7 @@ async fn completion_and_resolve_dispatch_typed_values_and_merge_one_capability()
     let completion: CompletionResponse =
         serde_json::from_value(ok_result(&outbox, 2).expect("completion response")).unwrap();
     match completion {
-        CompletionResponse::Array(items) => assert_eq!(items[0].label, "field"),
+        CompletionResponse::CompletionItemList(items) => assert_eq!(items[0].label, "field"),
         other => panic!("expected a completion array, got {other:?}"),
     }
     let resolved: CompletionItem =

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use lsp_types::{
+use gen_lsp_types::{
     InitializeParams, Position, PositionEncodingKind, TextDocumentContentChangeEvent,
     TextDocumentItem, Uri,
 };
@@ -167,8 +167,9 @@ impl Document {
         }
     }
 
-    /// Apply one content change to this document's text, interpreting `range`
-    /// under `encoding`. An absent range replaces the whole document.
+    /// Apply one content change to this document's text, interpreting a
+    /// partial change's `range` under `encoding`. A whole-document change
+    /// replaces the complete text.
     ///
     /// Leaves the text untouched when the change is rejected, so a caller
     /// applying a batch can abandon a working copy without having corrupted
@@ -179,13 +180,21 @@ impl Document {
         change: TextDocumentContentChangeEvent,
         max_bytes: usize,
     ) -> std::result::Result<(), DocumentMutationError> {
-        let Some(range) = change.range else {
-            if change.text.len() > max_bytes {
-                return Err(document_text_capacity_exhausted());
+        let (range, text) = match change {
+            TextDocumentContentChangeEvent::TextDocumentContentChangeWholeDocument(change) => {
+                if change.text.len() > max_bytes {
+                    return Err(document_text_capacity_exhausted());
+                }
+                self.text = Rope::from_str(&change.text);
+                return Ok(());
             }
-            self.text = Rope::from_str(&change.text);
-            return Ok(());
+            TextDocumentContentChangeEvent::TextDocumentContentChangePartial(change) => {
+                (change.range, change.text)
+            }
         };
+        if text.len() > max_bytes {
+            return Err(document_text_capacity_exhausted());
+        }
         let start_offset = self
             .position_to_offset(encoding, range.start)
             .ok_or_else(|| {
@@ -210,7 +219,7 @@ impl Document {
         }
         let retained_bytes = self.text.len_bytes() - (end_offset - start_offset);
         if retained_bytes
-            .checked_add(change.text.len())
+            .checked_add(text.len())
             .is_none_or(|bytes| bytes > max_bytes)
         {
             return Err(document_text_capacity_exhausted());
@@ -218,7 +227,7 @@ impl Document {
         let start_char = self.text.byte_to_char(start_offset);
         let end_char = self.text.byte_to_char(end_offset);
         self.text.remove(start_char..end_char);
-        self.text.insert(start_char, &change.text);
+        self.text.insert(start_char, &text);
         Ok(())
     }
 }
@@ -343,7 +352,7 @@ impl Documents {
             key,
             Document {
                 uri: item.uri,
-                language_id: item.language_id,
+                language_id: item.language_id.as_str().to_owned(),
                 version: Some(item.version),
                 text: Rope::from_str(&item.text),
             },
@@ -573,7 +582,7 @@ impl DocumentsView {
 mod tests {
     use std::str::FromStr;
 
-    use lsp_types::{GeneralClientCapabilities, Range};
+    use gen_lsp_types::{GeneralClientCapabilities, Range};
 
     use super::*;
 
@@ -584,7 +593,7 @@ mod tests {
     fn text_item(uri: Uri, text: &str) -> TextDocumentItem {
         TextDocumentItem {
             uri,
-            language_id: "plaintext".to_string(),
+            language_id: "plaintext".into(),
             version: 1,
             text: text.to_string(),
         }
@@ -603,10 +612,17 @@ mod tests {
 
     /// One content change, as `didChange` delivers it.
     fn change(range: Option<Range>, text: &str) -> TextDocumentContentChangeEvent {
-        TextDocumentContentChangeEvent {
-            range,
-            range_length: None,
-            text: text.to_string(),
+        match range {
+            Some(range) => gen_lsp_types::TextDocumentContentChangePartial {
+                range,
+                range_length: None,
+                text: text.to_string(),
+            }
+            .into(),
+            None => gen_lsp_types::TextDocumentContentChangeWholeDocument {
+                text: text.to_string(),
+            }
+            .into(),
         }
     }
 
@@ -930,7 +946,7 @@ mod tests {
         let u = uri("file:///versions.txt");
         docs.open(TextDocumentItem {
             uri: u.clone(),
-            language_id: "plaintext".to_string(),
+            language_id: "plaintext".into(),
             version: 25,
             text: "contents".to_string(),
         })

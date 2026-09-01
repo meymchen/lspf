@@ -19,12 +19,12 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use lsp_types::notification::Progress;
-use lsp_types::request::WorkDoneProgressCreate;
-use lsp_types::{
-    ProgressParams, ProgressParamsValue, ProgressToken, WorkDoneProgress, WorkDoneProgressBegin,
-    WorkDoneProgressCreateParams, WorkDoneProgressEnd, WorkDoneProgressReport,
+use gen_lsp_types::{
+    ProgressNotification as Progress, ProgressParams, ProgressToken, WorkDoneProgressBegin,
+    WorkDoneProgressCreateParams, WorkDoneProgressCreateRequest as WorkDoneProgressCreate,
+    WorkDoneProgressEnd, WorkDoneProgressReport,
 };
+use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
@@ -34,6 +34,10 @@ use crate::error::{ClientError, ProgressError};
 /// The largest token value handed out: progress tokens travel as JSON
 /// integers, so the connection-local sequence stays within positive `i32`.
 const MAX_PROGRESS_TOKEN: u32 = i32::MAX as u32;
+
+fn progress_value(value: impl Serialize) -> serde_json::Value {
+    serde_json::to_value(value).expect("generated progress values serialize")
+}
 
 /// One active progress entry in the connection's registry.
 pub(crate) struct ActiveProgress {
@@ -103,7 +107,7 @@ impl ProgressRegistry {
             if candidate > MAX_PROGRESS_TOKEN {
                 return None;
             }
-            let token = ProgressToken::Number(candidate as i32);
+            let token = ProgressToken::Int(candidate as i32);
             if !inner.active.contains_key(&token) {
                 inner.next_token = candidate + 1;
                 return Some(token);
@@ -314,13 +318,11 @@ impl SharedProgress {
         }
         self.inner.client.notify_logged::<Progress>(ProgressParams {
             token: self.inner.token.clone(),
-            value: ProgressParamsValue::WorkDone(WorkDoneProgress::Report(
-                WorkDoneProgressReport {
-                    cancellable: Some(self.inner.cancellable),
-                    message,
-                    percentage,
-                },
-            )),
+            value: progress_value(WorkDoneProgressReport {
+                cancellable: Some(self.inner.cancellable),
+                message,
+                percentage,
+            }),
         })
     }
 
@@ -337,9 +339,7 @@ impl SharedProgress {
         }
         let result = self.inner.client.notify_logged::<Progress>(ProgressParams {
             token: self.inner.token.clone(),
-            value: ProgressParamsValue::WorkDone(WorkDoneProgress::End(WorkDoneProgressEnd {
-                message,
-            })),
+            value: progress_value(WorkDoneProgressEnd { message }),
         });
         self.inner.registry.remove(&self.inner.token);
         result
@@ -489,12 +489,12 @@ impl ClientHandle {
 
         let begin = ProgressParams {
             token: token.clone(),
-            value: ProgressParamsValue::WorkDone(WorkDoneProgress::Begin(WorkDoneProgressBegin {
+            value: progress_value(WorkDoneProgressBegin {
                 title: options.title,
                 cancellable: Some(options.cancellable),
                 message: options.message,
                 percentage: options.percentage,
-            })),
+            }),
         };
         if let Err(error) = self.notify_logged::<Progress>(begin) {
             // The begin never reached the wire: reclaim the token so the
@@ -519,7 +519,6 @@ impl ClientHandle {
 mod tests {
     use bytes::Bytes;
     use futures_channel::mpsc;
-    use lsp_types::notification::Notification;
     use serde_json::{Value, json};
     use tracing_subscriber::layer::SubscriberExt;
 
@@ -590,9 +589,9 @@ mod tests {
     #[test]
     fn tokens_start_at_one_and_increase_monotonically() {
         let registry = ProgressRegistry::default();
-        assert_eq!(registry.allocate(), Some(ProgressToken::Number(1)));
-        assert_eq!(registry.allocate(), Some(ProgressToken::Number(2)));
-        assert_eq!(registry.allocate(), Some(ProgressToken::Number(3)));
+        assert_eq!(registry.allocate(), Some(ProgressToken::Int(1)));
+        assert_eq!(registry.allocate(), Some(ProgressToken::Int(2)));
+        assert_eq!(registry.allocate(), Some(ProgressToken::Int(3)));
     }
 
     #[test]
@@ -600,30 +599,30 @@ mod tests {
         let registry = ProgressRegistry::default();
         // Simulate a client-originated token colliding with the next number,
         // and a server-originated one right after it.
-        assert!(registry.register(ProgressToken::Number(1), false, CancellationToken::new()));
-        assert!(registry.register(ProgressToken::Number(2), false, CancellationToken::new()));
+        assert!(registry.register(ProgressToken::Int(1), false, CancellationToken::new()));
+        assert!(registry.register(ProgressToken::Int(2), false, CancellationToken::new()));
         // String tokens never collide with the numeric sequence.
         assert!(registry.register(
             ProgressToken::String("client-token".into()),
             false,
             CancellationToken::new()
         ));
-        assert_eq!(registry.allocate(), Some(ProgressToken::Number(3)));
+        assert_eq!(registry.allocate(), Some(ProgressToken::Int(3)));
 
         // Removing an active token does not make its number reusable: the
         // allocator only moves forward.
-        registry.remove(&ProgressToken::Number(1));
-        assert_eq!(registry.allocate(), Some(ProgressToken::Number(4)));
+        registry.remove(&ProgressToken::Int(1));
+        assert_eq!(registry.allocate(), Some(ProgressToken::Int(4)));
 
         // Re-registering an active token fails without mutation.
-        assert!(!registry.register(ProgressToken::Number(2), true, CancellationToken::new()));
+        assert!(!registry.register(ProgressToken::Int(2), true, CancellationToken::new()));
     }
 
     #[test]
     fn allocation_exhausts_at_the_positive_i32_boundary() {
         let registry = ProgressRegistry::default();
         registry.set_next_token(MAX_PROGRESS_TOKEN);
-        assert_eq!(registry.allocate(), Some(ProgressToken::Number(i32::MAX)));
+        assert_eq!(registry.allocate(), Some(ProgressToken::Int(i32::MAX)));
         assert_eq!(registry.allocate(), None);
     }
 
@@ -632,19 +631,19 @@ mod tests {
         let registry = ProgressRegistry::default();
         let cancellable = CancellationToken::new();
         let plain = CancellationToken::new();
-        assert!(registry.register(ProgressToken::Number(1), true, cancellable.clone()));
-        assert!(registry.register(ProgressToken::Number(2), false, plain.clone()));
+        assert!(registry.register(ProgressToken::Int(1), true, cancellable.clone()));
+        assert!(registry.register(ProgressToken::Int(2), false, plain.clone()));
 
         // A non-cancellable token is left alone.
         assert_eq!(
-            registry.cancel(&ProgressToken::Number(2)),
+            registry.cancel(&ProgressToken::Int(2)),
             ProgressCancel::NotCancellable
         );
         assert!(!plain.is_cancelled());
 
         // An inactive token — unknown or already ended — changes nothing.
         assert_eq!(
-            registry.cancel(&ProgressToken::Number(3)),
+            registry.cancel(&ProgressToken::Int(3)),
             ProgressCancel::NotActive
         );
         assert_eq!(
@@ -655,15 +654,15 @@ mod tests {
         // The matching cancellable token fires and stays registered: ending
         // the progress remains the application's decision.
         assert_eq!(
-            registry.cancel(&ProgressToken::Number(1)),
+            registry.cancel(&ProgressToken::Int(1)),
             ProgressCancel::Cancelled
         );
         assert!(cancellable.is_cancelled());
-        assert!(registry.is_active(&ProgressToken::Number(1)));
+        assert!(registry.is_active(&ProgressToken::Int(1)));
 
         // A repeated cancel fires again and reports the same outcome.
         assert_eq!(
-            registry.cancel(&ProgressToken::Number(1)),
+            registry.cancel(&ProgressToken::Int(1)),
             ProgressCancel::Cancelled
         );
     }
@@ -685,7 +684,7 @@ mod tests {
         assert!(!registry.is_active(&ProgressToken::String("client-token".into())));
         assert_eq!(registry.active_len(), 0);
         // The token sequence is unaffected: allocation keeps moving forward.
-        assert_eq!(registry.allocate(), Some(ProgressToken::Number(2)));
+        assert_eq!(registry.allocate(), Some(ProgressToken::Int(2)));
     }
 
     #[tokio::test]
@@ -712,12 +711,15 @@ mod tests {
         assert_eq!(params, json!({ "token": 1 }));
 
         let handle = begin.await.unwrap().expect("begin succeeds");
-        assert_eq!(handle.token(), ProgressToken::Number(1));
+        assert_eq!(handle.token(), ProgressToken::Int(1));
         assert!(!handle.cancellation_token().is_cancelled());
 
         // Exactly one begin notification with the verbatim options.
         let (method, params) = next_notification(&mut receiver).await;
-        assert_eq!(method, Progress::METHOD);
+        assert_eq!(
+            method,
+            <Progress as crate::types::notification::Notification>::METHOD
+        );
         assert_eq!(
             params,
             json!({
@@ -731,7 +733,7 @@ mod tests {
                 }
             })
         );
-        assert!(registry.is_active(&ProgressToken::Number(1)));
+        assert!(registry.is_active(&ProgressToken::Int(1)));
         assert!(receiver.try_recv().is_err(), "nothing else is sent");
 
         handle.end(Some("done".into())).unwrap();
@@ -835,7 +837,10 @@ mod tests {
         handle.report(Some("restarted".into()), Some(0)).unwrap();
 
         let (method, params) = next_notification(&mut receiver).await;
-        assert_eq!(method, Progress::METHOD);
+        assert_eq!(
+            method,
+            <Progress as crate::types::notification::Notification>::METHOD
+        );
         assert_eq!(
             params,
             json!({
@@ -920,7 +925,10 @@ mod tests {
         // the final message and ends the progress itself.
         handle.end(Some("stopped".into())).unwrap();
         let (method, params) = next_notification(&mut receiver).await;
-        assert_eq!(method, Progress::METHOD);
+        assert_eq!(
+            method,
+            <Progress as crate::types::notification::Notification>::METHOD
+        );
         assert_eq!(
             params,
             json!({ "token": 1, "value": { "kind": "end", "message": "stopped" } })
@@ -942,16 +950,19 @@ mod tests {
         answer_create_ok(&outbound, &mut receiver).await;
         let handle = begin.await.unwrap().unwrap();
         next_notification(&mut receiver).await; // begin
-        assert!(registry.is_active(&ProgressToken::Number(1)));
+        assert!(registry.is_active(&ProgressToken::Int(1)));
 
         handle.end(Some("done".into())).unwrap();
         let (method, params) = next_notification(&mut receiver).await;
-        assert_eq!(method, Progress::METHOD);
+        assert_eq!(
+            method,
+            <Progress as crate::types::notification::Notification>::METHOD
+        );
         assert_eq!(
             params,
             json!({ "token": 1, "value": { "kind": "end", "message": "done" } })
         );
-        assert!(!registry.is_active(&ProgressToken::Number(1)));
+        assert!(!registry.is_active(&ProgressToken::Int(1)));
         assert_eq!(registry.active_len(), 0);
     }
 
@@ -996,7 +1007,7 @@ mod tests {
         let shared = handle.shared.clone();
         // Reporting against a token no longer in the registry is an
         // UnknownToken failure and sends nothing.
-        registry.remove(&ProgressToken::Number(1));
+        registry.remove(&ProgressToken::Int(1));
         let error = shared.report(None, None).unwrap_err();
         assert!(matches!(
             error,
@@ -1005,10 +1016,13 @@ mod tests {
 
         // Re-register and end twice through the shared state: only the first
         // end sends.
-        assert!(registry.register(ProgressToken::Number(1), false, CancellationToken::new()));
+        assert!(registry.register(ProgressToken::Int(1), false, CancellationToken::new()));
         shared.end(None).unwrap();
         let (method, _) = next_notification(&mut receiver).await;
-        assert_eq!(method, Progress::METHOD);
+        assert_eq!(
+            method,
+            <Progress as crate::types::notification::Notification>::METHOD
+        );
         let error = shared.end(None).unwrap_err();
         assert!(matches!(
             error,
@@ -1045,7 +1059,7 @@ mod tests {
         answer_create_ok(&outbound, &mut receiver).await;
         let handle = begin.await.unwrap().unwrap();
         next_notification(&mut receiver).await; // begin
-        assert!(registry.is_active(&ProgressToken::Number(1)));
+        assert!(registry.is_active(&ProgressToken::Int(1)));
 
         let _capture = crate::test_util::tracing_capture_lock();
         let events = crate::test_util::EventCapture::new();
@@ -1083,23 +1097,15 @@ mod tests {
 
         let handle_a = begin_a.await.unwrap().unwrap();
         let handle_b = begin_b.await.unwrap().unwrap();
-        assert_eq!(handle_a.token(), ProgressToken::Number(1));
-        assert_eq!(handle_b.token(), ProgressToken::Number(2));
+        assert_eq!(handle_a.token(), ProgressToken::Int(1));
+        assert_eq!(handle_b.token(), ProgressToken::Int(2));
 
         // Both handles are independent: reporting and ending one does not
         // touch the other's token.
         handle_b.report(None, Some(5)).unwrap();
         handle_a.end(None).unwrap();
-        assert!(
-            !client
-                .progress_registry()
-                .is_active(&ProgressToken::Number(1))
-        );
-        assert!(
-            client
-                .progress_registry()
-                .is_active(&ProgressToken::Number(2))
-        );
+        assert!(!client.progress_registry().is_active(&ProgressToken::Int(1)));
+        assert!(client.progress_registry().is_active(&ProgressToken::Int(2)));
         handle_b.end(None).unwrap();
     }
 
@@ -1124,7 +1130,10 @@ mod tests {
         drop(begin);
         assert_eq!(outbound.pending_len(), 0);
         let (method, params) = next_notification(&mut receiver).await;
-        assert_eq!(method, lsp_types::notification::Cancel::METHOD);
+        assert_eq!(
+            method,
+            <gen_lsp_types::CancelNotification as crate::types::notification::Notification>::METHOD
+        );
         assert_eq!(params, json!({ "id": 1 }));
         assert_eq!(
             registry.active_len(),

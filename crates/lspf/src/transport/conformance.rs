@@ -7,13 +7,13 @@ use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use lsp_types::notification::Notification;
-use lsp_types::request::Request;
-use lsp_types::{InitializedParams, LogMessageParams, MessageType};
+use gen_lsp_types::{InitializedParams, LogMessageParams, MessageType};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::conformance_support::{self, LspError, Outcome, Server, ServerContext, TaskSend};
+use crate::types::notification::Notification;
+use crate::types::request::Request;
 
 pub(crate) trait WireClient {
     fn send(&mut self, message: Value) -> impl Future<Output = ()> + TaskSend;
@@ -218,7 +218,7 @@ async fn pending_task(
     let (started_message, _drop_guard) = kind.start(&drops);
     ctx.client()
         .log_message(LogMessageParams {
-            typ: MessageType::INFO,
+            kind: MessageType::Info,
             message: started_message.to_string(),
         })
         .map_err(|error| LspError::internal(error.to_string()))?;
@@ -249,7 +249,7 @@ fn build_server() -> (Server<ConformanceState>, Arc<TaskDrops>) {
             |_state: Arc<ConformanceState>, ctx: ServerContext, _params: InitializedParams| async move {
                 ctx.client()
                     .log_message(LogMessageParams {
-                        typ: MessageType::INFO,
+                        kind: MessageType::Info,
                         message: "initialized observed".to_string(),
                     })
                     .expect("the initialized connection is open");
@@ -262,7 +262,7 @@ fn build_server() -> (Server<ConformanceState>, Arc<TaskDrops>) {
                     .store(params.sequence, Ordering::SeqCst);
                 ctx.client()
                     .log_message(LogMessageParams {
-                        typ: MessageType::INFO,
+                        kind: MessageType::Info,
                         message: "conformance observed".to_string(),
                     })
                     .expect("the conformance connection is open");
@@ -282,7 +282,7 @@ fn build_server() -> (Server<ConformanceState>, Arc<TaskDrops>) {
                     assert_eq!(non_send_value.as_string().as_deref(), Some("héllo"));
                     ctx.client()
                         .log_message(LogMessageParams {
-                            typ: MessageType::INFO,
+                            kind: MessageType::Info,
                             message: "conformance notification".to_string(),
                         })
                         .map_err(|error| LspError::internal(error.to_string()))?;

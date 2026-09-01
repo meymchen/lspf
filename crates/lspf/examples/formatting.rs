@@ -66,8 +66,8 @@ async fn on_type_formatting(
     params: DocumentOnTypeFormattingParams,
     _: CancellationToken,
 ) -> Result<Option<Vec<TextEdit>>, LspError> {
-    let uri = params.text_document_position.text_document.uri;
-    let line = params.text_document_position.position.line as usize;
+    let uri = params.text_document.uri;
+    let line = params.position.line as usize;
     let text = example_support::text(&ctx, &uri)?;
     Ok(Some(format_tables(&text, line, line)))
 }
@@ -82,6 +82,7 @@ async fn main() -> lspf::Result<()> {
         .feature(
             lspf::features::range_formatting(DocumentRangeFormattingOptions {
                 work_done_progress_options: Default::default(),
+                ..Default::default()
             }),
             range_formatting,
         )

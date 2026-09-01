@@ -42,7 +42,11 @@ async fn did_open(state: Arc<State>, ctx: ServerContext, params: DidOpenTextDocu
 }
 
 async fn did_change(state: Arc<State>, ctx: ServerContext, params: DidChangeTextDocumentParams) {
-    update(&state, &ctx, &params.text_document.uri);
+    update(
+        &state,
+        &ctx,
+        &params.text_document.text_document_identifier.uri,
+    );
 }
 
 fn result_id(uri: &Uri, version: Option<i32>) -> String {
@@ -63,20 +67,24 @@ async fn document_diagnostic(
         .unwrap_or_default();
     let id = result_id(&params.text_document.uri, version);
     let report = if params.previous_result_id.as_deref() == Some(&id) {
-        DocumentDiagnosticReport::Unchanged(RelatedUnchangedDocumentDiagnosticReport {
-            related_documents: None,
-            unchanged_document_diagnostic_report: UnchangedDocumentDiagnosticReport {
-                result_id: id,
+        DocumentDiagnosticReport::RelatedUnchangedDocumentDiagnosticReport(
+            RelatedUnchangedDocumentDiagnosticReport {
+                related_documents: None,
+                unchanged_document_diagnostic_report: UnchangedDocumentDiagnosticReport {
+                    result_id: id,
+                },
             },
-        })
+        )
     } else {
-        DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
-            related_documents: None,
-            full_document_diagnostic_report: FullDocumentDiagnosticReport {
-                result_id: Some(id),
-                items: diagnostics,
+        DocumentDiagnosticReport::RelatedFullDocumentDiagnosticReport(
+            RelatedFullDocumentDiagnosticReport {
+                related_documents: None,
+                full_document_diagnostic_report: FullDocumentDiagnosticReport {
+                    result_id: Some(id),
+                    items: diagnostics,
+                },
             },
-        })
+        )
     };
     Ok(report.into())
 }
@@ -98,24 +106,26 @@ async fn workspace_diagnostic(
         .map(|(uri, (version, diagnostics))| {
             let id = result_id(uri, *version);
             if previous.contains(&id) {
-                WorkspaceDocumentDiagnosticReport::Unchanged(
+                WorkspaceDocumentDiagnosticReport::WorkspaceUnchangedDocumentDiagnosticReport(
                     WorkspaceUnchangedDocumentDiagnosticReport {
                         uri: uri.clone(),
-                        version: version.map(i64::from),
+                        version: *version,
                         unchanged_document_diagnostic_report: UnchangedDocumentDiagnosticReport {
                             result_id: id,
                         },
                     },
                 )
             } else {
-                WorkspaceDocumentDiagnosticReport::Full(WorkspaceFullDocumentDiagnosticReport {
-                    uri: uri.clone(),
-                    version: version.map(i64::from),
-                    full_document_diagnostic_report: FullDocumentDiagnosticReport {
-                        result_id: Some(id),
-                        items: diagnostics.clone(),
+                WorkspaceDocumentDiagnosticReport::WorkspaceFullDocumentDiagnosticReport(
+                    WorkspaceFullDocumentDiagnosticReport {
+                        uri: uri.clone(),
+                        version: *version,
+                        full_document_diagnostic_report: FullDocumentDiagnosticReport {
+                            result_id: Some(id),
+                            items: diagnostics.clone(),
+                        },
                     },
-                })
+                )
             }
         })
         .collect();

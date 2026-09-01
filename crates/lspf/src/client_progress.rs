@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use lsp_types::{ProgressParams, ProgressParamsValue, ProgressToken, WorkDoneProgress};
+use gen_lsp_types::{ProgressParams, ProgressToken};
 
 /// One link in a per-token FIFO established synchronously during dispatch.
 pub(crate) struct ProgressDelivery {
@@ -112,25 +112,19 @@ impl ClientProgressRegistry {
     pub(crate) fn accept(&self, params: &ProgressParams) -> Option<ProgressDelivery> {
         let mut inner = self.inner.lock().unwrap();
         let phase = inner.get(&params.token).map(|entry| entry.phase);
-        match (&params.value, phase) {
-            (
-                ProgressParamsValue::WorkDone(WorkDoneProgress::Begin(_)),
-                Some(ProgressPhase::Created),
-            ) => {
+        match (
+            params.value.get("kind").and_then(serde_json::Value::as_str),
+            phase,
+        ) {
+            (Some("begin"), Some(ProgressPhase::Created)) => {
                 let entry = inner.get_mut(&params.token).unwrap();
                 entry.phase = ProgressPhase::Begun;
                 Some(ProgressDelivery::queued(entry))
             }
-            (
-                ProgressParamsValue::WorkDone(WorkDoneProgress::Report(_)),
-                Some(ProgressPhase::Begun),
-            ) => Some(ProgressDelivery::queued(
+            (Some("report"), Some(ProgressPhase::Begun)) => Some(ProgressDelivery::queued(
                 inner.get_mut(&params.token).unwrap(),
             )),
-            (
-                ProgressParamsValue::WorkDone(WorkDoneProgress::End(_)),
-                Some(ProgressPhase::Begun),
-            ) => Some(ProgressDelivery::terminal(
+            (Some("end"), Some(ProgressPhase::Begun)) => Some(ProgressDelivery::terminal(
                 inner.remove(&params.token).unwrap(),
             )),
             _ => None,

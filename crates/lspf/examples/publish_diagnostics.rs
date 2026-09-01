@@ -28,7 +28,7 @@ async fn did_open(_: Arc<State>, ctx: ServerContext, params: DidOpenTextDocument
 }
 
 async fn did_change(_: Arc<State>, ctx: ServerContext, params: DidChangeTextDocumentParams) {
-    publish(ctx, params.text_document.uri).await;
+    publish(ctx, params.text_document.text_document_identifier.uri).await;
 }
 
 #[tokio::main]

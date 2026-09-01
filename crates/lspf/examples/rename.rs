@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use lspf::types::{
-    PrepareRenameResponse, RenameOptions, RenameParams, TextDocumentPositionParams, TextEdit,
-    WorkspaceEdit,
+    PrepareRenameParams, PrepareRenamePlaceholder, PrepareRenameResponse, RenameOptions,
+    RenameParams, TextEdit, WorkspaceEdit,
 };
 use lspf::{CancellationToken, LspError, Server, ServerContext};
 
@@ -26,18 +26,21 @@ fn renameable(text: &str, word: &str) -> bool {
 async fn prepare(
     _: Arc<State>,
     ctx: ServerContext,
-    params: TextDocumentPositionParams,
+    params: PrepareRenameParams,
     _: CancellationToken,
 ) -> Result<Option<PrepareRenameResponse>, LspError> {
-    let text = example_support::text(&ctx, &params.text_document.uri)?;
-    let Some((word, range)) = example_support::word_at(&text, params.position) else {
+    let position = params.text_document_position_params;
+    let text = example_support::text(&ctx, &position.text_document.uri)?;
+    let Some((word, range)) = example_support::word_at(&text, position.position) else {
         return Ok(None);
     };
     Ok(
-        renameable(&text, &word).then_some(PrepareRenameResponse::RangeWithPlaceholder {
-            range,
-            placeholder: word,
-        }),
+        renameable(&text, &word).then_some(PrepareRenameResponse::PrepareRenamePlaceholder(
+            PrepareRenamePlaceholder {
+                range,
+                placeholder: word,
+            },
+        )),
     )
 }
 
@@ -47,9 +50,10 @@ async fn rename(
     params: RenameParams,
     _: CancellationToken,
 ) -> Result<Option<WorkspaceEdit>, LspError> {
-    let uri = params.text_document_position.text_document.uri;
+    let uri = params.text_document_position_params.text_document.uri;
     let text = example_support::text(&ctx, &uri)?;
-    let Some((word, _)) = example_support::word_at(&text, params.text_document_position.position)
+    let Some((word, _)) =
+        example_support::word_at(&text, params.text_document_position_params.position)
     else {
         return Ok(None);
     };

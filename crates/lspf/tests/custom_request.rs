@@ -37,7 +37,7 @@ struct GreetResult {
 }
 
 /// The marker fixes the wire method and the parameter/result types dispatch
-/// uses. It implements lspf's re-export of `lsp_types::request::Request`.
+/// uses. It implements lspf's re-export of `gen_lsp_types::request::Request`.
 enum Greet {}
 
 impl Request for Greet {
@@ -227,7 +227,7 @@ async fn initialize_custom_request_shutdown_round_trip() {
         lspf::types::ServerCapabilities {
             position_encoding: Some(lspf::types::PositionEncodingKind::UTF16),
             text_document_sync: Some(lspf::types::TextDocumentSyncCapability::Kind(
-                lspf::types::TextDocumentSyncKind::INCREMENTAL,
+                lspf::types::TextDocumentSyncKind::Incremental,
             )),
             workspace: Some(common::workspace_capabilities()),
             ..lspf::types::ServerCapabilities::default()

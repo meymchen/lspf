@@ -31,7 +31,7 @@ struct PingParams {
 }
 
 /// The marker fixes the wire method and parameter type dispatch uses. It
-/// implements lspf's re-export of `lsp_types::notification::Notification`.
+/// implements lspf's re-export of `gen_lsp_types::notification::Notification`.
 enum Ping {}
 
 impl Notification for Ping {

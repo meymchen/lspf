@@ -3,7 +3,7 @@
 //! Each `features::*` constructor returns a descriptor implementing one of the
 //! sealed traits [`FeatureSpec`] (request features) or
 //! [`NotificationFeatureSpec`] (notification features). A descriptor fixes
-//! three things at once: the `lsp_types` request or notification marker that
+//! three things at once: the `gen_lsp_types` request or notification marker that
 //! names the wire method and its typed parameters (and result, for requests),
 //! the descriptor's public options, and the single deterministic contribution
 //! the feature makes to the capability catalog.
@@ -15,36 +15,48 @@
 //! [`notification`](crate::ServerBuilder::notification) instead and advertise
 //! no capability.
 
-use lsp_types::notification::{
-    DidChangeWatchedFiles, DidCreateFiles, DidDeleteFiles, DidRenameFiles, Notification,
-};
-use lsp_types::request::{
-    CallHierarchyIncomingCalls, CallHierarchyOutgoingCalls, CallHierarchyPrepare,
-    CodeActionRequest, CodeActionResolveRequest, CodeLensRequest, CodeLensResolve,
-    ColorPresentationRequest, Completion, DocumentColor, DocumentDiagnosticRequest,
-    DocumentHighlightRequest, DocumentLinkRequest, DocumentLinkResolve, DocumentSymbolRequest,
-    FoldingRangeRequest, Formatting, GotoDeclaration, GotoDefinition, GotoImplementation,
-    GotoTypeDefinition, HoverRequest, InlayHintRequest, InlayHintResolveRequest,
-    InlineValueRequest, LinkedEditingRange, MonikerRequest, OnTypeFormatting, PrepareRenameRequest,
-    RangeFormatting, References, Rename, Request, ResolveCompletionItem, SelectionRangeRequest,
-    SemanticTokensFullDeltaRequest, SemanticTokensFullRequest, SemanticTokensRangeRequest,
-    SignatureHelpRequest, TypeHierarchyPrepare, TypeHierarchySubtypes, TypeHierarchySupertypes,
-    WillCreateFiles, WillDeleteFiles, WillRenameFiles, WillSaveWaitUntil,
-    WorkspaceDiagnosticRequest, WorkspaceSymbolRequest, WorkspaceSymbolResolve,
-};
-use lsp_types::{
-    CallHierarchyOptions, CodeActionOptions, CodeLensOptions, ColorProviderOptions,
-    CompletionOptions, DeclarationOptions, DefinitionOptions, DiagnosticOptions,
-    DocumentFormattingOptions, DocumentHighlightOptions, DocumentLinkOptions,
-    DocumentOnTypeFormattingOptions, DocumentRangeFormattingOptions, DocumentSymbolOptions,
-    FileOperationRegistrationOptions, FoldingProviderOptions, InlayHintOptions, InlineValueOptions,
-    LinkedEditingRangeOptions, MonikerOptions, ReferencesOptions, RenameOptions,
-    SelectionRangeOptions, SemanticTokensOptions, SignatureHelpOptions,
-    StaticTextDocumentRegistrationOptions, TypeHierarchyOptions, WorkspaceSymbolOptions,
+use gen_lsp_types::{
+    CallHierarchyIncomingCallsRequest as CallHierarchyIncomingCalls, CallHierarchyOptions,
+    CallHierarchyOutgoingCallsRequest as CallHierarchyOutgoingCalls,
+    CallHierarchyPrepareRequest as CallHierarchyPrepare, CodeActionOptions, CodeActionRequest,
+    CodeActionResolveRequest, CodeLensOptions, CodeLensRequest,
+    CodeLensResolveRequest as CodeLensResolve, ColorPresentationRequest, CompletionOptions,
+    CompletionRequest as Completion, CompletionResolveRequest as ResolveCompletionItem,
+    DeclarationOptions, DeclarationRequest as GotoDeclaration, DefinitionOptions,
+    DefinitionRequest as GotoDefinition, DiagnosticOptions,
+    DidChangeWatchedFilesNotification as DidChangeWatchedFiles,
+    DidCreateFilesNotification as DidCreateFiles, DidDeleteFilesNotification as DidDeleteFiles,
+    DidRenameFilesNotification as DidRenameFiles, DocumentColorOptions as ColorProviderOptions,
+    DocumentColorRequest as DocumentColor, DocumentDiagnosticRequest, DocumentFormattingOptions,
+    DocumentFormattingRequest as Formatting, DocumentHighlightOptions, DocumentHighlightRequest,
+    DocumentLinkOptions, DocumentLinkRequest, DocumentLinkResolveRequest as DocumentLinkResolve,
+    DocumentOnTypeFormattingOptions, DocumentOnTypeFormattingRequest as OnTypeFormatting,
+    DocumentRangeFormattingOptions, DocumentRangeFormattingRequest as RangeFormatting,
+    DocumentSymbolOptions, DocumentSymbolRequest, FileOperationRegistrationOptions,
+    FoldingRangeOptions as FoldingProviderOptions, FoldingRangeRequest, HoverRequest,
+    ImplementationRegistrationOptions, ImplementationRequest as GotoImplementation,
+    InlayHintOptions, InlayHintRequest, InlayHintResolveRequest, InlineValueOptions,
+    InlineValueRequest, LinkedEditingRangeOptions, LinkedEditingRangeRequest as LinkedEditingRange,
+    MonikerOptions, MonikerRequest, PrepareRenameRequest, ReferenceOptions as ReferencesOptions,
+    ReferencesRequest as References, RenameOptions, RenameRequest as Rename, SelectionRangeOptions,
+    SelectionRangeRequest, SemanticTokensDeltaRequest as SemanticTokensFullDeltaRequest,
+    SemanticTokensOptions, SemanticTokensRangeRequest,
+    SemanticTokensRequest as SemanticTokensFullRequest, SignatureHelpOptions, SignatureHelpRequest,
+    TypeDefinitionRegistrationOptions, TypeDefinitionRequest as GotoTypeDefinition,
+    TypeHierarchyOptions, TypeHierarchyPrepareRequest as TypeHierarchyPrepare,
+    TypeHierarchySubtypesRequest as TypeHierarchySubtypes,
+    TypeHierarchySupertypesRequest as TypeHierarchySupertypes,
+    WillCreateFilesRequest as WillCreateFiles, WillDeleteFilesRequest as WillDeleteFiles,
+    WillRenameFilesRequest as WillRenameFiles,
+    WillSaveTextDocumentWaitUntilRequest as WillSaveWaitUntil, WorkspaceDiagnosticRequest,
+    WorkspaceSymbolOptions, WorkspaceSymbolRequest,
+    WorkspaceSymbolResolveRequest as WorkspaceSymbolResolve,
 };
 
 use crate::capability::CapabilityBuilder;
 use crate::error::BuildError;
+use crate::types::notification::Notification;
+use crate::types::request::Request;
 
 pub(crate) mod sealed {
     use crate::capability::CapabilityBuilder;
@@ -70,7 +82,7 @@ pub(crate) mod sealed {
 
 /// The sealed descriptor contract for a standard LSP feature (ADR 0017).
 ///
-/// [`Marker`](Self::Marker) is the `lsp_types` request marker fixing the wire
+/// [`Marker`](Self::Marker) is the `gen_lsp_types` request marker fixing the wire
 /// method and the typed parameter and result types dispatch uses. The
 /// capability contribution lives on the sealed in-crate supertrait, so this
 /// trait is usable but not implementable downstream. Implemented only by the
@@ -85,7 +97,7 @@ pub trait FeatureSpec: sealed::Sealed {
 /// (ADR 0017).
 ///
 /// The notification counterpart of [`FeatureSpec`]: [`Marker`](Self::Marker)
-/// is the `lsp_types` notification marker fixing the wire method and the typed
+/// is the `gen_lsp_types` notification marker fixing the wire method and the typed
 /// parameter type dispatch uses. Registered through
 /// [`ServerBuilder::feature_notification`](crate::ServerBuilder::feature_notification).
 /// Implemented only by the descriptors returned from this module.
@@ -119,8 +131,8 @@ impl FeatureSpec for WillSaveWaitUntilFeature {
 pub struct HoverFeature(());
 
 /// Describe the standard hover feature: it dispatches
-/// [`HoverParams`](lsp_types::HoverParams), returns
-/// [`Option<Hover>`](lsp_types::Hover), and advertises `hoverProvider`.
+/// [`HoverParams`](gen_lsp_types::HoverParams), returns
+/// [`Option<Hover>`](gen_lsp_types::Hover), and advertises `hoverProvider`.
 pub fn hover() -> HoverFeature {
     HoverFeature(())
 }
@@ -143,8 +155,8 @@ pub struct SignatureHelpFeature {
 
 /// Describe the standard signature-help feature: it dispatches the lsp-types
 /// [`SignatureHelpRequest`] marker — typed
-/// [`SignatureHelpParams`](lsp_types::SignatureHelpParams) in, optional
-/// [`SignatureHelp`](lsp_types::SignatureHelp) out — and advertises the
+/// [`SignatureHelpParams`](gen_lsp_types::SignatureHelpParams) in, optional
+/// [`SignatureHelp`](gen_lsp_types::SignatureHelp) out — and advertises the
 /// supplied [`SignatureHelpOptions`] as `signatureHelpProvider`.
 pub fn signature_help(options: SignatureHelpOptions) -> SignatureHelpFeature {
     SignatureHelpFeature { options }
@@ -209,14 +221,14 @@ impl FeatureSpec for DefinitionFeature {
 /// The `textDocument/typeDefinition` feature descriptor. Construct it with
 /// [`type_definition`].
 pub struct TypeDefinitionFeature {
-    options: StaticTextDocumentRegistrationOptions,
+    options: TypeDefinitionRegistrationOptions,
 }
 
 /// Describe the standard type-definition feature: it dispatches the lsp-types
 /// [`GotoTypeDefinition`] marker and advertises the supplied
-/// [`StaticTextDocumentRegistrationOptions`] as the singular
+/// [`TypeDefinitionRegistrationOptions`] as the singular
 /// `typeDefinitionProvider` capability.
-pub fn type_definition(options: StaticTextDocumentRegistrationOptions) -> TypeDefinitionFeature {
+pub fn type_definition(options: TypeDefinitionRegistrationOptions) -> TypeDefinitionFeature {
     TypeDefinitionFeature { options }
 }
 
@@ -233,14 +245,14 @@ impl FeatureSpec for TypeDefinitionFeature {
 /// The `textDocument/implementation` feature descriptor. Construct it with
 /// [`implementation`].
 pub struct ImplementationFeature {
-    options: StaticTextDocumentRegistrationOptions,
+    options: ImplementationRegistrationOptions,
 }
 
 /// Describe the standard implementation feature: it dispatches the lsp-types
 /// [`GotoImplementation`] marker and advertises the supplied
-/// [`StaticTextDocumentRegistrationOptions`] as the singular
+/// [`ImplementationRegistrationOptions`] as the singular
 /// `implementationProvider` capability.
-pub fn implementation(options: StaticTextDocumentRegistrationOptions) -> ImplementationFeature {
+pub fn implementation(options: ImplementationRegistrationOptions) -> ImplementationFeature {
     ImplementationFeature { options }
 }
 
@@ -744,7 +756,7 @@ pub struct CompletionResolveFeature(());
 
 /// Describe the standard completion-item resolve feature: it dispatches the
 /// lsp-types [`ResolveCompletionItem`] marker — a typed
-/// [`CompletionItem`](lsp_types::CompletionItem) in and out — and augments
+/// [`CompletionItem`](gen_lsp_types::CompletionItem) in and out — and augments
 /// the completion family's capability with `resolveProvider`.
 ///
 /// Resolve is a dependent feature: registering it without the base
@@ -840,7 +852,7 @@ pub struct WorkspaceSymbolResolveFeature(());
 
 /// Describe the standard workspace-symbol resolve feature: it dispatches the
 /// lsp-types [`WorkspaceSymbolResolve`] marker — a typed
-/// [`WorkspaceSymbol`](lsp_types::WorkspaceSymbol) in and out — and augments
+/// [`WorkspaceSymbol`](gen_lsp_types::WorkspaceSymbol) in and out — and augments
 /// the workspace-symbol family's capability with `resolveProvider`.
 ///
 /// Resolve is a dependent feature: registering it without the base
@@ -941,7 +953,7 @@ pub struct CodeActionResolveFeature(());
 
 /// Describe the standard code-action resolve feature: it dispatches the
 /// lsp-types [`CodeActionResolveRequest`] marker — a typed
-/// [`CodeAction`](lsp_types::CodeAction) in and out — and augments the
+/// [`CodeAction`](gen_lsp_types::CodeAction) in and out — and augments the
 /// code-action family's capability with `resolveProvider`.
 ///
 /// Resolve is a dependent feature: registering it without the base
@@ -992,7 +1004,7 @@ pub struct CodeLensResolveFeature(());
 
 /// Describe the standard code-lens resolve feature: it dispatches the
 /// lsp-types [`CodeLensResolve`] marker — a typed
-/// [`CodeLens`](lsp_types::CodeLens) in and out — and augments the code-lens
+/// [`CodeLens`](gen_lsp_types::CodeLens) in and out — and augments the code-lens
 /// family's capability with `resolveProvider`.
 ///
 /// Resolve is a dependent feature: registering it without the base
@@ -1044,7 +1056,7 @@ pub struct DocumentLinkResolveFeature(());
 
 /// Describe the standard document-link resolve feature: it dispatches the
 /// lsp-types [`DocumentLinkResolve`] marker — a typed
-/// [`DocumentLink`](lsp_types::DocumentLink) in and out — and augments the
+/// [`DocumentLink`](gen_lsp_types::DocumentLink) in and out — and augments the
 /// document-link family's capability with `resolveProvider`.
 ///
 /// Resolve is a dependent feature: registering it without the base
@@ -1095,7 +1107,7 @@ pub struct InlayHintResolveFeature(());
 
 /// Describe the standard inlay-hint resolve feature: it dispatches the
 /// lsp-types [`InlayHintResolveRequest`] marker — a typed
-/// [`InlayHint`](lsp_types::InlayHint) in and out — and augments the
+/// [`InlayHint`](gen_lsp_types::InlayHint) in and out — and augments the
 /// inlay-hint family's capability with `resolveProvider`.
 ///
 /// Resolve is a dependent feature: registering it without the base
@@ -1207,7 +1219,7 @@ pub struct DidChangeWatchedFilesFeature(());
 
 /// Describe the standard watched-files notification feature: it dispatches
 /// the lsp-types [`DidChangeWatchedFiles`] marker with typed
-/// [`DidChangeWatchedFilesParams`](lsp_types::DidChangeWatchedFilesParams).
+/// [`DidChangeWatchedFilesParams`](gen_lsp_types::DidChangeWatchedFilesParams).
 ///
 /// LSP 3.17 has no server capability field for watched files — a server
 /// subscribes through dynamic registration — so this descriptor contributes
@@ -1315,46 +1327,52 @@ impl NotificationFeatureSpec for DidDeleteFilesFeature {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lsp_types::notification::{DidChangeWatchedFiles, DidCreateFiles};
-    use lsp_types::request::{
+    use crate::types::notification::{DidChangeWatchedFiles, DidCreateFiles};
+    use crate::types::request::{
         CallHierarchyIncomingCalls, CallHierarchyOutgoingCalls, CallHierarchyPrepare,
         CodeActionRequest, CodeActionResolveRequest, CodeLensRequest, CodeLensResolve,
         ColorPresentationRequest, DocumentColor, DocumentDiagnosticRequest,
         DocumentHighlightRequest, DocumentLinkRequest, DocumentLinkResolve, DocumentSymbolRequest,
-        FoldingRangeRequest, Formatting, GotoDeclaration, GotoDeclarationParams,
-        GotoDeclarationResponse, GotoDefinition, GotoImplementation, GotoImplementationParams,
-        GotoImplementationResponse, GotoTypeDefinition, GotoTypeDefinitionParams,
-        GotoTypeDefinitionResponse, InlayHintRequest, InlayHintResolveRequest, InlineValueRequest,
+        FoldingRangeRequest, Formatting, GotoDeclaration, GotoDefinition, GotoImplementation,
+        GotoTypeDefinition, InlayHintRequest, InlayHintResolveRequest, InlineValueRequest,
         LinkedEditingRange, MonikerRequest, OnTypeFormatting, PrepareRenameRequest,
         RangeFormatting, References, Rename, SelectionRangeRequest, SemanticTokensFullDeltaRequest,
         SemanticTokensFullRequest, SemanticTokensRangeRequest, SignatureHelpRequest,
         TypeHierarchyPrepare, TypeHierarchySubtypes, TypeHierarchySupertypes,
         WorkspaceDiagnosticRequest,
     };
-    use lsp_types::{
+    use gen_lsp_types::{
         CallHierarchyIncomingCall, CallHierarchyIncomingCallsParams, CallHierarchyItem,
         CallHierarchyOutgoingCall, CallHierarchyOutgoingCallsParams, CallHierarchyPrepareParams,
         CodeAction, CodeActionOptions, CodeActionParams, CodeActionResponse, CodeLens,
         CodeLensOptions, CodeLensParams, ColorInformation, ColorPresentation,
-        ColorPresentationParams, ColorProviderOptions, CreateFilesParams, DeclarationOptions,
-        DefinitionOptions, DeleteFilesParams, DiagnosticOptions, DidChangeWatchedFilesParams,
-        DocumentColorParams, DocumentDiagnosticParams, DocumentDiagnosticReportResult,
-        DocumentFormattingOptions, DocumentFormattingParams, DocumentHighlight,
-        DocumentHighlightOptions, DocumentHighlightParams, DocumentLink, DocumentLinkOptions,
-        DocumentLinkParams, DocumentOnTypeFormattingOptions, DocumentOnTypeFormattingParams,
+        ColorPresentationParams, CreateFilesParams, DeclarationOptions,
+        DeclarationParams as GotoDeclarationParams, DeclarationResponse as GotoDeclarationResponse,
+        DefinitionOptions, DefinitionParams as GotoDefinitionParams,
+        DefinitionResponse as GotoDefinitionResponse, DeleteFilesParams, DiagnosticOptions,
+        DidChangeWatchedFilesParams, DocumentColorOptions as ColorProviderOptions,
+        DocumentColorParams, DocumentDiagnosticParams,
+        DocumentDiagnosticReport as DocumentDiagnosticReportResult, DocumentFormattingOptions,
+        DocumentFormattingParams, DocumentHighlight, DocumentHighlightOptions,
+        DocumentHighlightParams, DocumentLink, DocumentLinkOptions, DocumentLinkParams,
+        DocumentOnTypeFormattingOptions, DocumentOnTypeFormattingParams,
         DocumentRangeFormattingOptions, DocumentRangeFormattingParams, DocumentSymbolOptions,
-        DocumentSymbolParams, DocumentSymbolResponse, FoldingProviderOptions, FoldingRange,
-        FoldingRangeParams, GotoDefinitionParams, GotoDefinitionResponse, InlayHint,
-        InlayHintOptions, InlayHintParams, InlineValue, InlineValueOptions, InlineValueParams,
+        DocumentSymbolParams, DocumentSymbolResponse, FoldingRange,
+        FoldingRangeOptions as FoldingProviderOptions, FoldingRangeParams,
+        ImplementationParams as GotoImplementationParams, ImplementationRegistrationOptions,
+        ImplementationResponse as GotoImplementationResponse, InlayHint, InlayHintOptions,
+        InlayHintParams, InlineValue, InlineValueOptions, InlineValueParams,
         LinkedEditingRangeOptions, LinkedEditingRangeParams, LinkedEditingRanges, Location,
-        Moniker, MonikerOptions, MonikerParams, PrepareRenameResponse, ReferenceParams,
-        ReferencesOptions, RenameFilesParams, RenameOptions, RenameParams, SelectionRange,
-        SelectionRangeOptions, SelectionRangeParams, SemanticTokensDeltaParams,
-        SemanticTokensFullDeltaResult, SemanticTokensParams, SemanticTokensRangeParams,
-        SemanticTokensRangeResult, SemanticTokensResult, SignatureHelp, SignatureHelpOptions,
-        SignatureHelpParams, StaticTextDocumentRegistrationOptions, TextDocumentPositionParams,
-        TextEdit, TypeHierarchyItem, TypeHierarchyPrepareParams, TypeHierarchySubtypesParams,
-        TypeHierarchySupertypesParams, WorkspaceDiagnosticParams, WorkspaceDiagnosticReportResult,
+        Moniker, MonikerOptions, MonikerParams, PrepareRenameParams,
+        PrepareRenameResult as PrepareRenameResponse, ReferenceOptions as ReferencesOptions,
+        ReferenceParams, RenameFilesParams, RenameOptions, RenameParams, SelectionRange,
+        SelectionRangeOptions, SelectionRangeParams, SemanticTokens, SemanticTokensDeltaParams,
+        SemanticTokensDeltaResponse, SemanticTokensParams, SemanticTokensRangeParams,
+        SignatureHelp, SignatureHelpOptions, SignatureHelpParams, TextEdit,
+        TypeDefinitionParams as GotoTypeDefinitionParams, TypeDefinitionRegistrationOptions,
+        TypeDefinitionResponse as GotoTypeDefinitionResponse, TypeHierarchyItem,
+        TypeHierarchyPrepareParams, TypeHierarchySubtypesParams, TypeHierarchySupertypesParams,
+        WorkspaceDiagnosticParams, WorkspaceDiagnosticReport as WorkspaceDiagnosticReportResult,
         WorkspaceEdit, WorkspaceSymbol, WorkspaceSymbolParams, WorkspaceSymbolResponse,
     };
 
@@ -1381,10 +1399,11 @@ mod tests {
     }
 
     #[test]
-    fn formatting_descriptors_fix_the_exact_lsp_types_contracts() {
+    fn formatting_descriptors_fix_the_exact_gen_lsp_types_contracts() {
         assert_formatting_descriptor(document_formatting(DocumentFormattingOptions::default()));
         assert_range_formatting_descriptor(range_formatting(DocumentRangeFormattingOptions {
             work_done_progress_options: Default::default(),
+            ..Default::default()
         }));
         assert_on_type_formatting_descriptor(on_type_formatting(
             DocumentOnTypeFormattingOptions::default(),
@@ -1443,10 +1462,10 @@ mod tests {
     }
 
     #[test]
-    fn presentation_descriptors_fix_the_exact_lsp_types_contracts() {
-        assert_document_color_descriptor(document_color(ColorProviderOptions {}));
+    fn presentation_descriptors_fix_the_exact_gen_lsp_types_contracts() {
+        assert_document_color_descriptor(document_color(ColorProviderOptions::default()));
         assert_color_presentation_descriptor(color_presentation());
-        assert_folding_range_descriptor(folding_range(FoldingProviderOptions {}));
+        assert_folding_range_descriptor(folding_range(FoldingProviderOptions::default()));
         assert_selection_range_descriptor(selection_range(SelectionRangeOptions::default()));
         assert_inline_value_descriptor(inline_value(InlineValueOptions::default()));
         assert_document_color_contract::<DocumentColor>();
@@ -1481,6 +1500,7 @@ mod tests {
         let formatting = DocumentFormattingOptions::default();
         let range = DocumentRangeFormattingOptions {
             work_done_progress_options: Default::default(),
+            ..Default::default()
         };
         let on_type = DocumentOnTypeFormattingOptions {
             first_trigger_character: "}".to_string(),
@@ -1493,34 +1513,26 @@ mod tests {
         sealed::Sealed::contribute(&document_formatting(formatting.clone()), &mut caps).unwrap();
         sealed::Sealed::contribute(&range_formatting(range.clone()), &mut caps).unwrap();
         sealed::Sealed::contribute(&on_type_formatting(on_type.clone()), &mut caps).unwrap();
-        sealed::Sealed::contribute(&document_color(ColorProviderOptions {}), &mut caps).unwrap();
+        sealed::Sealed::contribute(&document_color(ColorProviderOptions::default()), &mut caps)
+            .unwrap();
         sealed::Sealed::contribute(&color_presentation(), &mut caps).unwrap();
-        sealed::Sealed::contribute(&folding_range(FoldingProviderOptions {}), &mut caps).unwrap();
+        sealed::Sealed::contribute(&folding_range(FoldingProviderOptions::default()), &mut caps)
+            .unwrap();
         sealed::Sealed::contribute(&selection_range(selection.clone()), &mut caps).unwrap();
         sealed::Sealed::contribute(&inline_value(inline.clone()), &mut caps).unwrap();
         caps.validate().unwrap();
 
         assert_eq!(
             caps.finish(),
-            lsp_types::ServerCapabilities {
-                document_formatting_provider: Some(lsp_types::OneOf::Right(formatting)),
-                document_range_formatting_provider: Some(lsp_types::OneOf::Right(range)),
+            gen_lsp_types::ServerCapabilities {
+                document_formatting_provider: Some(formatting.into()),
+                document_range_formatting_provider: Some(range.into()),
                 document_on_type_formatting_provider: Some(on_type),
-                color_provider: Some(lsp_types::ColorProviderCapability::ColorProvider(
-                    ColorProviderOptions {},
-                )),
-                folding_range_provider: Some(
-                    lsp_types::FoldingRangeProviderCapability::FoldingProvider(
-                        FoldingProviderOptions {},
-                    ),
-                ),
-                selection_range_provider: Some(
-                    lsp_types::SelectionRangeProviderCapability::Options(selection),
-                ),
-                inline_value_provider: Some(lsp_types::OneOf::Right(
-                    lsp_types::InlineValueServerCapabilities::Options(inline),
-                )),
-                ..lsp_types::ServerCapabilities::default()
+                color_provider: Some(ColorProviderOptions::default().into()),
+                folding_range_provider: Some(FoldingProviderOptions::default().into()),
+                selection_range_provider: Some(selection.into()),
+                inline_value_provider: Some(inline.into()),
+                ..gen_lsp_types::ServerCapabilities::default()
             }
         );
     }
@@ -1554,7 +1566,7 @@ mod tests {
     }
 
     #[test]
-    fn call_hierarchy_descriptors_fix_the_exact_lsp_types_contracts() {
+    fn call_hierarchy_descriptors_fix_the_exact_gen_lsp_types_contracts() {
         assert_call_prepare_descriptor(call_hierarchy_prepare(CallHierarchyOptions::default()));
         assert_call_incoming_descriptor(call_hierarchy_incoming_calls());
         assert_call_outgoing_descriptor(call_hierarchy_outgoing_calls());
@@ -1598,7 +1610,7 @@ mod tests {
     }
 
     #[test]
-    fn type_hierarchy_descriptors_fix_the_exact_lsp_types_contracts() {
+    fn type_hierarchy_descriptors_fix_the_exact_gen_lsp_types_contracts() {
         assert_type_prepare_descriptor(type_hierarchy_prepare(TypeHierarchyOptions::default()));
         assert_type_supertypes_descriptor(type_hierarchy_supertypes());
         assert_type_subtypes_descriptor(type_hierarchy_subtypes());
@@ -1629,7 +1641,7 @@ mod tests {
 
     fn assert_semantic_full_contract<R>()
     where
-        R: Request<Params = SemanticTokensParams, Result = Option<SemanticTokensResult>>,
+        R: Request<Params = SemanticTokensParams, Result = Option<SemanticTokens>>,
     {
     }
 
@@ -1637,19 +1649,19 @@ mod tests {
     where
         R: Request<
                 Params = SemanticTokensDeltaParams,
-                Result = Option<SemanticTokensFullDeltaResult>,
+                Result = Option<SemanticTokensDeltaResponse>,
             >,
     {
     }
 
     fn assert_semantic_range_contract<R>()
     where
-        R: Request<Params = SemanticTokensRangeParams, Result = Option<SemanticTokensRangeResult>>,
+        R: Request<Params = SemanticTokensRangeParams, Result = Option<SemanticTokens>>,
     {
     }
 
     #[test]
-    fn semantic_token_descriptors_fix_the_exact_lsp_types_contracts() {
+    fn semantic_token_descriptors_fix_the_exact_gen_lsp_types_contracts() {
         let options = SemanticTokensOptions::default();
         assert_semantic_full_descriptor(semantic_tokens_full(options.clone()));
         assert_semantic_delta_descriptor(semantic_tokens_full_delta(options.clone()));
@@ -1698,7 +1710,7 @@ mod tests {
     }
 
     #[test]
-    fn diagnostic_descriptors_fix_the_exact_lsp_types_contracts() {
+    fn diagnostic_descriptors_fix_the_exact_gen_lsp_types_contracts() {
         assert_document_descriptor(document_diagnostic(DiagnosticOptions::default()));
         assert_workspace_descriptor(workspace_diagnostic(DiagnosticOptions::default()));
         assert_document_contract::<DocumentDiagnosticRequest>();
@@ -1781,7 +1793,7 @@ mod tests {
     }
 
     #[test]
-    fn workspace_symbol_descriptors_fix_the_exact_lsp_types_contracts() {
+    fn workspace_symbol_descriptors_fix_the_exact_gen_lsp_types_contracts() {
         assert_workspace_symbol_descriptor(workspace_symbol(workspace_symbol_options()));
         assert_workspace_symbol_resolve_descriptor(workspace_symbol_resolve());
         assert_workspace_symbol_contract::<WorkspaceSymbolRequest>();
@@ -1797,7 +1809,7 @@ mod tests {
     }
 
     #[test]
-    fn file_operation_descriptors_fix_the_exact_lsp_types_contracts() {
+    fn file_operation_descriptors_fix_the_exact_gen_lsp_types_contracts() {
         let options = || FileOperationRegistrationOptions::default();
         assert_will_create_descriptor(will_create_files(options()));
         assert_will_rename_descriptor(will_rename_files(options()));
@@ -1850,12 +1862,12 @@ mod tests {
 
     fn assert_prepare_rename_contract<R>()
     where
-        R: Request<Params = TextDocumentPositionParams, Result = Option<PrepareRenameResponse>>,
+        R: Request<Params = PrepareRenameParams, Result = Option<PrepareRenameResponse>>,
     {
     }
 
     #[test]
-    fn rename_descriptors_fix_the_exact_lsp_types_contracts() {
+    fn rename_descriptors_fix_the_exact_gen_lsp_types_contracts() {
         assert_rename_descriptor(rename(RenameOptions {
             prepare_provider: None,
             work_done_progress_options: Default::default(),
@@ -1878,7 +1890,7 @@ mod tests {
 
     fn assert_code_action_contract<R>()
     where
-        R: Request<Params = CodeActionParams, Result = Option<CodeActionResponse>>,
+        R: Request<Params = CodeActionParams, Result = Option<Vec<CodeActionResponse>>>,
     {
     }
 
@@ -1889,7 +1901,7 @@ mod tests {
     }
 
     #[test]
-    fn code_action_descriptors_fix_the_exact_lsp_types_contracts() {
+    fn code_action_descriptors_fix_the_exact_gen_lsp_types_contracts() {
         assert_code_action_descriptor(code_action(CodeActionOptions::default()));
         assert_code_action_resolve_descriptor(code_action_resolve());
         assert_code_action_contract::<CodeActionRequest>();
@@ -1920,9 +1932,10 @@ mod tests {
     }
 
     #[test]
-    fn code_lens_descriptors_fix_the_exact_lsp_types_contracts() {
+    fn code_lens_descriptors_fix_the_exact_gen_lsp_types_contracts() {
         assert_code_lens_descriptor(code_lens(CodeLensOptions {
             resolve_provider: None,
+            ..Default::default()
         }));
         assert_code_lens_resolve_descriptor(code_lens_resolve());
         assert_code_lens_contract::<CodeLensRequest>();
@@ -1951,7 +1964,7 @@ mod tests {
     }
 
     #[test]
-    fn document_link_descriptors_fix_the_exact_lsp_types_contracts() {
+    fn document_link_descriptors_fix_the_exact_gen_lsp_types_contracts() {
         assert_document_link_descriptor(document_link(DocumentLinkOptions {
             resolve_provider: None,
             work_done_progress_options: Default::default(),
@@ -1988,7 +2001,7 @@ mod tests {
     }
 
     #[test]
-    fn inlay_hint_descriptors_fix_the_exact_lsp_types_contracts() {
+    fn inlay_hint_descriptors_fix_the_exact_gen_lsp_types_contracts() {
         assert_inlay_hint_descriptor(inlay_hint(InlayHintOptions::default()));
         assert_inlay_hint_resolve_descriptor(inlay_hint_resolve());
         assert_inlay_hint_contract::<InlayHintRequest>();
@@ -2077,21 +2090,22 @@ mod tests {
     {
     }
 
-    fn progress(value: Option<bool>) -> lsp_types::WorkDoneProgressOptions {
-        lsp_types::WorkDoneProgressOptions {
+    fn progress(value: Option<bool>) -> gen_lsp_types::WorkDoneProgressOptions {
+        gen_lsp_types::WorkDoneProgressOptions {
             work_done_progress: value,
         }
     }
 
-    fn static_text_document_registration_options() -> StaticTextDocumentRegistrationOptions {
-        StaticTextDocumentRegistrationOptions {
-            document_selector: None,
-            id: Some("nav".to_string()),
-        }
+    fn type_definition_registration_options() -> TypeDefinitionRegistrationOptions {
+        TypeDefinitionRegistrationOptions::default()
+    }
+
+    fn implementation_registration_options() -> ImplementationRegistrationOptions {
+        ImplementationRegistrationOptions::default()
     }
 
     #[test]
-    fn navigation_and_lookup_descriptors_fix_the_exact_lsp_types_contracts() {
+    fn navigation_and_lookup_descriptors_fix_the_exact_gen_lsp_types_contracts() {
         assert_signature_help_descriptor(signature_help(SignatureHelpOptions::default()));
         assert_declaration_descriptor(declaration(DeclarationOptions {
             work_done_progress_options: progress(Some(true)),
@@ -2099,12 +2113,8 @@ mod tests {
         assert_definition_descriptor(definition(DefinitionOptions {
             work_done_progress_options: progress(Some(true)),
         }));
-        assert_type_definition_descriptor(type_definition(
-            static_text_document_registration_options(),
-        ));
-        assert_implementation_descriptor(implementation(
-            static_text_document_registration_options(),
-        ));
+        assert_type_definition_descriptor(type_definition(type_definition_registration_options()));
+        assert_implementation_descriptor(implementation(implementation_registration_options()));
         assert_references_descriptor(references(ReferencesOptions {
             work_done_progress_options: progress(Some(true)),
         }));
@@ -2180,8 +2190,8 @@ mod tests {
         let definition_options = DefinitionOptions {
             work_done_progress_options: progress(Some(true)),
         };
-        let type_definition_options = static_text_document_registration_options();
-        let implementation_options = static_text_document_registration_options();
+        let type_definition_options = type_definition_registration_options();
+        let implementation_options = implementation_registration_options();
         let references_options = ReferencesOptions {
             work_done_progress_options: progress(Some(true)),
         };
@@ -2218,28 +2228,18 @@ mod tests {
 
         assert_eq!(
             caps.finish(),
-            lsp_types::ServerCapabilities {
+            gen_lsp_types::ServerCapabilities {
                 signature_help_provider: Some(signature_options),
-                declaration_provider: Some(lsp_types::DeclarationCapability::Options(
-                    declaration_options
-                )),
-                definition_provider: Some(lsp_types::OneOf::Right(definition_options)),
-                type_definition_provider: Some(
-                    lsp_types::TypeDefinitionProviderCapability::Options(type_definition_options)
-                ),
-                implementation_provider: Some(
-                    lsp_types::ImplementationProviderCapability::Options(implementation_options)
-                ),
-                references_provider: Some(lsp_types::OneOf::Right(references_options)),
-                document_highlight_provider: Some(lsp_types::OneOf::Right(highlight_options)),
-                document_symbol_provider: Some(lsp_types::OneOf::Right(symbols_options)),
-                linked_editing_range_provider: Some(
-                    lsp_types::LinkedEditingRangeServerCapabilities::Options(linked_options),
-                ),
-                moniker_provider: Some(lsp_types::OneOf::Right(
-                    lsp_types::MonikerServerCapabilities::Options(moniker_options),
-                )),
-                ..lsp_types::ServerCapabilities::default()
+                declaration_provider: Some(declaration_options.into()),
+                definition_provider: Some(definition_options.into()),
+                type_definition_provider: Some(type_definition_options.into()),
+                implementation_provider: Some(implementation_options.into()),
+                references_provider: Some(references_options.into()),
+                document_highlight_provider: Some(highlight_options.into()),
+                document_symbol_provider: Some(symbols_options.into()),
+                linked_editing_range_provider: Some(linked_options.into()),
+                moniker_provider: Some(moniker_options.into()),
+                ..gen_lsp_types::ServerCapabilities::default()
             }
         );
     }

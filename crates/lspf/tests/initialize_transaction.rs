@@ -401,7 +401,7 @@ async fn configure_initialize_can_advertise_a_conditional_feature() {
     let init = initialize_result(&outbox, 1);
     assert_eq!(
         init.capabilities.hover_provider,
-        Some(lspf::types::HoverProviderCapability::Simple(true)),
+        Some(lspf::types::HoverProvider::Bool(true)),
         "a conditionally-registered feature is advertised from the frozen catalog"
     );
 }
@@ -505,10 +505,10 @@ async fn on_initialize_contributes_server_info_without_replacing_capabilities() 
     assert_eq!(
         init.capabilities,
         ServerCapabilities {
-            hover_provider: Some(lspf::types::HoverProviderCapability::Simple(true)),
+            hover_provider: Some(lspf::types::HoverProvider::Bool(true)),
             position_encoding: Some(PositionEncodingKind::UTF16),
             text_document_sync: Some(lspf::types::TextDocumentSyncCapability::Kind(
-                lspf::types::TextDocumentSyncKind::INCREMENTAL,
+                lspf::types::TextDocumentSyncKind::Incremental,
             )),
             workspace: Some(common::workspace_capabilities()),
             ..ServerCapabilities::default()

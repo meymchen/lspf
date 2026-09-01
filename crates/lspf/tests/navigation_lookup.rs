@@ -13,14 +13,14 @@ use lspf::types::request::{
     GotoImplementationResponse, GotoTypeDefinitionParams, GotoTypeDefinitionResponse,
 };
 use lspf::types::{
-    DeclarationOptions, DefinitionOptions, DocumentHighlight, DocumentHighlightKind,
-    DocumentHighlightOptions, DocumentHighlightParams, DocumentSymbolOptions, DocumentSymbolParams,
-    DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse,
-    LinkedEditingRangeOptions, LinkedEditingRangeParams, LinkedEditingRanges, Location, Moniker,
-    MonikerKind, MonikerOptions, MonikerParams, Position, Range, ReferenceParams,
-    ReferencesOptions, SignatureHelp, SignatureHelpOptions, SignatureHelpParams,
-    SignatureInformation, StaticTextDocumentRegistrationOptions, SymbolInformation, SymbolKind,
-    UniquenessLevel,
+    BaseSymbolInformation, DeclarationOptions, DefinitionOptions, DocumentHighlight,
+    DocumentHighlightKind, DocumentHighlightOptions, DocumentHighlightParams,
+    DocumentSymbolOptions, DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams,
+    GotoDefinitionResponse, ImplementationRegistrationOptions, LinkedEditingRangeOptions,
+    LinkedEditingRangeParams, LinkedEditingRanges, Location, Moniker, MonikerKind, MonikerOptions,
+    MonikerParams, Position, Range, ReferenceParams, ReferencesOptions, SignatureHelp,
+    SignatureHelpOptions, SignatureHelpParams, SignatureInformation, StaticRegistrationOptions,
+    SymbolInformation, SymbolKind, TypeDefinitionRegistrationOptions, UniquenessLevel,
 };
 use lspf::{
     BuildError, CancellationToken, LspError, RawMessage, RequestId, Server, ServerContext,
@@ -60,10 +60,9 @@ async fn declaration(
     _: GotoDeclarationParams,
     _: CancellationToken,
 ) -> Result<Option<GotoDeclarationResponse>, LspError> {
-    Ok(Some(GotoDefinitionResponse::Scalar(location(
-        "file:///decl.rs",
-        2,
-    ))))
+    Ok(Some(GotoDeclarationResponse::Declaration(
+        location("file:///decl.rs", 2).into(),
+    )))
 }
 
 async fn definition(
@@ -72,10 +71,9 @@ async fn definition(
     _: GotoDefinitionParams,
     _: CancellationToken,
 ) -> Result<Option<GotoDefinitionResponse>, LspError> {
-    Ok(Some(GotoDefinitionResponse::Scalar(location(
-        "file:///def.rs",
-        3,
-    ))))
+    Ok(Some(GotoDefinitionResponse::Definition(
+        location("file:///def.rs", 3).into(),
+    )))
 }
 
 async fn type_definition(
@@ -84,10 +82,9 @@ async fn type_definition(
     _: GotoTypeDefinitionParams,
     _: CancellationToken,
 ) -> Result<Option<GotoTypeDefinitionResponse>, LspError> {
-    Ok(Some(GotoDefinitionResponse::Scalar(location(
-        "file:///type.rs",
-        4,
-    ))))
+    Ok(Some(GotoTypeDefinitionResponse::Definition(
+        location("file:///type.rs", 4).into(),
+    )))
 }
 
 async fn implementation(
@@ -96,10 +93,9 @@ async fn implementation(
     _: GotoImplementationParams,
     _: CancellationToken,
 ) -> Result<Option<GotoImplementationResponse>, LspError> {
-    Ok(Some(GotoDefinitionResponse::Scalar(location(
-        "file:///impl.rs",
-        5,
-    ))))
+    Ok(Some(GotoImplementationResponse::Definition(
+        location("file:///impl.rs", 5).into(),
+    )))
 }
 
 async fn references(
@@ -119,7 +115,7 @@ async fn document_highlight(
 ) -> Result<Option<Vec<DocumentHighlight>>, LspError> {
     Ok(Some(vec![DocumentHighlight {
         range: Range::new(Position::new(7, 0), Position::new(7, 4)),
-        kind: Some(DocumentHighlightKind::READ),
+        kind: Some(DocumentHighlightKind::Read),
     }]))
 }
 
@@ -130,14 +126,16 @@ async fn document_symbol(
     _: DocumentSymbolParams,
     _: CancellationToken,
 ) -> Result<Option<DocumentSymbolResponse>, LspError> {
-    Ok(Some(DocumentSymbolResponse::Flat(vec![
+    Ok(Some(DocumentSymbolResponse::SymbolInformationList(vec![
         SymbolInformation {
-            name: "main".to_string(),
-            kind: SymbolKind::FUNCTION,
-            tags: None,
             deprecated: None,
             location: location("file:///symbols.rs", 8),
-            container_name: None,
+            base_symbol_information: BaseSymbolInformation {
+                name: "main".to_string(),
+                kind: SymbolKind::Function,
+                tags: None,
+                container_name: None,
+            },
         },
     ])))
 }
@@ -177,13 +175,6 @@ fn progress(value: Option<bool>) -> lspf::types::WorkDoneProgressOptions {
     }
 }
 
-fn registration_options() -> StaticTextDocumentRegistrationOptions {
-    StaticTextDocumentRegistrationOptions {
-        document_selector: None,
-        id: Some("nav".to_string()),
-    }
-}
-
 fn server() -> Server<AppState> {
     Server::builder(AppState)
         .feature(
@@ -207,11 +198,21 @@ fn server() -> Server<AppState> {
             definition,
         )
         .feature(
-            lspf::features::type_definition(registration_options()),
+            lspf::features::type_definition(TypeDefinitionRegistrationOptions {
+                static_registration_options: StaticRegistrationOptions {
+                    id: Some("nav".to_string()),
+                },
+                ..TypeDefinitionRegistrationOptions::default()
+            }),
             type_definition,
         )
         .feature(
-            lspf::features::implementation(registration_options()),
+            lspf::features::implementation(ImplementationRegistrationOptions {
+                static_registration_options: StaticRegistrationOptions {
+                    id: Some("nav".to_string()),
+                },
+                ..ImplementationRegistrationOptions::default()
+            }),
             implementation,
         )
         .feature(

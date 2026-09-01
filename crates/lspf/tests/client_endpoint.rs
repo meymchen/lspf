@@ -808,13 +808,9 @@ async fn client_context_supports_nested_typed_calls_progress_and_dynamic_registr
         .notification::<Progress, _, _>(move |ctx, params| {
             let progress_tx = progress_tx.clone();
             async move {
-                let result = if params.token == lspf::types::NumberOrString::Number(9)
-                    && matches!(
-                        &params.value,
-                        lspf::types::ProgressParamsValue::WorkDone(
-                            lspf::types::WorkDoneProgress::Begin(_)
-                        )
-                    ) {
+                let result = if params.token == lspf::types::ProgressToken::Int(9)
+                    && params.value.get("kind").and_then(serde_json::Value::as_str) == Some("begin")
+                {
                     Some(
                         ctx.server()
                             .request::<ServerEcho>(EchoParams {
@@ -890,7 +886,7 @@ async fn client_context_supports_nested_typed_calls_progress_and_dynamic_registr
     ));
     assert_eq!(
         create_rx.recv().await.unwrap(),
-        lspf::types::NumberOrString::Number(9)
+        lspf::types::ProgressToken::Int(9)
     );
 
     incoming_tx
@@ -949,7 +945,7 @@ async fn client_context_supports_nested_typed_calls_progress_and_dynamic_registr
             .expect("progress handler completes within watchdog")
             .expect("progress handler runs exactly once");
     assert!(request_id.is_none());
-    assert_eq!(progress.token, lspf::types::NumberOrString::Number(9));
+    assert_eq!(progress.token, lspf::types::ProgressToken::Int(9));
     assert_eq!(nested_result.unwrap().text, "progress response");
     let (_, _, nested_result) = tokio::time::timeout(Duration::from_secs(2), progress_rx.recv())
         .await
@@ -1030,7 +1026,7 @@ async fn client_context_supports_nested_typed_calls_progress_and_dynamic_registr
             server
                 .request::<ServerProgressEcho>(ProgressEchoParams {
                     text: "client initiated".into(),
-                    work_done_token: Some(lspf::types::NumberOrString::Number(10)),
+                    work_done_token: Some(lspf::types::ProgressToken::Int(10)),
                 })
                 .await
         }
@@ -1054,14 +1050,8 @@ async fn client_context_supports_nested_typed_calls_progress_and_dynamic_registr
     }
     let (_, begin, _) = progress_rx.recv().await.unwrap();
     let (_, end, _) = progress_rx.recv().await.unwrap();
-    assert!(matches!(
-        begin.value,
-        lspf::types::ProgressParamsValue::WorkDone(lspf::types::WorkDoneProgress::Begin(_))
-    ));
-    assert!(matches!(
-        end.value,
-        lspf::types::ProgressParamsValue::WorkDone(lspf::types::WorkDoneProgress::End(_))
-    ));
+    assert_eq!(begin.value["kind"], "begin");
+    assert_eq!(end.value["kind"], "end");
     incoming_tx
         .send(response(
             progress_request_id,

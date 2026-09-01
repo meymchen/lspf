@@ -6,7 +6,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
-use lsp_types::Uri;
+use gen_lsp_types::Uri;
 
 use crate::runtime::TaskSend;
 use crate::uri_key::UriKey;
@@ -107,10 +107,7 @@ pub struct EmptyFileProvider;
 
 impl FileProvider for EmptyFileProvider {
     async fn read_text(&self, uri: &Uri) -> Result<Option<String>, WorkspaceError> {
-        let scheme = uri
-            .scheme()
-            .map(|scheme| scheme.as_str())
-            .unwrap_or_default();
+        let scheme = uri.scheme().as_str();
         Err(WorkspaceError::UnsupportedScheme(scheme.to_string()))
     }
 }
@@ -134,7 +131,7 @@ pub(crate) fn default_file_provider() -> SharedFileProvider {
 mod os {
     use std::path::PathBuf;
 
-    use lsp_types::Uri;
+    use gen_lsp_types::Uri;
     use tokio::io::AsyncReadExt;
 
     use super::FileProvider;
@@ -212,10 +209,7 @@ mod os {
 
     impl FileProvider for OsFileProvider {
         async fn read_text(&self, uri: &Uri) -> Result<Option<String>, WorkspaceError> {
-            let scheme = uri
-                .scheme()
-                .map(|scheme| scheme.as_str())
-                .unwrap_or_default();
+            let scheme = uri.scheme().as_str();
             if !scheme.eq_ignore_ascii_case("file") {
                 return Err(WorkspaceError::UnsupportedScheme(scheme.to_string()));
             }
@@ -262,7 +256,7 @@ mod os {
     fn windows_native_path(uri: &Uri) -> Result<Option<PathBuf>, WorkspaceError> {
         let host = uri
             .authority()
-            .map(|authority| authority.host().as_str())
+            .map(|authority| authority.host())
             .unwrap_or_default();
         if !host.is_empty() && !host.eq_ignore_ascii_case("localhost") {
             let mut out = format!(r"\\{host}");
@@ -471,10 +465,10 @@ mod os {
                 "untitled:Untitled-1",
                 "untitled:///x.rs",
                 "http://example.com/a.rs",
-                "/no/scheme",
+                "custom:no-scheme",
             ] {
                 let parsed = uri(spelling);
-                let expected_scheme = parsed.scheme().map(|s| s.as_str()).unwrap_or_default();
+                let expected_scheme = parsed.scheme().as_str();
                 let err = provider.read_text(&parsed).await.unwrap_err();
                 assert!(
                     matches!(err, WorkspaceError::UnsupportedScheme(ref scheme) if scheme == expected_scheme),
@@ -619,7 +613,7 @@ pub use os::{OsFileProvider, OsFileProviderBuilder};
 mod tests {
     use std::str::FromStr;
 
-    use lsp_types::Uri;
+    use gen_lsp_types::Uri;
 
     use super::EmptyFileProvider;
     use crate::file_provider::FileProvider;
@@ -632,10 +626,10 @@ mod tests {
             "file:///tmp/x.txt",
             "untitled:Untitled-1",
             "http://example.com/a.rs",
-            "/no/scheme",
+            "custom:no-scheme",
         ] {
             let uri = Uri::from_str(spelling).expect("the test URI parses");
-            let expected_scheme = uri.scheme().map(|s| s.as_str()).unwrap_or_default();
+            let expected_scheme = uri.scheme().as_str();
             let error = provider.read_text(&uri).await.unwrap_err();
             assert!(
                 matches!(error, WorkspaceError::UnsupportedScheme(ref scheme) if scheme == expected_scheme),

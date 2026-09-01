@@ -23,7 +23,7 @@ async fn completions(
     _: CompletionParams,
     _: CancellationToken,
 ) -> Result<Option<CompletionResponse>, LspError> {
-    Ok(Some(CompletionResponse::Array(
+    Ok(Some(CompletionResponse::CompletionItemList(
         ["one", "two", "three", "four", "five"]
             .into_iter()
             .map(|label| CompletionItem {
@@ -46,7 +46,7 @@ async fn count_down(
             std::thread::sleep(Duration::from_millis(100));
             client
                 .show_message(ShowMessageParams {
-                    typ: MessageType::INFO,
+                    kind: MessageType::Info,
                     message: value.to_string(),
                 })
                 .map_err(LspError::internal)?;

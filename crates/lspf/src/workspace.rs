@@ -13,7 +13,7 @@
 
 use std::sync::{Arc, RwLock};
 
-use lsp_types::{
+use gen_lsp_types::{
     ClientCapabilities, ClientInfo, DidChangeWorkspaceFoldersParams, InitializeParams, TraceValue,
     Uri, WorkspaceFolder,
 };
@@ -52,12 +52,18 @@ struct WorkspaceState {
 /// `$/setTrace` writes through the workspace; [`ClientHandle::log_trace`](crate::ClientHandle::log_trace)
 /// reads the same cell to gate its enqueue, so the two never observe
 /// different levels.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub(crate) struct SharedTrace(Arc<RwLock<TraceValue>>);
+
+impl Default for SharedTrace {
+    fn default() -> Self {
+        Self(Arc::new(RwLock::new(TraceValue::Off)))
+    }
+}
 
 impl SharedTrace {
     pub(crate) fn get(&self) -> TraceValue {
-        *self.0.read().unwrap()
+        self.0.read().unwrap().clone()
     }
 
     fn set(&self, value: TraceValue) {
@@ -146,7 +152,18 @@ impl Workspace {
                 capabilities: params.capabilities.clone(),
                 initialization_options: params.initialization_options.clone(),
                 root_uri,
-                folders: RwLock::new(params.workspace_folders.clone().unwrap_or_default()),
+                folders: RwLock::new(
+                    match params
+                        .workspace_folders_initialize_params
+                        .workspace_folders
+                        .clone()
+                    {
+                        Some(gen_lsp_types::WorkspaceFolders::WorkspaceFolderList(folders)) => {
+                            folders
+                        }
+                        Some(gen_lsp_types::WorkspaceFolders::Null) | None => Vec::new(),
+                    },
+                ),
                 configuration: RwLock::new(None),
                 trace,
                 documents,
@@ -285,9 +302,9 @@ mod tests {
     use std::str::FromStr;
     use std::sync::Barrier;
 
-    use lsp_types::{
+    use gen_lsp_types::{
         ClientCapabilities, ClientInfo, GeneralClientCapabilities, PositionEncodingKind,
-        TextDocumentItem,
+        TextDocumentItem, WorkspaceFoldersInitializeParams,
     };
     use serde_json::json;
 
@@ -336,10 +353,11 @@ mod tests {
             },
             initialization_options: Some(json!({ "settings": { "tabSize": 4 } })),
             root_uri: Some(uri("file:///workspace/root")),
-            workspace_folders: Some(vec![
-                folder("file:///b", "second"),
-                folder("file:///a", "first"),
-            ]),
+            workspace_folders_initialize_params: WorkspaceFoldersInitializeParams {
+                workspace_folders: Some(
+                    vec![folder("file:///b", "second"), folder("file:///a", "first")].into(),
+                ),
+            },
             ..InitializeParams::default()
         };
 
@@ -368,12 +386,19 @@ mod tests {
     fn roots_prefers_the_announced_folders_in_order() {
         let params = InitializeParams {
             root_uri: Some(uri("file:///workspace/root")),
-            workspace_folders: Some(vec![folder("file:///b", "b"), folder("file:///a", "a")]),
+            workspace_folders_initialize_params: WorkspaceFoldersInitializeParams {
+                workspace_folders: Some(
+                    vec![folder("file:///b", "b"), folder("file:///a", "a")].into(),
+                ),
+            },
             ..InitializeParams::default()
         };
         let workspace = Workspace::from_params(&params, Documents::new());
 
-        assert_eq!(workspace.roots(), params.workspace_folders.unwrap());
+        assert_eq!(
+            workspace.roots(),
+            vec![folder("file:///b", "b"), folder("file:///a", "a")]
+        );
     }
 
     #[test]
@@ -386,7 +411,9 @@ mod tests {
             folder("untitled:workspace", "scratch"),
         ];
         let params = InitializeParams {
-            workspace_folders: Some(announced.clone()),
+            workspace_folders_initialize_params: WorkspaceFoldersInitializeParams {
+                workspace_folders: Some(announced.clone().into()),
+            },
             ..InitializeParams::default()
         };
         let workspace = Workspace::from_params(&params, Documents::new());
@@ -429,7 +456,9 @@ mod tests {
     fn an_empty_folder_list_falls_back_to_root_uri() {
         let params = InitializeParams {
             root_uri: Some(uri("file:///solo")),
-            workspace_folders: Some(vec![]),
+            workspace_folders_initialize_params: WorkspaceFoldersInitializeParams {
+                workspace_folders: Some(Vec::<WorkspaceFolder>::new().into()),
+            },
             ..InitializeParams::default()
         };
         let workspace = Workspace::from_params(&params, Documents::new());
@@ -465,7 +494,9 @@ mod tests {
     fn public_values_retain_the_original_client_uris() {
         let params = InitializeParams {
             root_uri: Some(uri("file:///C%3A/Foo%20Bar")),
-            workspace_folders: Some(vec![folder("FILE:///C%3A/Foo%20Bar", "orig")]),
+            workspace_folders_initialize_params: WorkspaceFoldersInitializeParams {
+                workspace_folders: Some(vec![folder("FILE:///C%3A/Foo%20Bar", "orig")].into()),
+            },
             ..InitializeParams::default()
         };
         let workspace = Workspace::from_params(&params, Documents::new());
@@ -491,7 +522,7 @@ mod tests {
         documents
             .open(TextDocumentItem {
                 uri: uri("file:///shared.rs"),
-                language_id: "rust".to_string(),
+                language_id: "rust".into(),
                 version: 1,
                 text: "fn main() {}".to_string(),
             })
@@ -509,7 +540,9 @@ mod tests {
     #[test]
     fn concurrent_clone_reads_are_safe_and_observe_later_folder_mutation() {
         let params = InitializeParams {
-            workspace_folders: Some(vec![folder("file:///before", "before")]),
+            workspace_folders_initialize_params: WorkspaceFoldersInitializeParams {
+                workspace_folders: Some(vec![folder("file:///before", "before")].into()),
+            },
             ..InitializeParams::default()
         };
         let workspace = Workspace::from_params(&params, Documents::new());
@@ -529,7 +562,7 @@ mod tests {
 
         barrier.wait();
         workspace.apply_folder_change(DidChangeWorkspaceFoldersParams {
-            event: lsp_types::WorkspaceFoldersChangeEvent {
+            event: gen_lsp_types::WorkspaceFoldersChangeEvent {
                 removed: vec![folder("file:///before", "ignored")],
                 added: vec![folder("file:///after", "after")],
             },
@@ -554,7 +587,7 @@ mod tests {
         documents
             .open(TextDocumentItem {
                 uri: requested.clone(),
-                language_id: "rust".to_string(),
+                language_id: "rust".into(),
                 version: 7,
                 text: "editor".to_string(),
             })

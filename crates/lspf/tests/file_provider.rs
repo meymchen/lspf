@@ -202,7 +202,7 @@ mod os_contract {
             "http://example.com/a.rs",
         ] {
             let parsed = uri(spelling);
-            let expected_scheme = parsed.scheme().map(|s| s.as_str()).unwrap_or_default();
+            let expected_scheme = parsed.scheme().as_str();
             let err = provider.read_text(&parsed).await.unwrap_err();
             assert!(
                 matches!(err, WorkspaceError::UnsupportedScheme(ref scheme) if scheme == expected_scheme),

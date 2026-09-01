@@ -36,7 +36,7 @@ async fn hover(
     _ct: CancellationToken,
 ) -> Result<Option<Hover>, LspError> {
     Ok(Some(Hover {
-        contents: HoverContents::Scalar(MarkedString::String("docs".to_string())),
+        contents: HoverContents::MarkedString(MarkedString::String("docs".to_string())),
         range: None,
     }))
 }
@@ -47,8 +47,12 @@ async fn completion(
     _params: CompletionParams,
     _ct: CancellationToken,
 ) -> Result<Option<CompletionResponse>, LspError> {
-    Ok(Some(CompletionResponse::Array(vec![
-        CompletionItem::new_simple("field".to_string(), "a field".to_string()),
+    Ok(Some(CompletionResponse::CompletionItemList(vec![
+        CompletionItem {
+            label: "field".to_string(),
+            detail: Some("a field".to_string()),
+            ..CompletionItem::default()
+        },
     ])))
 }
 
@@ -213,7 +217,7 @@ async fn initialize_hover_shutdown_advertises_and_routes_hover() {
     let caps = init.capabilities;
     assert_eq!(
         caps.hover_provider,
-        Some(lspf::types::HoverProviderCapability::Simple(true))
+        Some(lspf::types::HoverProvider::Bool(true))
     );
     assert_eq!(
         caps.execute_command_provider, None,
@@ -225,7 +229,7 @@ async fn initialize_hover_shutdown_advertises_and_routes_hover() {
         serde_json::from_value(ok_result(&outbox, 2).expect("hover response")).unwrap();
     assert_eq!(
         hover.contents,
-        HoverContents::Scalar(MarkedString::String("docs".to_string()))
+        HoverContents::MarkedString(MarkedString::String("docs".to_string()))
     );
 
     assert_eq!(ok_result(&outbox, 3), Some(serde_json::Value::Null));
@@ -251,7 +255,7 @@ async fn completion_advertises_supplied_options_and_routes_results() {
     let completion: CompletionResponse =
         serde_json::from_value(ok_result(&outbox, 2).expect("completion response")).unwrap();
     match completion {
-        CompletionResponse::Array(items) => {
+        CompletionResponse::CompletionItemList(items) => {
             assert_eq!(items.len(), 1);
             assert_eq!(items[0].label, "field");
         }
@@ -315,11 +319,11 @@ async fn features_advertise_no_unrelated_capabilities() {
     // negotiated position encoding (ADR 0016), which defaults to UTF-16 when
     // the client offers none, plus document sync and workspace-folder support.
     let expected = ServerCapabilities {
-        hover_provider: Some(lspf::types::HoverProviderCapability::Simple(true)),
+        hover_provider: Some(lspf::types::HoverProvider::Bool(true)),
         completion_provider: Some(completion_options()),
         position_encoding: Some(lspf::types::PositionEncodingKind::UTF16),
         text_document_sync: Some(lspf::types::TextDocumentSyncCapability::Kind(
-            lspf::types::TextDocumentSyncKind::INCREMENTAL,
+            lspf::types::TextDocumentSyncKind::Incremental,
         )),
         workspace: Some(common::workspace_capabilities()),
         ..ServerCapabilities::default()

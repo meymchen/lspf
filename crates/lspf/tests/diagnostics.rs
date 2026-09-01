@@ -28,13 +28,15 @@ async fn document_diagnostic(
     _ct: CancellationToken,
 ) -> Result<DocumentDiagnosticReportResult, LspError> {
     Ok(
-        DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
-            related_documents: None,
-            full_document_diagnostic_report: FullDocumentDiagnosticReport {
-                result_id: params.identifier,
-                items: Vec::new(),
+        DocumentDiagnosticReport::RelatedFullDocumentDiagnosticReport(
+            RelatedFullDocumentDiagnosticReport {
+                related_documents: None,
+                full_document_diagnostic_report: FullDocumentDiagnosticReport {
+                    result_id: params.identifier,
+                    items: Vec::new(),
+                },
             },
-        })
+        )
         .into(),
     )
 }
@@ -255,8 +257,8 @@ async fn either_route_contributes_a_provider_and_combined_order_is_stable() {
     let workspace_only = drive(workspace_only, vec![initialize_request(1), exit()]).await;
     let document_first = drive(document_first, vec![initialize_request(1), exit()]).await;
     let workspace_first = drive(workspace_first, vec![initialize_request(1), exit()]).await;
-    let document_expected = DiagnosticServerCapabilities::Options(document_options);
-    let combined_expected = DiagnosticServerCapabilities::Options(combined_options);
+    let document_expected = DiagnosticServerCapabilities::DiagnosticOptions(document_options);
+    let combined_expected = DiagnosticServerCapabilities::DiagnosticOptions(combined_options);
 
     assert_eq!(diagnostic_provider(&document_only), document_expected);
     assert_eq!(diagnostic_provider(&workspace_only), combined_expected);
@@ -306,20 +308,17 @@ async fn diagnostic_routes_dispatch_typed_values_and_share_one_capability() {
         serde_json::from_value(ok_result(&outbox, 1)).unwrap();
     assert_eq!(
         init.capabilities.diagnostic_provider,
-        Some(DiagnosticServerCapabilities::Options(options))
+        Some(DiagnosticServerCapabilities::DiagnosticOptions(options))
     );
     let document: DocumentDiagnosticReportResult =
         serde_json::from_value(ok_result(&outbox, 2)).unwrap();
     assert!(matches!(
         document,
-        DocumentDiagnosticReportResult::Report(DocumentDiagnosticReport::Full(_))
+        DocumentDiagnosticReport::RelatedFullDocumentDiagnosticReport(_)
     ));
     let workspace: WorkspaceDiagnosticReportResult =
         serde_json::from_value(ok_result(&outbox, 3)).unwrap();
-    assert_eq!(
-        workspace,
-        WorkspaceDiagnosticReportResult::Report(WorkspaceDiagnosticReport::default())
-    );
+    assert_eq!(workspace, WorkspaceDiagnosticReport::default());
 }
 
 #[test]
@@ -388,7 +387,7 @@ async fn compatible_static_and_conditional_routes_merge() {
     let outbox = drive(server, vec![initialize_request(1), exit()]).await;
     assert_eq!(
         diagnostic_provider(&outbox),
-        DiagnosticServerCapabilities::Options(options("compiler", true))
+        DiagnosticServerCapabilities::DiagnosticOptions(options("compiler", true))
     );
 }
 

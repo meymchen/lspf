@@ -25,7 +25,7 @@ async fn completions(
     _: CancellationToken,
 ) -> Result<Option<CompletionResponse>, LspError> {
     tokio::task::yield_now().await;
-    Ok(Some(CompletionResponse::Array(
+    Ok(Some(CompletionResponse::CompletionItemList(
         ["null", "true", "false"]
             .into_iter()
             .map(|label| CompletionItem {

@@ -8,7 +8,7 @@ use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 
 use bytes::{Bytes, BytesMut};
-use lsp_types::{Position, Range, TextDocumentContentChangeEvent, Uri};
+use gen_lsp_types::{Position, Range, TextDocumentContentChangeEvent, Uri};
 use tokio_util::codec::{Decoder, Encoder};
 
 use crate::documents::{Document, PositionEncoding};

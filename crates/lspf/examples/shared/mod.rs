@@ -35,7 +35,7 @@ async fn hover(
 ) -> Result<Option<Hover>, LspError> {
     let _ = ctx.workspace().roots();
     Ok(Some(Hover {
-        contents: lspf::types::HoverContents::Scalar(lspf::types::MarkedString::String(
+        contents: lspf::types::HoverContents::MarkedString(lspf::types::MarkedString::String(
             state.label.clone(),
         )),
         range: None,
@@ -49,10 +49,12 @@ async fn completion(
     _params: CompletionParams,
     _ct: CancellationToken,
 ) -> Result<Option<CompletionResponse>, LspError> {
-    Ok(Some(CompletionResponse::Array(vec![CompletionItem {
-        label: "shared".to_string(),
-        ..CompletionItem::default()
-    }])))
+    Ok(Some(CompletionResponse::CompletionItemList(vec![
+        CompletionItem {
+            label: "shared".to_string(),
+            ..CompletionItem::default()
+        },
+    ])))
 }
 
 /// A typed custom request marker: same method, params, and result on every
