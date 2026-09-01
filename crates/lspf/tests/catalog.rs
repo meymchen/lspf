@@ -54,10 +54,11 @@ use lspf::types::{
     DocumentHighlightRequest, DocumentLink, DocumentLinkOptions, DocumentLinkRequest,
     DocumentOnTypeFormattingOptions, DocumentOnTypeFormattingRequest as OnTypeFormatting,
     DocumentRangeFormattingOptions, DocumentRangeFormattingRequest as RangeFormatting,
-    DocumentSymbolOptions, DocumentSymbolRequest, FileOperationFilter, FileOperationPattern,
-    FileOperationPatternKind, FileOperationRegistrationOptions, FoldingRangeOptions,
-    FoldingRangeRequest, HoverRequest, ImplementationRegistrationOptions,
-    ImplementationRequest as GotoImplementation, InlayHint, InlayHintOptions, InlayHintRequest,
+    DocumentRangesFormattingRequest, DocumentSymbolOptions, DocumentSymbolRequest,
+    FileOperationFilter, FileOperationPattern, FileOperationPatternKind,
+    FileOperationRegistrationOptions, FoldingRangeOptions, FoldingRangeRequest, HoverRequest,
+    ImplementationRegistrationOptions, ImplementationRequest as GotoImplementation, InlayHint,
+    InlayHintOptions, InlayHintRequest, InlineCompletionOptions, InlineCompletionRequest,
     InlineValueOptions, InlineValueRequest, LinkedEditingRangeOptions,
     LinkedEditingRangeRequest as LinkedEditingRange, MonikerOptions, MonikerRequest, Notification,
     PrepareRenameRequest, ReferenceOptions, ReferencesRequest as References,
@@ -66,7 +67,8 @@ use lspf::types::{
     SemanticTokensDeltaRequest as SemanticTokensFullDeltaRequest, SemanticTokensLegend,
     SemanticTokensOptions, SemanticTokensRangeRequest,
     SemanticTokensRequest as SemanticTokensFullRequest, SetTraceNotification as SetTrace,
-    SignatureHelpOptions, SignatureHelpRequest, TextDocumentSyncKind,
+    SignatureHelpOptions, SignatureHelpRequest, TextDocumentContentOptions,
+    TextDocumentContentRequest, TextDocumentContentResult, TextDocumentSyncKind,
     TypeDefinitionRegistrationOptions, TypeDefinitionRequest as GotoTypeDefinition,
     TypeHierarchyOptions, TypeHierarchyPrepareRequest as TypeHierarchyPrepare,
     TypeHierarchySubtypesRequest as TypeHierarchySubtypes,
@@ -117,6 +119,7 @@ request_handlers! {
     document_symbol: DocumentSymbolRequest => None,
     formatting: Formatting => None,
     range_formatting: RangeFormatting => None,
+    ranges_formatting: DocumentRangesFormattingRequest => None,
     on_type_formatting: OnTypeFormatting => None,
     rename: Rename => None,
     prepare_rename: PrepareRenameRequest => None,
@@ -138,6 +141,7 @@ request_handlers! {
     completion: Completion => None,
     inlay_hint: InlayHintRequest => None,
     inline_value: InlineValueRequest => None,
+    inline_completion: InlineCompletionRequest => None,
     workspace_symbol: WorkspaceSymbolRequest => None,
     will_save_wait_until: WillSaveWaitUntil => None,
     will_create_files: WillCreateFiles => None,
@@ -146,6 +150,7 @@ request_handlers! {
     code_action: CodeActionRequest => None,
     code_lens: CodeLensRequest => None,
     document_link: DocumentLinkRequest => None,
+    text_document_content: TextDocumentContentRequest => TextDocumentContentResult::default(),
 }
 
 /// The resolve routes echo their typed parameters: an echo proves the route
@@ -418,6 +423,13 @@ fn catalog_registrations(builder: lspf::ServerBuilder<AppState>) -> lspf::Server
             range_formatting,
         )
         .feature(
+            lspf::features::ranges_formatting(DocumentRangeFormattingOptions {
+                work_done_progress_options: work_done_options(),
+                ranges_support: None,
+            }),
+            ranges_formatting,
+        )
+        .feature(
             lspf::features::on_type_formatting(DocumentOnTypeFormattingOptions::default()),
             on_type_formatting,
         )
@@ -509,6 +521,12 @@ fn catalog_registrations(builder: lspf::ServerBuilder<AppState>) -> lspf::Server
             inline_value,
         )
         .feature(
+            lspf::features::inline_completion(InlineCompletionOptions {
+                work_done_progress_options: work_done_options(),
+            }),
+            inline_completion,
+        )
+        .feature(
             lspf::features::document_diagnostic(DiagnosticOptions {
                 identifier: Some("catalog".to_string()),
                 workspace_diagnostics: true,
@@ -536,6 +554,12 @@ fn catalog_registrations(builder: lspf::ServerBuilder<AppState>) -> lspf::Server
         .feature(
             lspf::features::workspace_symbol_resolve(),
             resolve_workspace_symbol,
+        )
+        .feature(
+            lspf::features::text_document_content(TextDocumentContentOptions::new(vec![
+                "git".to_string(),
+            ])),
+            text_document_content,
         )
         .feature(
             lspf::features::will_create_files(file_filters()),
@@ -742,16 +766,12 @@ const CAPABILITY_RECORDS: [CapabilityRecord; 4] = [
 /// Each entry is a commitment rather than an exemption: the work named beside
 /// it deletes its line, and until then the guardrail pins the gap so it cannot
 /// grow silently.
-const UNPRODUCIBLE_CAPABILITY_FIELDS: [&str; 4] = [
+const UNPRODUCIBLE_CAPABILITY_FIELDS: [&str; 2] = [
     // The server-defined escape hatch. It carries no protocol meaning of its
     // own, lspf exposes no way to set it, and no ticket plans one.
     "experimental",
-    // Inline completion, issue #243.
-    "inlineCompletionProvider",
     // Notebook document sync, issue #252.
     "notebookDocumentSync",
-    // `workspace/textDocumentContent`, issue #243.
-    "workspace.textDocumentContent",
 ];
 
 fn meta_model() -> Value {

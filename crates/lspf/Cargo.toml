@@ -307,6 +307,10 @@ required-features = ["runtime-tokio"]
 name = "testing"
 required-features = ["testing"]
 
+[[test]]
+name = "lsp_318_inbound"
+required-features = ["testing"]
+
 [[bench]]
 name = "performance_baseline"
 harness = false
