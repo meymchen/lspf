@@ -613,12 +613,10 @@ mod tests {
     /// One content change, as `didChange` delivers it.
     fn change(range: Option<Range>, text: &str) -> TextDocumentContentChangeEvent {
         match range {
-            Some(range) => gen_lsp_types::TextDocumentContentChangePartial {
-                range,
-                range_length: None,
-                text: text.to_string(),
+            Some(range) => {
+                gen_lsp_types::TextDocumentContentChangePartial::new(range, None, text.to_string())
+                    .into()
             }
-            .into(),
             None => gen_lsp_types::TextDocumentContentChangeWholeDocument {
                 text: text.to_string(),
             }

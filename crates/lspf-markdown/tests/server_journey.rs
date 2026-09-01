@@ -92,14 +92,14 @@ async fn incremental_edits_recompute_broken_local_link_diagnostics() {
                     version: 2,
                 },
                 content_changes: vec![
-                    lspf::types::TextDocumentContentChangePartial {
-                        range: lspf::types::Range::new(
+                    lspf::types::TextDocumentContentChangePartial::new(
+                        lspf::types::Range::new(
                             lspf::types::Position::new(0, 10),
                             lspf::types::Position::new(0, 20),
                         ),
-                        range_length: None,
-                        text: "guide.md".into(),
-                    }
+                        None,
+                        "guide.md".into(),
+                    )
                     .into(),
                 ],
             },

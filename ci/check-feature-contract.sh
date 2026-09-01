@@ -68,7 +68,10 @@ assert_no_package_overlap() {
 }
 
 default_packages=$(package_graph)
-default_package_names=$(package_names)
+# Keep the checked-in allowlist deterministic across developer hosts. CI's
+# authoritative native environment is Linux, so resolve this snapshot for the
+# same target even when the contract is run from Windows or macOS.
+default_package_names=$(package_names --target x86_64-unknown-linux-gnu)
 stdio_packages=$(package_graph --no-default-features --features stdio)
 tcp_only_packages=$(comm -13 \
     <(printf '%s\n' "$stdio_packages") \

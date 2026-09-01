@@ -9,7 +9,7 @@ use std::sync::Arc;
 use lspf::types::notification::DidOpenTextDocument;
 use lspf::types::{
     CompletionItem, CompletionOptions, CompletionParams, CompletionResponse,
-    DidOpenTextDocumentParams, Hover, HoverParams,
+    DidOpenTextDocumentParams, Hover, HoverParams, MarkupContent, MarkupKind,
 };
 use lspf::{CancellationToken, LspError, Server, ServerContext};
 
@@ -35,7 +35,8 @@ async fn hover(
 ) -> Result<Option<Hover>, LspError> {
     let _ = ctx.workspace().roots();
     Ok(Some(Hover {
-        contents: lspf::types::HoverContents::MarkedString(lspf::types::MarkedString::String(
+        contents: lspf::types::HoverContents::MarkupContent(MarkupContent::new(
+            MarkupKind::Markdown,
             state.label.clone(),
         )),
         range: None,

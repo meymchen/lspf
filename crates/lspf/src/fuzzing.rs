@@ -8,7 +8,7 @@ use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 
 use bytes::{Bytes, BytesMut};
-use gen_lsp_types::{Position, Range, TextDocumentContentChangeEvent, Uri};
+use gen_lsp_types::{Position, Range, Uri};
 use tokio_util::codec::{Decoder, Encoder};
 
 use crate::documents::{Document, PositionEncoding};
@@ -169,20 +169,17 @@ pub fn incremental_edits(data: &[u8]) {
         PositionEncoding::Utf16
     };
     let change = if controls.first().copied().unwrap_or_default() % 5 == 0 {
-        TextDocumentContentChangeEvent {
-            range: None,
-            range_length: None,
-            text: replacement,
-        }
+        gen_lsp_types::TextDocumentContentChangeWholeDocument::new(replacement).into()
     } else {
-        TextDocumentContentChangeEvent {
-            range: Some(Range::new(
+        gen_lsp_types::TextDocumentContentChangePartial::new(
+            Range::new(
                 position_from(controls.get(1..5).unwrap_or_default()),
                 position_from(controls.get(5..9).unwrap_or_default()),
-            )),
-            range_length: None,
-            text: replacement,
-        }
+            ),
+            None,
+            replacement,
+        )
+        .into()
     };
 
     let before = document.text();

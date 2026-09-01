@@ -19,7 +19,7 @@ use tokio::sync::mpsc;
 
 use lspf::types::{
     CompletionItem, CompletionOptions, CompletionParams, CompletionResponse, Hover, HoverContents,
-    HoverParams, MarkedString, ServerCapabilities,
+    HoverParams, MarkupContent, MarkupKind, ServerCapabilities,
 };
 use lspf::{
     CancellationToken, LspError, RawMessage, RequestId, Server, ServerContext, Transport,
@@ -36,7 +36,10 @@ async fn hover(
     _ct: CancellationToken,
 ) -> Result<Option<Hover>, LspError> {
     Ok(Some(Hover {
-        contents: HoverContents::MarkedString(MarkedString::String("docs".to_string())),
+        contents: HoverContents::MarkupContent(MarkupContent::new(
+            MarkupKind::Markdown,
+            "docs".to_string(),
+        )),
         range: None,
     }))
 }
@@ -229,7 +232,7 @@ async fn initialize_hover_shutdown_advertises_and_routes_hover() {
         serde_json::from_value(ok_result(&outbox, 2).expect("hover response")).unwrap();
     assert_eq!(
         hover.contents,
-        HoverContents::MarkedString(MarkedString::String("docs".to_string()))
+        HoverContents::MarkupContent(MarkupContent::new(MarkupKind::Markdown, "docs".to_string(),))
     );
 
     assert_eq!(ok_result(&outbox, 3), Some(serde_json::Value::Null));

@@ -306,7 +306,7 @@ mod os {
     fn posix_native_path(uri: &Uri) -> Result<Option<PathBuf>, WorkspaceError> {
         let host = uri
             .authority()
-            .map(|authority| authority.host().as_str())
+            .map(|authority| authority.host())
             .unwrap_or_default();
         if !host.is_empty() && !host.eq_ignore_ascii_case("localhost") {
             return Ok(None);

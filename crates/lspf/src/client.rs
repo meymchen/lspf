@@ -1209,12 +1209,12 @@ impl ClientHandle {
     }
 
     /// Ask the client to apply a workspace edit with `workspace/applyEdit`
-    /// (LSP 3.17), awaiting the client's [`ApplyWorkspaceEditResponse`].
+    /// (LSP 3.17), awaiting the client's [`ApplyWorkspaceEditResult`].
     ///
     /// The [`ApplyWorkspaceEditParams`] are sent exactly as provided: the
     /// edit contents, label, and metadata all come from the caller. The
     /// helper owns no edit policy: it never rewrites, filters, or batches
-    /// edits, and the client's [`ApplyWorkspaceEditResponse`] — its `applied`
+    /// edits, and the client's [`ApplyWorkspaceEditResult`] — its `applied`
     /// flag with the optional failure reason — is returned verbatim for the
     /// caller to interpret.
     ///

@@ -1416,14 +1416,14 @@ mod tests {
 
     fn content_change(with_range: bool) -> gen_lsp_types::TextDocumentContentChangeEvent {
         if with_range {
-            gen_lsp_types::TextDocumentContentChangePartial {
-                range: gen_lsp_types::Range {
+            gen_lsp_types::TextDocumentContentChangePartial::new(
+                gen_lsp_types::Range {
                     start: gen_lsp_types::Position::new(0, 0),
                     end: gen_lsp_types::Position::new(0, 1),
                 },
-                range_length: None,
-                text: "replacement".to_string(),
-            }
+                None,
+                "replacement".to_string(),
+            )
             .into()
         } else {
             gen_lsp_types::TextDocumentContentChangeWholeDocument {
