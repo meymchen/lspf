@@ -186,9 +186,9 @@ Cargo feature, `refresh_folding_ranges` (`workspace/foldingRange/refresh`)
 and `refresh_text_document_content`
 (`workspace/textDocumentContent/refresh`, params naming only the target
 document URI) join the refresh surface, using request markers and params
-from the feature-gated `proposed` module because `lsp-types` 0.97.x lacks
-them. The default refresh surface contains no proposed, draft, or notebook
-method.
+from the feature-gated `proposed` module. This is a transition until ADR 0032's
+generated metaModel type base supplies their stable LSP 3.18 definitions. The
+default refresh surface contains no proposed, draft, or notebook method.
 `begin_progress(ProgressOptions)` runs the connection-scoped work-done
 progress lifecycle as one failure-safe operation: it allocates a
 connection-local numeric token from a monotonic sequence (starting at 1,
