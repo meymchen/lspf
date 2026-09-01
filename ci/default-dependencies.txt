@@ -1,6 +1,5 @@
-bitflags
+borrow_or_share
 bytes
-errno
 fluent_uri
 futures_channel
 futures_core
@@ -8,9 +7,8 @@ futures_macro
 futures_sink
 futures_task
 futures_util
+gen_lsp_types
 itoa
-libc
-lsp_types
 lspf
 memchr
 mio
@@ -18,13 +16,13 @@ once_cell
 pin_project_lite
 proc_macro2
 quote
+ref_cast
+ref_cast_impl
 ropey
 serde
 serde_core
 serde_derive
 serde_json
-serde_repr
-signal_hook_registry
 slab
 smallvec
 str_indices
@@ -38,4 +36,6 @@ tracing
 tracing_attributes
 tracing_core
 unicode_ident
+windows_link
+windows_sys
 zmij

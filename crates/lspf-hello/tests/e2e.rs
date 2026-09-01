@@ -194,7 +194,11 @@ async fn the_zero_three_journey_runs_over_stdio() {
     .await;
     let resp = read_response(&mut stdout, 3).await;
     assert_eq!(
-        resp["result"]["contents"], "`plaintext` · 2 words · version 2",
+        resp["result"]["contents"],
+        json!({
+            "kind": "markdown",
+            "value": "`plaintext` · 2 words · version 2",
+        }),
         "the hover handler read the framework-synchronized document, got {resp}"
     );
 
