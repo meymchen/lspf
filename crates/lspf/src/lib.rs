@@ -291,8 +291,3 @@ pub use tokio_util::sync::CancellationToken;
 /// The cap is connection policy, so it belongs to the built [`Server`] that
 /// owns the connection rather than to the `Transport` it is served over.
 pub const DEFAULT_CONCURRENCY_LIMIT: usize = 64;
-
-/// Historical name for the default outbound-message budget. New code should
-/// configure [`ResourcePolicy::max_outbound_messages`] through
-/// [`ServerBuilder::resource_policy`].
-pub const DEFAULT_OUTBOUND_WARNING_THRESHOLD: usize = 1024;

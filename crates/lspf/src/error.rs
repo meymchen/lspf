@@ -190,10 +190,6 @@ pub enum BuildError {
     #[error("concurrency limit must be greater than zero")]
     InvalidConcurrencyLimit,
 
-    /// A zero outbound warning threshold could never be crossed from below.
-    #[error("outbound warning threshold must be greater than zero")]
-    InvalidOutboundWarningThreshold,
-
     /// A connection resource budget or enabled deadline was zero.
     #[error("resource policy `{field}` must be greater than zero when enabled")]
     InvalidResourcePolicy {
