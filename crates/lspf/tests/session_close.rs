@@ -332,18 +332,25 @@ async fn reader_eof_closes_the_session_and_joins_the_writer() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn writer_failure_closes_the_session_without_any_further_input() {
     // The writer fails on its very first send, which is the initialize response.
-    let (in_tx, _out_rx, serving) = start(AppState::default(), 0);
+    let (in_tx, mut out_rx, serving) = start(AppState::default(), 0);
 
     in_tx.send(initialize(1)).unwrap();
 
-    // The peer never closes its half, so only the close signal can wake the
-    // read-loop out of `recv`.
-    assert!(!in_tx.is_closed(), "the peer half is still open");
+    // Keep the peer half alive while only the close signal wakes the read-loop
+    // out of `recv`.
     assert_eq!(
         served(serving)
             .await
             .expect("a writer failure is reported as an outcome, not a reader error"),
         Outcome::WriterFailed
+    );
+    assert!(
+        in_tx.is_closed(),
+        "writer failure closed and dropped the server reader"
+    );
+    assert!(
+        out_rx.recv().await.is_none(),
+        "the writer task ended and dropped the transport's writer half"
     );
 }
 
