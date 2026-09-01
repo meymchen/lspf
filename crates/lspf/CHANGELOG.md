@@ -7,13 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-
-- [**breaking**] Remove the historical outbound-warning-threshold constant and
-  its dedicated `BuildError` variant. Configure the outbound message budget
-  through `ResourcePolicy::max_outbound_messages`; the retained builder
-  shorthand now reports zero through `InvalidResourcePolicy`.
-
 ## [0.10.0](https://github.com/meymchen/lspf/compare/v0.9.2...v0.10.0) - 2026-09-01
 
 ### Fixed
