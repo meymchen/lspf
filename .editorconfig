@@ -11,6 +11,14 @@ indent_size = 4
 [*.{toml,yml,yaml,json}]
 indent_size = 2
 
+# Vendored upstream artifacts are byte-for-byte evidence of their source, and
+# tests record their hashes. Reformatting one on save would invalidate that.
+[crates/lspf/tests/fixtures/lsp_meta_model_*.json]
+indent_style = unset
+indent_size = unset
+insert_final_newline = unset
+trim_trailing_whitespace = unset
+
 [*.md]
 trim_trailing_whitespace = false
 

@@ -1,17 +1,31 @@
-//! Deterministic full-catalog coverage (issue #81).
+//! Deterministic full-catalog coverage (issues #81 and #242).
 //!
-//! One server registers every stable LSP 3.17 feature and notification the
-//! 0.3 PRD lists — the complete [`lspf::features`] catalog, the built-in
-//! protocol notification hooks, and typed commands — and proves the catalog
-//! boundary: the initialize response's capability JSON is byte-stable against
-//! `fixtures/full_catalog_capabilities.json`, custom requests and
-//! notifications contribute nothing to it, and no notebook or proposed method
-//! leaks into it. Compiling this file is itself the compile-time registration
-//! coverage: every listed route is registered through a typed descriptor or
-//! hook, and any descriptor that loses its sealed capability contribution
-//! fails the fixture comparison.
+//! One server registers every feature and notification the [`lspf::features`]
+//! catalog offers — plus the built-in protocol notification hooks and typed
+//! commands — and proves the catalog boundary two ways. Byte-stability: the
+//! initialize response's capability JSON matches
+//! `fixtures/full_catalog_capabilities.json` exactly, and custom requests and
+//! notifications contribute nothing to it. Spec coverage: the capability
+//! fields it advertises are measured against the vendored LSP 3.18.0
+//! metaModel in `fixtures/lsp_meta_model_3_18_0.json`, which makes the
+//! question "does the catalog still match the spec?" a failing test rather
+//! than something a reader has to check by hand.
+//!
+//! Compiling this file is itself the compile-time registration coverage:
+//! every listed route is registered through a typed descriptor or hook, and
+//! any descriptor that loses its sealed capability contribution fails the
+//! fixture comparison.
+//!
+//! Measuring against 3.18 contradicts ADR 0024, whose stable-catalog boundary
+//! still reads "no notebook method and no proposed or 3.18-draft method". The
+//! 3.18 programme overturns that on purpose: issue #249 records the ADR that
+//! supersedes ADR 0024's notebook exclusion, and issue #258 restates the
+//! boundary across the ADRs, README, and guides. Until those land, ADR 0024's
+//! *default*-catalog invariant is the one still enforced here, by
+//! [`the_default_catalog_advertises_only_protocol_owned_fields`].
 
 use std::borrow::Cow;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -52,9 +66,9 @@ use lspf::types::{
     SemanticTokensDeltaRequest as SemanticTokensFullDeltaRequest, SemanticTokensLegend,
     SemanticTokensOptions, SemanticTokensRangeRequest,
     SemanticTokensRequest as SemanticTokensFullRequest, SetTraceNotification as SetTrace,
-    SignatureHelpOptions, SignatureHelpRequest, TypeDefinitionRegistrationOptions,
-    TypeDefinitionRequest as GotoTypeDefinition, TypeHierarchyOptions,
-    TypeHierarchyPrepareRequest as TypeHierarchyPrepare,
+    SignatureHelpOptions, SignatureHelpRequest, TextDocumentSyncKind,
+    TypeDefinitionRegistrationOptions, TypeDefinitionRequest as GotoTypeDefinition,
+    TypeHierarchyOptions, TypeHierarchyPrepareRequest as TypeHierarchyPrepare,
     TypeHierarchySubtypesRequest as TypeHierarchySubtypes,
     TypeHierarchySupertypesRequest as TypeHierarchySupertypes,
     WillCreateFilesRequest as WillCreateFiles, WillDeleteFilesRequest as WillDeleteFiles,
@@ -566,8 +580,8 @@ fn catalog_registrations(builder: lspf::ServerBuilder<AppState>) -> lspf::Server
         .command::<Vec<String>, (), _, _>("catalog.one", noop_command)
 }
 
-/// Register every stable 3.17 feature, notification hook, and command the
-/// 0.3 PRD lists, with fixed options, and return the built server.
+/// Register every feature, notification hook, and command the catalog
+/// offers, with fixed options, and return the built server.
 fn full_catalog() -> Server<AppState> {
     catalog_registrations(Server::builder(AppState))
         .build()
@@ -671,6 +685,151 @@ async fn initialize_wire<S: Send + Sync + 'static>(server: Server<S>) -> (String
     (String::from_utf8(bytes.to_vec()).unwrap(), outcome)
 }
 
+// --- The vendored metaModel --------------------------------------------------
+
+/// The official LSP metaModel, vendored verbatim from
+/// `_specifications/lsp/3.18/metaModel/metaModel.json` on the `gh-pages`
+/// branch of `microsoft/language-server-protocol` (commit
+/// `b7f5132c95261c0898ae5124e7a91707abc48fcd`, SHA-256
+/// `caae8df639a4248520a3f589fd72945365e9d8ebca5baf564161a515430d9d41`),
+/// copyright Microsoft Corporation under the MIT licence. Refresh it by
+/// downloading that path again, never by editing it here: the recorded hash
+/// is what makes it evidence of the spec rather than of our reading of it.
+const META_MODEL: &str = include_str!("fixtures/lsp_meta_model_3_18_0.json");
+
+/// The metaModel version this guardrail is written against. Because the
+/// vendored model *is* the 3.18.0 release, "every field the spec marks
+/// available at or before 3.18.0" is exactly "every field in the fixture" —
+/// no version arithmetic is needed, and
+/// [`the_vendored_meta_model_is_the_3_18_0_release`] keeps that equivalence
+/// from quietly lapsing when the fixture is refreshed.
+const META_MODEL_VERSION: &str = "3.18.0";
+
+/// A metaModel structure whose every property states that the server supports
+/// something, paired with the dotted path its fields carry in the capability
+/// object. `path` is empty for the root record.
+struct CapabilityRecord {
+    path: &'static str,
+    structure: &'static str,
+}
+
+/// The records the capability-field walk covers. The rule for membership is
+/// that every property is itself a switch saying the server has a capability;
+/// a record of *how* a provider behaves — `CompletionOptions`'
+/// trigger characters, `SemanticTokensOptions`' legend — is option detail and
+/// stays out, because a server declining to set one is a configuration choice
+/// rather than a gap against the spec.
+const CAPABILITY_RECORDS: [CapabilityRecord; 4] = [
+    CapabilityRecord {
+        path: "",
+        structure: "ServerCapabilities",
+    },
+    CapabilityRecord {
+        path: "textDocumentSync",
+        structure: "TextDocumentSyncOptions",
+    },
+    CapabilityRecord {
+        path: "workspace",
+        structure: "WorkspaceOptions",
+    },
+    CapabilityRecord {
+        path: "workspace.fileOperations",
+        structure: "FileOperationOptions",
+    },
+];
+
+/// Capability fields LSP 3.18 defines that the catalog cannot yet produce.
+/// Each entry is a commitment rather than an exemption: the work named beside
+/// it deletes its line, and until then the guardrail pins the gap so it cannot
+/// grow silently.
+const UNPRODUCIBLE_CAPABILITY_FIELDS: [&str; 4] = [
+    // The server-defined escape hatch. It carries no protocol meaning of its
+    // own, lspf exposes no way to set it, and no ticket plans one.
+    "experimental",
+    // Inline completion, issue #243.
+    "inlineCompletionProvider",
+    // Notebook document sync, issue #252.
+    "notebookDocumentSync",
+    // `workspace/textDocumentContent`, issue #243.
+    "workspace.textDocumentContent",
+];
+
+fn meta_model() -> Value {
+    serde_json::from_str(META_MODEL).expect("the vendored metaModel is valid JSON")
+}
+
+/// Every server capability field the metaModel defines, as a dotted path,
+/// mapped to whether the spec marks that field proposed.
+fn meta_model_capability_fields(model: &Value) -> BTreeMap<String, bool> {
+    let structures = model["structures"]
+        .as_array()
+        .expect("the metaModel lists structures");
+    let mut fields = BTreeMap::new();
+    for record in CAPABILITY_RECORDS {
+        let structure = structures
+            .iter()
+            .find(|structure| structure["name"] == json!(record.structure))
+            .unwrap_or_else(|| panic!("the metaModel defines {}", record.structure));
+        let properties = structure["properties"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{} lists properties", record.structure));
+        for property in properties {
+            let name = property["name"]
+                .as_str()
+                .unwrap_or_else(|| panic!("every {} property is named", record.structure));
+            fields.insert(
+                capability_path(record.path, name),
+                property["proposed"] == json!(true),
+            );
+        }
+    }
+    fields
+}
+
+/// The capability field paths an initialize response actually carries, walked
+/// over the same records as [`meta_model_capability_fields`] so the two sets
+/// are directly comparable.
+fn advertised_capability_fields(wire: &str) -> BTreeSet<String> {
+    let response: Value = serde_json::from_str(wire).expect("the initialize response is JSON");
+    let capabilities = &response["capabilities"];
+    assert!(
+        capabilities.is_object(),
+        "the initialize response carries a capability object: {wire}"
+    );
+
+    let mut fields = BTreeSet::new();
+    for record in CAPABILITY_RECORDS {
+        // An absent record advertises no fields, and a record the spec models
+        // as a union may arrive in a form that names none — `textDocumentSync`
+        // is either sync options or a bare sync kind.
+        let Some(present) = record
+            .path
+            .split('.')
+            .filter(|segment| !segment.is_empty())
+            .try_fold(capabilities, |value, segment| value.get(segment))
+            .and_then(Value::as_object)
+        else {
+            continue;
+        };
+        for name in present.keys() {
+            fields.insert(capability_path(record.path, name));
+        }
+    }
+    fields
+}
+
+fn capability_path(prefix: &str, name: &str) -> String {
+    if prefix.is_empty() {
+        name.to_string()
+    } else {
+        format!("{prefix}.{name}")
+    }
+}
+
+fn capability_field_set(fields: &[&str]) -> BTreeSet<String> {
+    fields.iter().map(|field| (*field).to_string()).collect()
+}
+
 // --- Tests -------------------------------------------------------------------
 
 /// Every stable feature registered together produces one deterministic
@@ -710,49 +869,111 @@ async fn custom_registrations_contribute_nothing_to_the_full_catalog() {
     );
 }
 
-/// The default catalog stays on stable LSP 3.17: no notebook method, and no
-/// proposed or 3.18-draft field, appears anywhere in the capability JSON.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn no_notebook_or_proposed_fields_leak_into_the_catalog() {
-    let (wire, _) = initialize_wire(full_catalog()).await;
-    assert!(
-        !wire.to_lowercase().contains("notebook"),
-        "the stable catalog advertises no notebook capability: {wire}"
+/// The vendored fixture is the 3.18.0 release, which is what lets the
+/// guardrails below read "every field in the fixture" as "every field the
+/// spec makes available at or before 3.18.0". Refreshing the fixture to a
+/// later metaModel must be a deliberate change that revisits them.
+#[test]
+fn the_vendored_meta_model_is_the_3_18_0_release() {
+    assert_eq!(
+        meta_model()["metaData"]["version"],
+        json!(META_MODEL_VERSION),
+        "the vendored metaModel must stay the release this guardrail is written against"
     );
-    // Proposed/3.18-draft method families the 0.3 PRD excludes.
-    for field in [
-        "textDocumentContent",
-        "pullOnTypeFormatting",
-        "codeActionResolveOptions",
-    ] {
-        assert!(
-            !wire.contains(field),
-            "proposed or 3.18-draft field {field:?} must not appear in the catalog: {wire}"
-        );
-    }
 }
 
-/// The default catalog — no registrations at all — advertises only the
-/// protocol-owned fields: the negotiated position encoding, document sync,
-/// and workspace-folder support. No notebook or proposed capability appears.
+/// Every server capability field LSP 3.18 defines and does not mark proposed
+/// must be producible by the catalog. The exceptions are pinned by name in
+/// [`UNPRODUCIBLE_CAPABILITY_FIELDS`], so a spec field the catalog cannot
+/// advertise is a listed, attributed gap rather than an oversight.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_default_catalog_advertises_no_notebook_or_proposed_capability() {
+async fn the_catalog_produces_every_stable_capability_field_the_spec_defines() {
+    let (wire, _) = initialize_wire(full_catalog()).await;
+    let advertised = advertised_capability_fields(&wire);
+
+    let missing: BTreeSet<String> = meta_model_capability_fields(&meta_model())
+        .into_iter()
+        .filter(|(field, proposed)| !proposed && !advertised.contains(field))
+        .map(|(field, _)| field)
+        .collect();
+    assert_eq!(
+        missing,
+        capability_field_set(&UNPRODUCIBLE_CAPABILITY_FIELDS),
+        "the stable {META_MODEL_VERSION} capability fields the catalog cannot produce must be \
+         exactly the pinned gaps; landing one deletes its line, losing one adds a regression"
+    );
+}
+
+/// The catalog advertises nothing the spec does not define, and nothing the
+/// spec marks proposed. Both halves read the fixture, so a draft field that
+/// nobody thought to forbid is still caught by the first one.
+///
+/// The proposed half is inert against this fixture: the 3.18.0 metaModel
+/// marks no capability field proposed, so it can only start failing once the
+/// fixture is refreshed to a metaModel that carries proposals. It is kept
+/// because that refresh is exactly when a proposal could slip in unnoticed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn no_proposed_or_unspecified_field_leaks_into_the_catalog() {
+    let (wire, _) = initialize_wire(full_catalog()).await;
+    let advertised = advertised_capability_fields(&wire);
+    let specified = meta_model_capability_fields(&meta_model());
+
+    let proposed: Vec<&String> = advertised
+        .iter()
+        .filter(|field| specified.get(*field) == Some(&true))
+        .collect();
+    assert!(
+        proposed.is_empty(),
+        "the catalog advertises fields LSP {META_MODEL_VERSION} marks proposed: {proposed:?}"
+    );
+
+    let unspecified: Vec<&String> = advertised
+        .iter()
+        .filter(|field| !specified.contains_key(*field))
+        .collect();
+    assert!(
+        unspecified.is_empty(),
+        "the catalog advertises fields LSP {META_MODEL_VERSION} does not define: {unspecified:?}"
+    );
+}
+
+/// The default catalog — no registrations at all — advertises exactly the
+/// protocol-owned fields: the negotiated position encoding, document sync,
+/// and workspace-folder support. Stating the whole set rather than naming
+/// forbidden fields keeps every capability a feature owns opt-in, including
+/// ones no exclusion list would have thought to mention, and is what still
+/// enforces ADR 0024's default-catalog boundary.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_default_catalog_advertises_only_protocol_owned_fields() {
     let (wire, _) = initialize_wire(
         Server::builder(AppState)
             .build()
             .expect("an empty server builds"),
     )
     .await;
-    assert!(
-        !wire.to_lowercase().contains("notebook"),
-        "the default catalog advertises no notebook capability: {wire}"
+
+    let advertised = advertised_capability_fields(&wire);
+    let protocol_owned = capability_field_set(&[
+        "positionEncoding",
+        "textDocumentSync",
+        "workspace",
+        "workspace.workspaceFolders",
+    ]);
+
+    assert_eq!(
+        advertised, protocol_owned,
+        "a server that registers nothing advertises only what the protocol itself owns"
     );
-    for field in ["textDocumentContent", "pullOnTypeFormatting"] {
-        assert!(
-            !wire.contains(field),
-            "proposed or 3.18-draft field {field:?} must not appear by default: {wire}"
-        );
-    }
+
+    // No `textDocumentSync.*` field is expected above because with no document
+    // hook registered the sync capability takes the union's other arm: a bare
+    // sync kind, which names no fields at all.
+    let parsed: Value = serde_json::from_str(&wire).unwrap();
+    assert_eq!(
+        parsed["capabilities"]["textDocumentSync"],
+        json!(TextDocumentSyncKind::Incremental),
+        "the default sync capability is the bare incremental kind"
+    );
 }
 
 /// Command names merge into one execute-command capability preserving
@@ -768,10 +989,10 @@ async fn the_full_catalog_keeps_command_registration_order() {
     );
 }
 
-/// Enabling the `proposed` Cargo feature must not move the stable catalog
-/// boundary (issue #108): the full-catalog capability bytes stay pinned to the
-/// fixture and no notebook capability appears. The proposed refresh helpers
-/// are outgoing-only `ClientHandle` calls, so the Router catalog cannot change.
+/// Enabling the `proposed` Cargo feature must not move the catalog boundary
+/// (issue #108): the full-catalog capability bytes stay pinned to the fixture.
+/// The proposed refresh helpers are outgoing-only `ClientHandle` calls, so the
+/// Router catalog cannot change.
 #[cfg(feature = "proposed")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_proposed_feature_leaves_the_stable_catalog_untouched() {
@@ -782,9 +1003,5 @@ async fn the_proposed_feature_leaves_the_stable_catalog_untouched() {
     assert_eq!(
         wire, fixture,
         "enabling `proposed` must not change the stable capability snapshot"
-    );
-    assert!(
-        !wire.to_lowercase().contains("notebook"),
-        "enabling `proposed` must not advertise notebook support: {wire}"
     );
 }
