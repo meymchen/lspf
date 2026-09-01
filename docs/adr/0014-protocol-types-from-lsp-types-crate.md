@@ -1,5 +1,7 @@
 # Protocol types come from the `lsp-types` crate, re-exported by lspf
 
+Status: Superseded by ADR 0032.
+
 lspf depends on the `lsp-types` crate (gluon-lang/lsp-types) for every LSP
 wire type: `InitializeParams`, `ServerCapabilities`, `HoverOptions`,
 `Diagnostic`, and the long tail. Those types are re-exported under

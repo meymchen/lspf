@@ -1,15 +1,17 @@
 //! Launch and supervise one native stdio language-server child.
 
+use std::future::Future;
 use std::io;
 use std::process::{ExitStatus, Stdio};
 use std::time::Duration;
 
+use futures_channel::oneshot;
 use thiserror::Error;
 use tokio::io::AsyncReadExt;
 use tokio::process::{Child, Command};
-use tokio::task::JoinHandle;
 
 use crate::client_endpoint::{ClientBuilder, ClientConnection as ProtocolConnection, ServerHandle};
+use crate::runtime::{Runtime, TaskHandle, TaskSend, default_runtime};
 use crate::transport::StdioTransport;
 use crate::{BuildError, ClientError, Error as ConnectionError, Outcome};
 
@@ -95,9 +97,31 @@ pub struct ChildConnection {
 }
 
 struct SupervisionState {
-    driver: JoinHandle<crate::Result<Outcome>>,
+    driver: SupervisionTask<crate::Result<Outcome>>,
     child: Child,
-    stderr: JoinHandle<io::Result<StderrCapture>>,
+    stderr: SupervisionTask<io::Result<StderrCapture>>,
+}
+
+struct SupervisionTask<T> {
+    handle: TaskHandle,
+    output: oneshot::Receiver<T>,
+}
+
+impl<T> SupervisionTask<T> {
+    fn abort(&self) {
+        self.handle.abort();
+    }
+
+    fn is_finished(&self) -> bool {
+        self.handle.is_finished()
+    }
+
+    async fn join_result(&mut self) -> Result<T, tokio::task::JoinError> {
+        self.handle.join_result().await?;
+        Ok((&mut self.output)
+            .await
+            .expect("a completed supervision task sends its output"))
+    }
 }
 
 enum FinishMode {
@@ -131,7 +155,7 @@ impl ClientBuilder {
             .stderr
             .take()
             .expect("piped child stderr is present after spawn");
-        let stderr = tokio::spawn(drain_stderr(stderr));
+        let stderr = spawn_supervision(drain_stderr(stderr));
         let transport = StdioTransport::from_io(stdout, stdin);
         let client = match builder.build(transport) {
             Ok(client) => client,
@@ -156,10 +180,10 @@ impl ChildConnection {
     fn new(
         connection: ProtocolConnection,
         child: Child,
-        stderr: JoinHandle<io::Result<StderrCapture>>,
+        stderr: SupervisionTask<io::Result<StderrCapture>>,
     ) -> Self {
         let server = connection.server();
-        let driver = tokio::spawn(connection.serve());
+        let driver = spawn_supervision(connection.serve());
         Self {
             server,
             supervision: Some(SupervisionState {
@@ -223,7 +247,9 @@ impl ChildConnection {
                 (join_driver(&mut supervision.driver).await, status)
             }
         };
-        let stderr_result = (&mut supervision.stderr)
+        let stderr_result = supervision
+            .stderr
+            .join_result()
             .await?
             .map_err(ChildError::Process);
         self.supervision.take();
@@ -244,9 +270,9 @@ impl Drop for ChildConnection {
         let Some(mut supervision) = self.supervision.take() else {
             return;
         };
-        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+        if tokio::runtime::Handle::try_current().is_ok() {
             let server = self.server.clone();
-            let graceful = runtime.spawn(async move {
+            let graceful = default_runtime().spawn(async move {
                 let shutdown = tokio::time::timeout(EXIT_GRACE, server.shutdown()).await;
                 if matches!(shutdown, Ok(Ok(()))) {
                     let _ = server.exit();
@@ -275,9 +301,24 @@ impl Drop for ChildConnection {
     }
 }
 
-async fn cleanup_failed_start(child: &mut Child, stderr: JoinHandle<io::Result<StderrCapture>>) {
+fn spawn_supervision<T>(future: impl Future<Output = T> + TaskSend + 'static) -> SupervisionTask<T>
+where
+    T: TaskSend + 'static,
+{
+    let (output_tx, output) = oneshot::channel();
+    let handle = default_runtime().spawn(async move {
+        let result = future.await;
+        let _ = output_tx.send(result);
+    });
+    SupervisionTask { handle, output }
+}
+
+async fn cleanup_failed_start(
+    child: &mut Child,
+    mut stderr: SupervisionTask<io::Result<StderrCapture>>,
+) {
     let _ = child.kill().await;
-    let _ = stderr.await;
+    let _ = stderr.join_result().await;
 }
 
 async fn drain_stderr(mut stderr: impl tokio::io::AsyncRead + Unpin) -> io::Result<StderrCapture> {
@@ -350,9 +391,9 @@ fn kill_and_reap_without_runtime(child: &mut Child) {
 }
 
 fn wait_for_cleanup_tasks<T, U>(
-    graceful: &JoinHandle<()>,
-    driver: &JoinHandle<T>,
-    stderr: &JoinHandle<U>,
+    graceful: &TaskHandle,
+    driver: &SupervisionTask<T>,
+    stderr: &SupervisionTask<U>,
     timeout: Duration,
 ) {
     let deadline = std::time::Instant::now() + timeout;
@@ -378,13 +419,13 @@ async fn bounded_wait(child: &mut Child, timeout: Duration) -> io::Result<Option
 }
 
 async fn join_driver(
-    driver: &mut JoinHandle<crate::Result<Outcome>>,
+    driver: &mut SupervisionTask<crate::Result<Outcome>>,
 ) -> Result<Outcome, ChildError> {
-    match tokio::time::timeout(EXIT_GRACE, &mut *driver).await {
+    match tokio::time::timeout(EXIT_GRACE, driver.join_result()).await {
         Ok(result) => Ok(result??),
         Err(_) => {
             driver.abort();
-            let _ = driver.await;
+            let _ = driver.join_result().await;
             Err(ChildError::SupervisionTimeout("protocol driver"))
         }
     }
