@@ -1362,7 +1362,7 @@ impl ClientHandle {
     /// success result cannot be decoded; [`ClientError::Cancelled`] if the
     /// session closes before the client answers; [`ClientError::Timeout`] if
     /// the configured deadline expires.
-    pub async fn code_lens_refresh(&self) -> Result<(), ClientError> {
+    pub async fn refresh_code_lenses(&self) -> Result<(), ClientError> {
         self.request::<CodeLensRefresh>(()).await
     }
 
@@ -1385,7 +1385,7 @@ impl ClientHandle {
     /// success result cannot be decoded; [`ClientError::Cancelled`] if the
     /// session closes before the client answers; [`ClientError::Timeout`] if
     /// the configured deadline expires.
-    pub async fn diagnostic_refresh(&self) -> Result<(), ClientError> {
+    pub async fn refresh_diagnostics(&self) -> Result<(), ClientError> {
         self.request::<WorkspaceDiagnosticRefresh>(()).await
     }
 
@@ -1407,7 +1407,7 @@ impl ClientHandle {
     /// success result cannot be decoded; [`ClientError::Cancelled`] if the
     /// session closes before the client answers; [`ClientError::Timeout`] if
     /// the configured deadline expires.
-    pub async fn inlay_hint_refresh(&self) -> Result<(), ClientError> {
+    pub async fn refresh_inlay_hints(&self) -> Result<(), ClientError> {
         self.request::<InlayHintRefreshRequest>(()).await
     }
 
@@ -1429,7 +1429,7 @@ impl ClientHandle {
     /// success result cannot be decoded; [`ClientError::Cancelled`] if the
     /// session closes before the client answers; [`ClientError::Timeout`] if
     /// the configured deadline expires.
-    pub async fn inline_value_refresh(&self) -> Result<(), ClientError> {
+    pub async fn refresh_inline_values(&self) -> Result<(), ClientError> {
         self.request::<InlineValueRefreshRequest>(()).await
     }
 
@@ -1451,7 +1451,7 @@ impl ClientHandle {
     /// success result cannot be decoded; [`ClientError::Cancelled`] if the
     /// session closes before the client answers; [`ClientError::Timeout`] if
     /// the configured deadline expires.
-    pub async fn semantic_tokens_refresh(&self) -> Result<(), ClientError> {
+    pub async fn refresh_semantic_tokens(&self) -> Result<(), ClientError> {
         self.request::<SemanticTokensRefresh>(()).await
     }
 

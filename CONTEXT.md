@@ -173,11 +173,11 @@ changes while leaving the permanently frozen [[Router]] and the computed
 initialize capabilities untouched; the framework retains no second list
 of currently registered client capabilities, and any local route must
 already exist through static or initialize-conditional registration.
-The five stable workspace refresh helpers — `code_lens_refresh`
-(`workspace/codeLens/refresh`), `diagnostic_refresh`
-(`workspace/diagnostic/refresh`), `inlay_hint_refresh`
-(`workspace/inlayHint/refresh`), `inline_value_refresh`
-(`workspace/inlineValue/refresh`), and `semantic_tokens_refresh`
+The five stable workspace refresh helpers — `refresh_code_lenses`
+(`workspace/codeLens/refresh`), `refresh_diagnostics`
+(`workspace/diagnostic/refresh`), `refresh_inlay_hints`
+(`workspace/inlayHint/refresh`), `refresh_inline_values`
+(`workspace/inlineValue/refresh`), and `refresh_semantic_tokens`
 (`workspace/semanticTokens/refresh`) — each take no parameters and
 return the client's `null` acknowledgement as `()`; they own no
 recomputation policy, and the framework keeps no lens, diagnostic, hint,

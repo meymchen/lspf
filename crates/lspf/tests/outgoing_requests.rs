@@ -4,9 +4,9 @@
 //! over the generic typed request broker, as are the client-owned workspace
 //! queries `configuration` and `workspace_folders`, the dynamic capability
 //! announcements `register_capability` and `unregister_capability`, and the
-//! five stable workspace refresh helpers `code_lens_refresh`,
-//! `diagnostic_refresh`, `inlay_hint_refresh`, `inline_value_refresh`, and
-//! `semantic_tokens_refresh`. With the `proposed` Cargo feature the same
+//! five stable workspace refresh helpers `refresh_code_lenses`,
+//! `refresh_diagnostics`, `refresh_inlay_hints`, `refresh_inline_values`, and
+//! `refresh_semantic_tokens`. With the `proposed` Cargo feature the same
 //! coverage extends to the proposed `refresh_folding_ranges` and
 //! `refresh_text_document_content` helpers (issue #108). These
 //! wire-level tests run each helper inside a real handler over an in-memory
@@ -665,12 +665,12 @@ helper_wire_tests!(
 );
 
 helper_wire_tests!(
-    code_lens_refresh,
+    refresh_code_lenses,
     result = (),
     params = json!(null),
     fixture = CODE_LENS_REFRESH_FIXTURE,
     call = |client: ClientHandle, _params: serde_json::Value| async move {
-        client.code_lens_refresh().await
+        client.refresh_code_lenses().await
     },
     success_reply = json!(null),
     success_assert = |value: ()| assert_eq!(value, ()),
@@ -678,12 +678,12 @@ helper_wire_tests!(
 );
 
 helper_wire_tests!(
-    diagnostic_refresh,
+    refresh_diagnostics,
     result = (),
     params = json!(null),
     fixture = DIAGNOSTIC_REFRESH_FIXTURE,
     call = |client: ClientHandle, _params: serde_json::Value| async move {
-        client.diagnostic_refresh().await
+        client.refresh_diagnostics().await
     },
     success_reply = json!(null),
     success_assert = |value: ()| assert_eq!(value, ()),
@@ -691,12 +691,12 @@ helper_wire_tests!(
 );
 
 helper_wire_tests!(
-    inlay_hint_refresh,
+    refresh_inlay_hints,
     result = (),
     params = json!(null),
     fixture = INLAY_HINT_REFRESH_FIXTURE,
     call = |client: ClientHandle, _params: serde_json::Value| async move {
-        client.inlay_hint_refresh().await
+        client.refresh_inlay_hints().await
     },
     success_reply = json!(null),
     success_assert = |value: ()| assert_eq!(value, ()),
@@ -704,12 +704,12 @@ helper_wire_tests!(
 );
 
 helper_wire_tests!(
-    inline_value_refresh,
+    refresh_inline_values,
     result = (),
     params = json!(null),
     fixture = INLINE_VALUE_REFRESH_FIXTURE,
     call = |client: ClientHandle, _params: serde_json::Value| async move {
-        client.inline_value_refresh().await
+        client.refresh_inline_values().await
     },
     success_reply = json!(null),
     success_assert = |value: ()| assert_eq!(value, ()),
@@ -717,12 +717,12 @@ helper_wire_tests!(
 );
 
 helper_wire_tests!(
-    semantic_tokens_refresh,
+    refresh_semantic_tokens,
     result = (),
     params = json!(null),
     fixture = SEMANTIC_TOKENS_REFRESH_FIXTURE,
     call = |client: ClientHandle, _params: serde_json::Value| async move {
-        client.semantic_tokens_refresh().await
+        client.refresh_semantic_tokens().await
     },
     success_reply = json!(null),
     success_assert = |value: ()| assert_eq!(value, ()),
