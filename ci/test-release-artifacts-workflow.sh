@@ -46,16 +46,44 @@ jq -e '
 # unreleased-revision probe stays ahead of the pipeline it gates.
 pending_index="$(jq -r '.steps | map(.name) | index("Detect whether this revision is still unreleased")' \
     <<<"$release_job")"
+authorization_index="$(jq -r '.steps | map(.name) | index("Authorize the pending release")' \
+    <<<"$release_job")"
 prepare_index="$(jq -r '.steps | map(.name) | index("Prepare release artifacts from the validated revision")' \
     <<<"$release_job")"
 release_index="$(jq -r '.steps | map(.name) | index("Run release-plz")' <<<"$release_job")"
-[[ $pending_index != null && $prepare_index != null && $release_index != null ]]
-[[ $pending_index -lt $prepare_index && $prepare_index -lt $release_index ]]
+[[ $pending_index != null && $authorization_index != null && $prepare_index != null && $release_index != null ]]
+[[ $pending_index -lt $authorization_index && $authorization_index -lt $prepare_index && $prepare_index -lt $release_index ]]
+
+# A failed release run must remain retryable without turning every manifest
+# version bump into an implicit publish. A merged release-plz PR is the durable
+# authorization signal; the release action is reached only while that signal
+# exists in HEAD's history and the matching tag is still absent.
+release_guard="steps.pending.outputs.pending == 'true' && steps.authorization.outputs.authorized == 'true'"
+jq -e --arg guard "$release_guard" '
+    any(.steps[];
+        .name == "Authorize the pending release" and
+        .id == "authorization" and
+        .if == "steps.pending.outputs.pending == '\''true'\''" and
+        (.run | contains("bash ci/authorize-release.sh"))
+    ) and
+    any(.steps[];
+        .name == "Prepare retry-safe release-plz config" and
+        .id == "release-config" and
+        .if == $guard and
+        (.run | contains("release_always = true"))
+    ) and
+    any(.steps[];
+        .name == "Run release-plz" and
+        .if == $guard and
+        .with.config == "${{ runner.temp }}/release-plz.toml"
+    )
+' <<<"$release_job" >/dev/null
 
 # Ordinary pushes to `main` release nothing, so packaging, signing, attesting,
-# and artifact retention must all be skipped unless this revision is unreleased.
-# Without these guards every commit writes a Sigstore transparency-log entry.
-jq -e --arg guard "steps.pending.outputs.pending == 'true'" '
+# and artifact retention must all be skipped unless this version is unreleased
+# and a merged release PR authorizes it. Without these guards every commit
+# writes a Sigstore transparency-log entry.
+jq -e --arg guard "$release_guard" '
     . as $job
     | [
         "Prepare release artifacts from the validated revision",
@@ -102,6 +130,7 @@ jq -e '
     any(.steps[];
         .name == "Attach artifacts to the GitHub release" and
         .if == ("steps.pending.outputs.pending == '\''true'\'' && "
+            + "steps.authorization.outputs.authorized == '\''true'\'' && "
             + "steps.release.outputs.releases_created == '\''true'\''") and
         (.run | contains("gh release upload")) and
         (.run | contains("--clobber"))
@@ -116,6 +145,36 @@ $yq_bin -p toml -o json '.' "$release_plz_config" | jq -e '
     .workspace.release_always == false and
     any(.package[]; .name == "lspf" and .git_tag_name == "v{{ version }}")
 ' >/dev/null
+
+# Exercise the durable authorization seam with local fixtures. The matching
+# release-plz PR authorizes a retry only when its merge commit is in HEAD's
+# history; a similarly titled PR from another branch does not.
+fixture_dir="$(mktemp -d)"
+trap 'rm -rf "$fixture_dir"' EXIT
+head_revision="$(git rev-parse HEAD)"
+jq -n --arg revision "$head_revision" '[{
+    number: 270,
+    merged_at: "2026-09-01T06:01:30Z",
+    title: "chore: release v0.10.0",
+    merge_commit_sha: $revision,
+    head: {
+        ref: "release-plz-2026-08-31T09-08-13Z",
+        repo: {full_name: "meymchen/lspf"}
+    }
+}]' >"$fixture_dir/authorized.json"
+
+RELEASE_PRS_FILE="$fixture_dir/authorized.json" \
+GITHUB_OUTPUT="$fixture_dir/authorized.output" \
+    bash "$repo_root/ci/authorize-release.sh" 0.10.0 meymchen/lspf main >/dev/null
+grep -Fx 'authorized=true' "$fixture_dir/authorized.output" >/dev/null
+grep -Fx 'pull-request=270' "$fixture_dir/authorized.output" >/dev/null
+
+jq 'map(.head.ref = "feature/not-a-release")' \
+    "$fixture_dir/authorized.json" >"$fixture_dir/unauthorized.json"
+RELEASE_PRS_FILE="$fixture_dir/unauthorized.json" \
+GITHUB_OUTPUT="$fixture_dir/unauthorized.output" \
+    bash "$repo_root/ci/authorize-release.sh" 0.10.0 meymchen/lspf main >/dev/null
+grep -Fx 'authorized=false' "$fixture_dir/unauthorized.output" >/dev/null
 
 # release-plz's `semver_check` shells out to `cargo-semver-checks` and silently
 # does nothing when the binary is absent, which would let a breaking change ship

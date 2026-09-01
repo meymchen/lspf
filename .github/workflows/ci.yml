@@ -508,13 +508,41 @@ jobs:
           else
             echo "Tag v$version is absent; preparing release artifacts"
             echo "pending=true" >>"$GITHUB_OUTPUT"
+            echo "version=$version" >>"$GITHUB_OUTPUT"
           fi
+      # The merged release PR is a durable authorization record. Looking for it
+      # on every later main build lets a gate failure retry automatically while
+      # keeping ordinary version bumps from publishing on their own.
+      - name: Authorize the pending release
+        id: authorization
+        if: steps.pending.outputs.pending == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          bash ci/authorize-release.sh
+          "${{ steps.pending.outputs.version }}"
+          "$GITHUB_REPOSITORY"
+          "$GITHUB_REF_NAME"
+      - name: Prepare retry-safe release-plz config
+        id: release-config
+        if: steps.pending.outputs.pending == 'true' && steps.authorization.outputs.authorized == 'true'
+        run: |
+          config="$RUNNER_TEMP/release-plz.toml"
+          awk '
+            /^release_always = false$/ {
+              print "release_always = true"
+              replacements++
+              next
+            }
+            { print }
+            END { if (replacements != 1) exit 1 }
+          ' release-plz.toml >"$config"
       - name: Prepare release artifacts from the validated revision
         id: artifacts
-        if: steps.pending.outputs.pending == 'true'
+        if: steps.pending.outputs.pending == 'true' && steps.authorization.outputs.authorized == 'true'
         run: bash ci/prepare-release-artifacts.sh "$GITHUB_SHA" "$RUNNER_TEMP/release-artifacts"
       - name: Generate crate SBOM
-        if: steps.pending.outputs.pending == 'true'
+        if: steps.pending.outputs.pending == 'true' && steps.authorization.outputs.authorized == 'true'
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
           file: ${{ steps.artifacts.outputs.crate }}
@@ -524,7 +552,7 @@ jobs:
           upload-release-assets: false
       - name: Generate build provenance statement
         id: provenance
-        if: steps.pending.outputs.pending == 'true'
+        if: steps.pending.outputs.pending == 'true' && steps.authorization.outputs.authorized == 'true'
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: |
@@ -535,13 +563,13 @@ jobs:
             ${{ steps.artifacts.outputs.directory }}/lspf-CHANGELOG.md
       - name: Generate SBOM attestation
         id: sbom-attestation
-        if: steps.pending.outputs.pending == 'true'
+        if: steps.pending.outputs.pending == 'true' && steps.authorization.outputs.authorized == 'true'
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: ${{ steps.artifacts.outputs.crate }}
           sbom-path: ${{ steps.artifacts.outputs.sbom }}
       - name: Retain attestation statements and artifact hashes
-        if: steps.pending.outputs.pending == 'true'
+        if: steps.pending.outputs.pending == 'true' && steps.authorization.outputs.authorized == 'true'
         env:
           ARTIFACT_DIRECTORY: ${{ steps.artifacts.outputs.directory }}
           CRATE_PATH: ${{ steps.artifacts.outputs.crate }}
@@ -564,7 +592,7 @@ jobs:
             sbom-attestation.jsonl \
             > SHA256SUMS
       - name: Retain traceable release artifacts
-        if: steps.pending.outputs.pending == 'true'
+        if: steps.pending.outputs.pending == 'true' && steps.authorization.outputs.authorized == 'true'
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: lspf-${{ steps.artifacts.outputs.version }}-release-artifacts
@@ -573,14 +601,16 @@ jobs:
           retention-days: 90
       - name: Run release-plz
         id: release
+        if: steps.pending.outputs.pending == 'true' && steps.authorization.outputs.authorized == 'true'
         uses: release-plz/action@2eb1d8bcb770b4c48ccfaad919734b38b51958c9 # v0.5
         with:
           command: release
+          config: ${{ runner.temp }}/release-plz.toml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Attach artifacts to the GitHub release
-        if: steps.pending.outputs.pending == 'true' && steps.release.outputs.releases_created == 'true'
+        if: steps.pending.outputs.pending == 'true' && steps.authorization.outputs.authorized == 'true' && steps.release.outputs.releases_created == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
