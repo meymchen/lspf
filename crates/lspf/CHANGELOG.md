@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0](https://github.com/meymchen/lspf/compare/v0.9.2...v0.10.0) - 2026-09-01
+
+### Fixed
+
+- *(fuzzing)* assert well-formed JSON rather than Value representability ([#265](https://github.com/meymchen/lspf/pull/265))
+
+### Other
+
+- Migrate protocol type base to metaModel-generated types ([#275](https://github.com/meymchen/lspf/pull/275))
+- Record generated protocol types decision and fix Runtime boundary ([#274](https://github.com/meymchen/lspf/pull/274))
+- fix SonarCloud analysis warnings
+
 ## [0.9.2](https://github.com/meymchen/lspf/compare/v0.9.1...v0.9.2) - 2026-08-31
 
 ### Added
