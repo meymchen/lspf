@@ -256,6 +256,11 @@ impl TaskHandle {
         let _ = self.0.await;
     }
 
+    #[cfg(all(not(target_arch = "wasm32"), feature = "runtime-tokio"))]
+    pub(crate) async fn join_result(&mut self) -> Result<(), tokio::task::JoinError> {
+        (&mut self.0).await
+    }
+
     #[cfg(target_arch = "wasm32")]
     pub(crate) async fn join(self) {
         let _ = self.completed.await;
