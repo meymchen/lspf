@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use lspf::types::{
     CompletionItem, CompletionItemKind, CompletionOptions, CompletionParams, CompletionResponse,
-    Hover, HoverContents, HoverParams, MarkedString,
+    Hover, HoverContents, HoverParams, MarkupContent, MarkupKind,
 };
 use lspf::{CancellationToken, ServerContext, LspError, OsFileProvider, Server};
 
@@ -47,10 +47,10 @@ async fn hover(
         return Ok(None);
     };
     Ok(Some(Hover {
-        contents: HoverContents::Scalar(MarkedString::String(format!(
-            "{} words",
-            document.text().split_whitespace().count()
-        ))),
+        contents: HoverContents::MarkupContent(MarkupContent {
+            kind: MarkupKind::PlainText,
+            value: format!("{} words", document.text().split_whitespace().count()),
+        }),
         range: None,
     }))
 }
@@ -63,9 +63,9 @@ async fn complete(
     _params: CompletionParams,
     _ct: CancellationToken,
 ) -> Result<Option<CompletionResponse>, LspError> {
-    Ok(Some(CompletionResponse::Array(vec![CompletionItem {
+    Ok(Some(CompletionResponse::CompletionItemList(vec![CompletionItem {
         label: "hello".into(),
-        kind: Some(CompletionItemKind::TEXT),
+        kind: Some(CompletionItemKind::Text),
         ..CompletionItem::default()
     }])))
 }

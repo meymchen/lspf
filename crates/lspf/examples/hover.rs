@@ -141,7 +141,7 @@ async fn hover(
         return Ok(None);
     };
     Ok(Some(Hover {
-        contents: HoverContents::Markup(MarkupContent {
+        contents: HoverContents::MarkupContent(MarkupContent {
             kind: MarkupKind::Markdown,
             value: markdown(&value),
         }),

@@ -18,11 +18,12 @@ use serde_json::json;
 use tokio::sync::mpsc;
 
 use lspf::types::{
-    CodeAction, CodeActionKind, CodeActionOptions, CodeActionParams, CodeActionProviderCapability,
+    CodeAction, CodeActionKind, CodeActionOptions, CodeActionParams, CodeActionProvider,
     CodeActionResponse, CodeLens, CodeLensOptions, CodeLensParams, DocumentLink,
     DocumentLinkOptions, DocumentLinkParams, InlayHint, InlayHintKind, InlayHintLabel,
-    InlayHintOptions, InlayHintParams, InlayHintServerCapabilities, OneOf, PrepareRenameResponse,
-    RenameOptions, RenameParams, TextDocumentPositionParams, WorkspaceEdit,
+    InlayHintOptions, InlayHintParams, InlayHintProvider, PrepareRenameParams,
+    PrepareRenamePlaceholder, PrepareRenameResponse, RenameOptions, RenameParams, RenameProvider,
+    WorkspaceEdit,
 };
 use lspf::{
     BuildError, CancellationToken, LspError, RawMessage, RequestId, Server, ServerContext,
@@ -44,13 +45,16 @@ async fn rename(
 async fn prepare_rename(
     _state: Arc<AppState>,
     _ctx: ServerContext,
-    params: TextDocumentPositionParams,
+    params: PrepareRenameParams,
     _ct: CancellationToken,
 ) -> Result<Option<PrepareRenameResponse>, LspError> {
-    Ok(Some(PrepareRenameResponse::RangeWithPlaceholder {
-        range: lspf::types::Range::new(params.position, params.position),
-        placeholder: "ident".to_string(),
-    }))
+    let position = params.text_document_position_params.position;
+    Ok(Some(PrepareRenameResponse::PrepareRenamePlaceholder(
+        PrepareRenamePlaceholder {
+            range: lspf::types::Range::new(position, position),
+            placeholder: "ident".to_string(),
+        },
+    )))
 }
 
 fn rename_options() -> RenameOptions {
@@ -67,11 +71,11 @@ async fn code_action(
     _ctx: ServerContext,
     _params: CodeActionParams,
     _ct: CancellationToken,
-) -> Result<Option<CodeActionResponse>, LspError> {
+) -> Result<Option<Vec<CodeActionResponse>>, LspError> {
     Ok(Some(vec![lspf::types::CodeActionOrCommand::CodeAction(
         CodeAction {
             title: "Fix it".to_string(),
-            kind: Some(CodeActionKind::QUICKFIX),
+            kind: Some(CodeActionKind::QuickFix),
             ..CodeAction::default()
         },
     )]))
@@ -89,7 +93,7 @@ async fn code_action_resolve(
 
 fn code_action_options() -> CodeActionOptions {
     CodeActionOptions {
-        code_action_kinds: Some(vec![CodeActionKind::QUICKFIX]),
+        code_action_kinds: Some(vec![CodeActionKind::QuickFix]),
         ..CodeActionOptions::default()
     }
 }
@@ -118,6 +122,7 @@ async fn code_lens_resolve(
 ) -> Result<CodeLens, LspError> {
     lens.command = Some(lspf::types::Command::new(
         "show refs".to_string(),
+        None,
         "editor.showRefs".to_string(),
         None,
     ));
@@ -127,6 +132,7 @@ async fn code_lens_resolve(
 fn code_lens_options() -> CodeLensOptions {
     CodeLensOptions {
         resolve_provider: None,
+        ..Default::default()
     }
 }
 
@@ -173,7 +179,7 @@ async fn inlay_hint(
     Ok(Some(vec![InlayHint {
         position: lspf::types::Position::new(0, 4),
         label: InlayHintLabel::String(": u32".to_string()),
-        kind: Some(InlayHintKind::TYPE),
+        kind: Some(InlayHintKind::Type),
         text_edits: None,
         tooltip: None,
         padding_left: None,
@@ -355,7 +361,7 @@ fn initialize_result(outbox: &[RawMessage], id: i32) -> lspf::types::InitializeR
 
 fn rename_provider(outbox: &[RawMessage], id: i32) -> RenameOptions {
     match initialize_result(outbox, id).capabilities.rename_provider {
-        Some(OneOf::Right(options)) => options,
+        Some(RenameProvider::RenameOptions(options)) => options,
         other => panic!("expected one renameProvider options object, got {other:?}"),
     }
 }
@@ -365,7 +371,7 @@ fn code_action_provider(outbox: &[RawMessage], id: i32) -> CodeActionOptions {
         .capabilities
         .code_action_provider
     {
-        Some(CodeActionProviderCapability::Options(options)) => options,
+        Some(CodeActionProvider::CodeActionOptions(options)) => options,
         other => panic!("expected one codeActionProvider options object, got {other:?}"),
     }
 }
@@ -389,7 +395,7 @@ fn inlay_hint_provider(outbox: &[RawMessage], id: i32) -> InlayHintOptions {
         .capabilities
         .inlay_hint_provider
     {
-        Some(OneOf::Right(InlayHintServerCapabilities::Options(options))) => options,
+        Some(InlayHintProvider::InlayHintOptions(options)) => options,
         other => panic!("expected one inlayHintProvider options object, got {other:?}"),
     }
 }
@@ -457,8 +463,8 @@ async fn rename_and_prepare_dispatch_typed_values_and_merge_one_capability() {
     let prepared: PrepareRenameResponse =
         serde_json::from_value(ok_result(&outbox, 3).expect("prepare response")).unwrap();
     match prepared {
-        PrepareRenameResponse::RangeWithPlaceholder { placeholder, .. } => {
-            assert_eq!(placeholder, "ident")
+        PrepareRenameResponse::PrepareRenamePlaceholder(value) => {
+            assert_eq!(value.placeholder, "ident")
         }
         other => panic!("expected a range with placeholder, got {other:?}"),
     }
@@ -584,17 +590,17 @@ async fn code_action_and_resolve_dispatch_typed_values_and_merge_one_capability(
     assert_eq!(merged.resolve_provider, Some(true));
     assert_eq!(
         merged.code_action_kinds,
-        Some(vec![CodeActionKind::QUICKFIX]),
+        Some(vec![CodeActionKind::QuickFix]),
         "the base feature's options survive the family merge"
     );
 
     // Both routes dispatch typed values.
-    let actions: CodeActionResponse =
+    let actions: Vec<CodeActionResponse> =
         serde_json::from_value(ok_result(&outbox, 2).expect("code action response")).unwrap();
     match &actions[0] {
         lspf::types::CodeActionOrCommand::CodeAction(action) => {
             assert_eq!(action.title, "Fix it");
-            assert_eq!(action.kind, Some(CodeActionKind::QUICKFIX));
+            assert_eq!(action.kind, Some(CodeActionKind::QuickFix));
         }
         other => panic!("expected a code action, got {other:?}"),
     }
@@ -846,7 +852,7 @@ async fn inlay_hint_and_resolve_dispatch_typed_values_and_merge_one_capability()
     let hints: Vec<InlayHint> =
         serde_json::from_value(ok_result(&outbox, 2).expect("inlay hint response")).unwrap();
     assert_eq!(hints.len(), 1);
-    assert_eq!(hints[0].kind, Some(InlayHintKind::TYPE));
+    assert_eq!(hints[0].kind, Some(InlayHintKind::Type));
     assert!(hints[0].tooltip.is_none());
     let resolved: InlayHint =
         serde_json::from_value(ok_result(&outbox, 3).expect("resolve response")).unwrap();

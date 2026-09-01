@@ -5,12 +5,12 @@ mod target;
 
 use std::sync::Arc;
 
-use lspf::types::notification::{DidChangeTextDocument, DidOpenTextDocument, PublishDiagnostics};
 use lspf::types::{
-    DefinitionOptions, Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams,
-    DidOpenTextDocumentParams, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents,
-    HoverParams, Location, MarkupContent, MarkupKind, Position, PublishDiagnosticsParams, Range,
-    Uri,
+    Contents, Definition, DefinitionOptions, DefinitionParams, DefinitionResponse, Diagnostic,
+    DiagnosticSeverity, DidChangeTextDocumentNotification as DidChangeTextDocument,
+    DidChangeTextDocumentParams, DidOpenTextDocumentNotification as DidOpenTextDocument,
+    DidOpenTextDocumentParams, Hover, HoverParams, Location, MarkupContent, MarkupKind, Position,
+    PublishDiagnosticsNotification as PublishDiagnostics, PublishDiagnosticsParams, Range, Uri,
 };
 use lspf::{CancellationToken, FileProvider, LspError, Server, ServerContext};
 
@@ -85,12 +85,12 @@ async fn publish_diagnostics(ctx: ServerContext, uri: Uri) {
         };
         diagnostics.push(Diagnostic {
             range: Range::new(start, end),
-            severity: Some(DiagnosticSeverity::ERROR),
+            severity: Some(DiagnosticSeverity::Error),
             source: Some(SOURCE.into()),
             message: if missing_heading {
-                format!("local link heading does not exist: {}", link.target)
+                format!("local link heading does not exist: {}", link.target).into()
             } else {
-                format!("local link target does not exist: {}", link.target)
+                format!("local link target does not exist: {}", link.target).into()
             },
             ..Diagnostic::default()
         });
@@ -109,7 +109,7 @@ async fn did_open(_state: Arc<State>, ctx: ServerContext, params: DidOpenTextDoc
 }
 
 async fn did_change(_state: Arc<State>, ctx: ServerContext, params: DidChangeTextDocumentParams) {
-    publish_diagnostics(ctx, params.text_document.uri).await;
+    publish_diagnostics(ctx, params.text_document.text_document_identifier.uri).await;
 }
 
 async fn hover(
@@ -130,7 +130,7 @@ async fn hover(
         .map_or_else(|| target.local.display(), |heading| heading.title.clone());
 
     Ok(Some(Hover {
-        contents: HoverContents::Markup(MarkupContent {
+        contents: Contents::MarkupContent(MarkupContent {
             kind: MarkupKind::Markdown,
             value: format!(
                 "**{heading}**\n\n{tick}{}{tick}",
@@ -145,9 +145,9 @@ async fn hover(
 async fn definition(
     _state: Arc<State>,
     ctx: ServerContext,
-    params: GotoDefinitionParams,
+    params: DefinitionParams,
     _ct: CancellationToken,
-) -> Result<Option<GotoDefinitionResponse>, LspError> {
+) -> Result<Option<DefinitionResponse>, LspError> {
     let uri = params.text_document_position_params.text_document.uri;
     let Some(target) =
         target_at_position(&ctx, &uri, params.text_document_position_params.position).await
@@ -155,13 +155,15 @@ async fn definition(
         return Ok(None);
     };
 
-    Ok(Some(GotoDefinitionResponse::Scalar(Location {
-        uri: target.local.uri,
-        range: target.heading.map_or_else(
-            || Range::new(Position::new(0, 0), Position::new(0, 0)),
-            |heading| heading.range,
-        ),
-    })))
+    Ok(Some(DefinitionResponse::Definition(Definition::Location(
+        Location {
+            uri: target.local.uri,
+            range: target.heading.map_or_else(
+                || Range::new(Position::new(0, 0), Position::new(0, 0)),
+                |heading| heading.range,
+            ),
+        },
+    ))))
 }
 
 /// Build a Markdown server with the caller's file provider.

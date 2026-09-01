@@ -15,7 +15,7 @@ use futures_channel::mpsc::UnboundedReceiver;
 use futures_util::FutureExt;
 use futures_util::future::{Either, select};
 use futures_util::select_biased;
-use lsp_types::error_codes::SERVER_CANCELLED;
+use gen_lsp_types::LspErrorCodes;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Span, warn};
 
@@ -595,7 +595,7 @@ where
                     cancellation.cancel();
                     let _ = completion.now_or_never();
                     ServiceResult::Error(LspError::ServerError {
-                        code: SERVER_CANCELLED as i32,
+                        code: LspErrorCodes::ServerCancelled.into(),
                         message: HANDLER_DEADLINE_EXPIRED.to_string(),
                         data: None,
                     })

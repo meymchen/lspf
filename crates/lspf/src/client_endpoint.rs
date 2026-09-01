@@ -10,12 +10,12 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-use lsp_types::error_codes::SERVER_CANCELLED;
-use lsp_types::notification::{Exit, Initialized, Notification, Progress};
-use lsp_types::request::{Initialize, Request, Shutdown, WorkDoneProgressCreate};
-use lsp_types::{
-    ClientCapabilities, ClientInfo, InitializeParams, InitializedParams, ProgressParams,
-    WorkDoneProgressCreateParams, WorkDoneProgressParams,
+use gen_lsp_types::{
+    ClientCapabilities, ClientInfo, ExitNotification as Exit, InitializeParams,
+    InitializeRequest as Initialize, InitializedNotification as Initialized, InitializedParams,
+    LspErrorCodes, ProgressNotification as Progress, ProgressParams, ShutdownRequest as Shutdown,
+    WorkDoneProgressCreateParams, WorkDoneProgressCreateRequest as WorkDoneProgressCreate,
+    WorkDoneProgressParams,
 };
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
@@ -37,6 +37,8 @@ use crate::session::{
 };
 use crate::telemetry::{ConnectionTrace, Direction};
 use crate::transport::{Transport, TransportError, TransportReader};
+use crate::types::notification::Notification;
+use crate::types::request::Request;
 use crate::{ClientError, Error, Outcome, Result};
 
 type ReverseFuture = Pin<Box<dyn TaskFuture<std::result::Result<Value, LspError>>>>;
@@ -383,7 +385,7 @@ pub struct ServerHandle {
 
 struct RequestProgressGuard {
     registry: ClientProgressRegistry,
-    token: lsp_types::ProgressToken,
+    token: gen_lsp_types::ProgressToken,
 }
 
 impl Drop for RequestProgressGuard {
@@ -826,7 +828,7 @@ impl<R: Runtime> ClientEngine<R> {
                 self.protocol.reject_inbound(
                     id,
                     LspError::ServerError {
-                        code: SERVER_CANCELLED as i32,
+                        code: LspErrorCodes::ServerCancelled.into(),
                         message: INBOUND_CAPACITY_EXHAUSTED.to_string(),
                         data: None,
                     },
@@ -1006,7 +1008,7 @@ fn is_reserved_reverse_method(method: &str) -> bool {
 
 fn work_done_token(
     params: &[u8],
-) -> std::result::Result<Option<lsp_types::ProgressToken>, ClientError> {
+) -> std::result::Result<Option<gen_lsp_types::ProgressToken>, ClientError> {
     if params.is_empty() {
         return Ok(None);
     }
@@ -1035,7 +1037,7 @@ fn initialize_params(
         initialization_options,
         capabilities,
         trace: None,
-        workspace_folders: None,
+        workspace_folders_initialize_params: Default::default(),
         client_info,
         locale: None,
         work_done_progress_params: WorkDoneProgressParams::default(),

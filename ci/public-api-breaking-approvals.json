@@ -28,6 +28,13 @@
       "target": "*",
       "features": "*",
       "findingsSha256": "3acf1e16f752f756177140c565f80ad6d8c4190eb986bfe28f64baf448c92695"
+    },
+    {
+      "baselineVersion": "0.9.2",
+      "currentVersion": "0.10.0",
+      "target": "*",
+      "features": "*",
+      "findingsSha256": "e65c8480a72f57fc795116bed3687e57b003812cc8bd5a01c227eae37826b69a"
     }
   ]
 }

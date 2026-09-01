@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytes::Bytes;
-use lsp_types::{LogMessageParams, MessageType};
+use gen_lsp_types::{LogMessageParams, MessageType};
 use lspf::types::request::Request;
 use lspf::{
     ClientError, ClientHandle, DocumentsView, RawMessage, RequestId, ResourcePolicy, Server,
@@ -163,13 +163,13 @@ async fn fills_queue(
     let message = "x".repeat(12 * 1024);
     ctx.client()
         .log_message(LogMessageParams {
-            typ: MessageType::INFO,
+            kind: MessageType::Info,
             message: message.clone(),
         })
         .map_err(lspf::LspError::internal)?;
     assert!(matches!(
         ctx.client().log_message(LogMessageParams {
-            typ: MessageType::INFO,
+            kind: MessageType::Info,
             message,
         }),
         Err(ClientError::OutboundOverloaded)
@@ -251,7 +251,7 @@ async fn overloads_peer(
 ) -> Result<(), lspf::LspError> {
     ctx.client()
         .log_message(LogMessageParams {
-            typ: MessageType::INFO,
+            kind: MessageType::Info,
             message: "secret-queued-notification".to_string(),
         })
         .map_err(lspf::LspError::internal)?;
@@ -1232,7 +1232,7 @@ async fn assert_close_clears_every_connection_resource(trigger: CleanupTrigger) 
     connection.pause_next_write();
     client
         .log_message(LogMessageParams {
-            typ: MessageType::INFO,
+            kind: MessageType::Info,
             message: "accounted until close".to_string(),
         })
         .expect("the final write is admitted");

@@ -9,20 +9,21 @@ use futures_channel::{
     mpsc::{self, UnboundedReceiver, UnboundedSender},
     oneshot,
 };
-use lsp_types::notification::{
-    LogMessage, LogTrace, Notification, Progress, PublishDiagnostics, ShowMessage,
-};
-use lsp_types::request::{
-    ApplyWorkspaceEdit, CodeLensRefresh, InlayHintRefreshRequest, InlineValueRefreshRequest,
-    RegisterCapability, Request, SemanticTokensRefresh, ShowDocument, ShowMessageRequest,
-    UnregisterCapability, WorkspaceConfiguration, WorkspaceDiagnosticRefresh,
-    WorkspaceFoldersRequest,
-};
-use lsp_types::{
-    ApplyWorkspaceEditParams, ApplyWorkspaceEditResponse, ConfigurationParams, LogMessageParams,
-    LogTraceParams, MessageActionItem, ProgressParams, PublishDiagnosticsParams,
-    RegistrationParams, ShowDocumentParams, ShowDocumentResult, ShowMessageParams,
-    ShowMessageRequestParams, TraceValue, UnregistrationParams, WorkspaceFolder,
+use gen_lsp_types::{
+    ApplyWorkspaceEditParams, ApplyWorkspaceEditRequest as ApplyWorkspaceEdit,
+    ApplyWorkspaceEditResult, CodeLensRefreshRequest as CodeLensRefresh, ConfigurationParams,
+    ConfigurationRequest as WorkspaceConfiguration,
+    DiagnosticRefreshRequest as WorkspaceDiagnosticRefresh, InlayHintRefreshRequest,
+    InlineValueRefreshRequest, LogMessageNotification as LogMessage, LogMessageParams,
+    LogTraceNotification as LogTrace, LogTraceParams, MessageActionItem,
+    ProgressNotification as Progress, ProgressParams,
+    PublishDiagnosticsNotification as PublishDiagnostics, PublishDiagnosticsParams,
+    RegistrationParams, RegistrationRequest as RegisterCapability,
+    SemanticTokensRefreshRequest as SemanticTokensRefresh, ShowDocumentParams,
+    ShowDocumentRequest as ShowDocument, ShowDocumentResult,
+    ShowMessageNotification as ShowMessage, ShowMessageParams, ShowMessageRequest,
+    ShowMessageRequestParams, TraceValue, UnregistrationParams,
+    UnregistrationRequest as UnregisterCapability, WorkspaceFolder, WorkspaceFoldersRequest,
 };
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
@@ -33,6 +34,8 @@ use crate::error::ClientError;
 use crate::progress::ProgressRegistry;
 use crate::raw::{JsonRpcError, RawMessage, RequestId};
 use crate::telemetry::{Completion, Deadline, DeadlineAction, Direction, Resource, ResourceAction};
+use crate::types::notification::Notification;
+use crate::types::request::Request;
 use crate::workspace::SharedTrace;
 
 /// A response completion value: either raw success bytes or a JSON-RPC error.
@@ -148,9 +151,11 @@ impl PendingGuard {
         if self.enqueued {
             let _ = self
                 .client
-                .notify_required::<lsp_types::notification::Cancel>(lsp_types::CancelParams {
-                    id: lsp_types::NumberOrString::Number(self.id as i32),
-                });
+                .notify_required::<gen_lsp_types::CancelNotification>(
+                    gen_lsp_types::CancelParams {
+                        id: gen_lsp_types::Id::Int(self.id as i32),
+                    },
+                );
         }
         self.enqueued = false;
         true
@@ -808,14 +813,15 @@ impl From<Vec<serde_json::Value>> for TelemetryEventParams {
 }
 
 /// The `telemetry/event` notification with the object-or-array params type.
-/// `lsp_types::notification::TelemetryEvent` types its params as
+/// `gen_lsp_types::TelemetryEventNotification` types its params as
 /// `serde_json::Value`, which would admit primitive payloads, so the helper
 /// goes through this re-typed notification instead.
 enum TelemetryEvent {}
 
 impl Notification for TelemetryEvent {
     type Params = TelemetryEventParams;
-    const METHOD: &'static str = <lsp_types::notification::TelemetryEvent as Notification>::METHOD;
+    const METHOD: &'static str =
+        <gen_lsp_types::TelemetryEventNotification as Notification>::METHOD;
 }
 
 /// A cloneable typed handle for messages sent to the current LSP client.
@@ -1203,12 +1209,12 @@ impl ClientHandle {
     }
 
     /// Ask the client to apply a workspace edit with `workspace/applyEdit`
-    /// (LSP 3.17), awaiting the client's [`ApplyWorkspaceEditResponse`].
+    /// (LSP 3.17), awaiting the client's [`ApplyWorkspaceEditResult`].
     ///
     /// The [`ApplyWorkspaceEditParams`] are sent exactly as provided: the
     /// edit contents, label, and metadata all come from the caller. The
     /// helper owns no edit policy: it never rewrites, filters, or batches
-    /// edits, and the client's [`ApplyWorkspaceEditResponse`] — its `applied`
+    /// edits, and the client's [`ApplyWorkspaceEditResult`] — its `applied`
     /// flag with the optional failure reason — is returned verbatim for the
     /// caller to interpret.
     ///
@@ -1224,7 +1230,7 @@ impl ClientHandle {
     pub async fn apply_edit(
         &self,
         params: ApplyWorkspaceEditParams,
-    ) -> Result<ApplyWorkspaceEditResponse, ClientError> {
+    ) -> Result<ApplyWorkspaceEditResult, ClientError> {
         self.request::<ApplyWorkspaceEdit>(params).await
     }
 
@@ -1573,7 +1579,7 @@ impl ClientHandle {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use lsp_types::NumberOrString;
+
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
     use serde_json::json;
     use tracing_subscriber::layer::SubscriberExt;
@@ -1757,7 +1763,7 @@ mod tests {
 
     #[tokio::test]
     async fn request_completes_when_response_arrives() {
-        use lsp_types::request::Request as LspRequest;
+        use crate::types::request::Request as LspRequest;
 
         enum PingRequest {}
         impl LspRequest for PingRequest {
@@ -1780,7 +1786,7 @@ mod tests {
 
         // Deliver a response.
         let id_num = match &id {
-            lsp_types::NumberOrString::Number(n) => *n as u32,
+            RequestId::Number(n) => *n as u32,
             _ => panic!("expected numeric id"),
         };
         client
@@ -1793,7 +1799,7 @@ mod tests {
 
     #[tokio::test]
     async fn request_returns_remote_error_on_error_response() {
-        use lsp_types::request::Request as LspRequest;
+        use crate::types::request::Request as LspRequest;
 
         enum PingRequest {}
         impl LspRequest for PingRequest {
@@ -1810,7 +1816,7 @@ mod tests {
         let msg = receiver.recv().await.unwrap();
         let id_num = match msg {
             RawMessage::Request {
-                id: NumberOrString::Number(n),
+                id: RequestId::Number(n),
                 ..
             } => n as u32,
             _ => panic!("expected numeric request"),
@@ -1840,7 +1846,7 @@ mod tests {
 
     #[tokio::test]
     async fn malformed_success_result_returns_deserialize_error() {
-        use lsp_types::request::Request as LspRequest;
+        use crate::types::request::Request as LspRequest;
 
         enum TypedRequest {}
         impl LspRequest for TypedRequest {
@@ -1857,7 +1863,7 @@ mod tests {
         let msg = receiver.recv().await.unwrap();
         let id_num = match msg {
             RawMessage::Request {
-                id: NumberOrString::Number(n),
+                id: RequestId::Number(n),
                 ..
             } => n as u32,
             _ => panic!("expected numeric request"),
@@ -1878,7 +1884,7 @@ mod tests {
 
     #[tokio::test]
     async fn dropping_request_future_removes_pending_entry() {
-        use lsp_types::request::Request as LspRequest;
+        use crate::types::request::Request as LspRequest;
 
         enum PingRequest {}
         impl LspRequest for PingRequest {
@@ -1898,7 +1904,7 @@ mod tests {
         let msg = receiver.recv().await.unwrap();
         let id_num = match msg {
             RawMessage::Request {
-                id: NumberOrString::Number(n),
+                id: RequestId::Number(n),
                 ..
             } => n as u32,
             _ => panic!("expected numeric request"),
@@ -1934,7 +1940,7 @@ mod tests {
 
     #[tokio::test]
     async fn abandoned_enqueued_request_emits_one_cancel_notification() {
-        use lsp_types::request::Request as LspRequest;
+        use crate::types::request::Request as LspRequest;
 
         enum PingRequest {}
         impl LspRequest for PingRequest {
@@ -1952,7 +1958,7 @@ mod tests {
         let msg = receiver.recv().await.unwrap();
         let id_num = match msg {
             RawMessage::Request {
-                id: NumberOrString::Number(n),
+                id: RequestId::Number(n),
                 ..
             } => n,
             _ => panic!("expected numeric request"),
@@ -1979,7 +1985,7 @@ mod tests {
 
     #[tokio::test]
     async fn close_all_yields_cancelled_error_from_request() {
-        use lsp_types::request::Request as LspRequest;
+        use crate::types::request::Request as LspRequest;
 
         enum PingRequest {}
         impl LspRequest for PingRequest {
@@ -2010,7 +2016,7 @@ mod tests {
 
     #[tokio::test]
     async fn stale_response_after_cleanup_cannot_complete_another_request() {
-        use lsp_types::request::Request as LspRequest;
+        use crate::types::request::Request as LspRequest;
 
         enum PingRequest {}
         impl LspRequest for PingRequest {
@@ -2028,7 +2034,7 @@ mod tests {
         let msg = receiver.recv().await.unwrap();
         let id_a = match msg {
             RawMessage::Request {
-                id: NumberOrString::Number(n),
+                id: RequestId::Number(n),
                 ..
             } => n as u32,
             _ => panic!("expected numeric request"),
@@ -2049,7 +2055,7 @@ mod tests {
         let msg = receiver.recv().await.unwrap();
         let id_b = match msg {
             RawMessage::Request {
-                id: NumberOrString::Number(n),
+                id: RequestId::Number(n),
                 ..
             } => n as u32,
             _ => panic!("expected numeric request"),
@@ -2073,7 +2079,7 @@ mod tests {
 
     #[tokio::test]
     async fn enqueue_failure_emits_no_cancel_and_leaves_no_entry() {
-        use lsp_types::request::Request as LspRequest;
+        use crate::types::request::Request as LspRequest;
 
         enum PingRequest {}
         impl LspRequest for PingRequest {

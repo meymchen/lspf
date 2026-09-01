@@ -176,6 +176,8 @@ check_surface() {
             ;;
         100)
             findings=$(sed -n '/^--- failure /,/^    Finished /p' "$row_output" \
+                | tr -d '\r' \
+                | tr '\\' '/' \
                 | sed -E \
                     -e '/^    Finished /d' \
                     -e 's#[^[:space:]]*/lspf-'"$baseline_version"'/#<baseline>/#g' \
@@ -190,7 +192,8 @@ check_surface() {
                      | select(length > 0)
                      | split("\n") | sort | join("\n")]
                     | sort | join("\n")
-                ')
+                ' \
+                | tr -d '\r')
             findings_hash=$(printf '%s' "$canonical_findings" \
                 | sha256sum \
                 | cut -d' ' -f1)

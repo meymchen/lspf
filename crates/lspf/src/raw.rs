@@ -1,11 +1,17 @@
 use std::borrow::Cow;
 
 use bytes::Bytes;
-use lsp_types::NumberOrString;
 use serde::{Deserialize, Serialize};
 
 /// A JSON-RPC request identifier accepted by LSP.
-pub type RequestId = NumberOrString;
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum RequestId {
+    /// Numeric request identifier.
+    Number(i32),
+    /// String request identifier.
+    String(String),
+}
 
 /// A validated JSON-RPC envelope with parameters and results retained as raw
 /// UTF-8 JSON bytes.

@@ -24,13 +24,13 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
-use lspf::types::notification::{DidOpenTextDocument, PublishDiagnostics};
 use lspf::types::{
     ApplyWorkspaceEditParams, CompletionItem, CompletionItemKind, CompletionOptions,
-    CompletionParams, CompletionResponse, ConfigurationItem, ConfigurationParams, Diagnostic,
-    DiagnosticSeverity, DidOpenTextDocumentParams, Hover, HoverContents, HoverParams, MarkedString,
-    MessageType, Position, PublishDiagnosticsParams, Range, Registration, RegistrationParams,
-    ShowMessageParams, TextEdit, Uri, WorkspaceEdit,
+    CompletionParams, CompletionResponse, ConfigurationItem, ConfigurationParams, Contents,
+    Diagnostic, DiagnosticSeverity, DidOpenTextDocumentNotification as DidOpenTextDocument,
+    DidOpenTextDocumentParams, Hover, HoverParams, MarkupContent, MarkupKind, MessageType,
+    Position, PublishDiagnosticsNotification as PublishDiagnostics, PublishDiagnosticsParams,
+    Range, Registration, RegistrationParams, ShowMessageParams, TextEdit, Uri, WorkspaceEdit,
 };
 use lspf::{CancellationToken, LspError, OsFileProvider, ProgressOptions, Server, ServerContext};
 use tracing::{debug, warn};
@@ -81,7 +81,7 @@ async fn on_did_open(_state: Arc<State>, ctx: ServerContext, params: DidOpenText
                     character: 0,
                 },
             },
-            severity: Some(DiagnosticSeverity::INFORMATION),
+            severity: Some(DiagnosticSeverity::Information),
             source: Some("lspf-hello".into()),
             message: "lspf saw this document open".into(),
             ..Diagnostic::default()
@@ -117,10 +117,13 @@ async fn hover(
         .version()
         .map_or_else(|| "unknown".to_owned(), |version| version.to_string());
     Ok(Some(Hover {
-        contents: HoverContents::Scalar(MarkedString::String(format!(
-            "`{}` · {words} words · version {version}",
-            document.language_id(),
-        ))),
+        contents: Contents::MarkupContent(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: format!(
+                "`{}` · {words} words · version {version}",
+                document.language_id(),
+            ),
+        }),
         range: None,
     }))
 }
@@ -134,16 +137,16 @@ async fn completion(
     _params: CompletionParams,
     _ct: CancellationToken,
 ) -> Result<Option<CompletionResponse>, LspError> {
-    Ok(Some(CompletionResponse::Array(vec![
+    Ok(Some(CompletionResponse::CompletionItemList(vec![
         CompletionItem {
             label: "lspf-hello".into(),
-            kind: Some(CompletionItemKind::TEXT),
+            kind: Some(CompletionItemKind::Text),
             detail: Some("a template server".into()),
             ..CompletionItem::default()
         },
         CompletionItem {
             label: "workspaceRoots".into(),
-            kind: Some(CompletionItemKind::METHOD),
+            kind: Some(CompletionItemKind::Method),
             detail: Some("read the multi-root workspace state".into()),
             ..CompletionItem::default()
         },
@@ -213,15 +216,18 @@ async fn read_file(
 }
 
 /// The custom outgoing request the journey sends to the client. A marker type
-/// implementing the re-exported [`lspf::types::request::Request`] trait is the
+/// implementing the re-exported [`lspf::types::Request`] trait is the
 /// whole mechanism: the framework allocates the ID, correlates the response,
 /// and cancels on the wire if the future is dropped.
 enum HelloPing {}
 
-impl lspf::types::request::Request for HelloPing {
+impl lspf::types::Request for HelloPing {
     type Params = String;
     type Result = String;
-    const METHOD: &'static str = "lspf-hello/ping";
+    const METHOD: lspf::types::LspRequestMethod<'static> =
+        lspf::types::LspRequestMethod::Custom("lspf-hello/ping");
+    const MESSAGE_DIRECTION: lspf::types::MessageDirection =
+        lspf::types::MessageDirection::ServerToClient;
 }
 
 /// One journey step's name and outcome, reported back as the Command result so
@@ -287,7 +293,7 @@ async fn outgoing_journey(
     // 2. Messaging: a fire-and-forget `window/showMessage` reports the
     //    outcome. It is encoded and enqueued synchronously.
     if let Err(error) = client.show_message(ShowMessageParams {
-        typ: MessageType::INFO,
+        kind: MessageType::Info,
         message: format!("lspf-hello configuration: {configured_text}"),
     }) {
         warn!(%error, "showing the configuration message failed");
@@ -298,6 +304,7 @@ async fn outgoing_journey(
     let applied = client
         .apply_edit(ApplyWorkspaceEditParams {
             label: Some("lspf-hello touch".into()),
+            metadata: None,
             edit: WorkspaceEdit {
                 changes: Some(
                     [(

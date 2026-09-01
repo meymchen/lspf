@@ -153,6 +153,17 @@ assert_report '
         | .toolExitCode == 100 and .exitCode == 0)
 '
 
+# Windows checkout paths must produce the same approved fingerprint as POSIX
+# paths; the fingerprint records findings, not host path separators.
+export FAKE_CHECKOUT_ROOT='C:\Users\runner\work\lspf\lspf'
+run_gate
+assert_report '
+    .success == true
+    and .intentionalPre1BreakingChanges == true
+    and ([.rows[] | select(.result == "approved-breaking-changes")]
+        | length == 4)
+'
+
 export FAKE_CURRENT_VERSION=0.5.3
 if run_gate; then
     echo 'test failure: a patch release accepted a breaking-change approval' >&2

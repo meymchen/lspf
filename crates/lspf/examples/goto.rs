@@ -10,8 +10,9 @@ use lspf::types::request::{
     GotoImplementationResponse, GotoTypeDefinitionParams, GotoTypeDefinitionResponse,
 };
 use lspf::types::{
-    DeclarationOptions, DefinitionOptions, GotoDefinitionParams, GotoDefinitionResponse, Location,
-    Position, ReferenceParams, ReferencesOptions, StaticTextDocumentRegistrationOptions,
+    DeclarationOptions, DefinitionOptions, GotoDefinitionParams, GotoDefinitionResponse,
+    ImplementationRegistrationOptions, Location, Position, ReferenceParams, ReferencesOptions,
+    TypeDefinitionRegistrationOptions,
 };
 use lspf::{CancellationToken, LspError, Server, ServerContext};
 
@@ -56,7 +57,8 @@ async fn declaration(
 ) -> Result<Option<GotoDeclarationResponse>, LspError> {
     let uri = params.text_document_position_params.text_document.uri;
     let (text, word) = selected(&ctx, &uri, params.text_document_position_params.position)?;
-    Ok(definition_location(&text, &uri, &word, "fn ").map(GotoDeclarationResponse::Scalar))
+    Ok(definition_location(&text, &uri, &word, "fn ")
+        .map(|location| GotoDeclarationResponse::Declaration(location.into())))
 }
 
 async fn definition(
@@ -67,7 +69,8 @@ async fn definition(
 ) -> Result<Option<GotoDefinitionResponse>, LspError> {
     let uri = params.text_document_position_params.text_document.uri;
     let (text, word) = selected(&ctx, &uri, params.text_document_position_params.position)?;
-    Ok(definition_location(&text, &uri, &word, "type ").map(GotoDefinitionResponse::Scalar))
+    Ok(definition_location(&text, &uri, &word, "type ")
+        .map(|location| GotoDefinitionResponse::Definition(location.into())))
 }
 
 async fn implementation(
@@ -78,7 +81,8 @@ async fn implementation(
 ) -> Result<Option<GotoImplementationResponse>, LspError> {
     let uri = params.text_document_position_params.text_document.uri;
     let (text, word) = selected(&ctx, &uri, params.text_document_position_params.position)?;
-    Ok(definition_location(&text, &uri, &word, "fn ").map(GotoImplementationResponse::Scalar))
+    Ok(definition_location(&text, &uri, &word, "fn ")
+        .map(|location| GotoImplementationResponse::Definition(location.into())))
 }
 
 async fn type_definition(
@@ -98,7 +102,7 @@ async fn type_definition(
     });
     Ok(type_name
         .and_then(|name| definition_location(&text, &uri, name, "type "))
-        .map(GotoTypeDefinitionResponse::Scalar))
+        .map(|location| GotoTypeDefinitionResponse::Definition(location.into())))
 }
 
 async fn references(
@@ -107,8 +111,8 @@ async fn references(
     params: ReferenceParams,
     _: CancellationToken,
 ) -> Result<Option<Vec<Location>>, LspError> {
-    let uri = params.text_document_position.text_document.uri;
-    let (text, word) = selected(&ctx, &uri, params.text_document_position.position)?;
+    let uri = params.text_document_position_params.text_document.uri;
+    let (text, word) = selected(&ctx, &uri, params.text_document_position_params.position)?;
     Ok(Some(
         example_support::word_ranges(&text, &word)
             .into_iter()
@@ -118,13 +122,6 @@ async fn references(
             })
             .collect(),
     ))
-}
-
-fn static_options() -> StaticTextDocumentRegistrationOptions {
-    StaticTextDocumentRegistrationOptions {
-        document_selector: None,
-        id: None,
-    }
 }
 
 #[tokio::main]
@@ -143,11 +140,11 @@ async fn main() -> lspf::Result<()> {
             definition,
         )
         .feature(
-            lspf::features::implementation(static_options()),
+            lspf::features::implementation(ImplementationRegistrationOptions::default()),
             implementation,
         )
         .feature(
-            lspf::features::type_definition(static_options()),
+            lspf::features::type_definition(TypeDefinitionRegistrationOptions::default()),
             type_definition,
         )
         .feature(

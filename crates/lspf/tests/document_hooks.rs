@@ -86,7 +86,9 @@ async fn on_did_change(
     ctx: ServerContext,
     params: DidChangeTextDocumentParams,
 ) {
-    let doc = ctx.documents().get(&params.text_document.uri);
+    let doc = ctx
+        .documents()
+        .get(&params.text_document.text_document_identifier.uri);
     state.seen.lock().unwrap().push(Seen::Change {
         text: doc.as_ref().map(|d| d.text()),
         version: doc.as_ref().and_then(|d| d.version()),
@@ -1013,7 +1015,7 @@ async fn initialize_advertises_the_built_in_incremental_document_sync() {
     assert_eq!(
         init.capabilities.text_document_sync,
         Some(lspf::types::TextDocumentSyncCapability::Kind(
-            lspf::types::TextDocumentSyncKind::INCREMENTAL
+            lspf::types::TextDocumentSyncKind::Incremental
         )),
         "a client only sends didOpen/didChange/didClose to a server that \
          advertises the sync kind the engine's built-ins implement"
@@ -1027,7 +1029,7 @@ async fn initialize_advertises_configured_full_document_sync() {
     })
     .text_document_sync(TextDocumentSyncOptions {
         open_close: Some(true),
-        change: Some(TextDocumentSyncKind::FULL),
+        change: Some(TextDocumentSyncKind::Full),
         will_save: Some(false),
         will_save_wait_until: Some(false),
         save: Some(false.into()),
@@ -1070,7 +1072,7 @@ async fn sync_none_ignores_document_notifications_and_keeps_the_session_running(
         seen: Arc::clone(&seen),
     })
     .text_document_sync(TextDocumentSyncOptions {
-        change: Some(TextDocumentSyncKind::NONE),
+        change: Some(TextDocumentSyncKind::None),
         ..TextDocumentSyncOptions::default()
     })
     .notification::<DidOpenTextDocument, _, _>(on_did_open)
@@ -1098,7 +1100,7 @@ async fn sync_none_ignores_document_notifications_and_keeps_the_session_running(
     assert_eq!(
         init.capabilities.text_document_sync,
         Some(lspf::types::TextDocumentSyncCapability::Kind(
-            TextDocumentSyncKind::NONE
+            TextDocumentSyncKind::None
         ))
     );
 }
@@ -1110,7 +1112,7 @@ async fn full_sync_rejects_a_range_batch_atomically_and_skips_the_hook() {
         seen: Arc::clone(&seen),
     })
     .text_document_sync(TextDocumentSyncOptions {
-        change: Some(TextDocumentSyncKind::FULL),
+        change: Some(TextDocumentSyncKind::Full),
         ..TextDocumentSyncOptions::default()
     })
     .notification::<DidOpenTextDocument, _, _>(on_did_open)
@@ -1346,7 +1348,7 @@ fn sync_none_conflicts_with_save_registrations() {
         seen: Arc::default(),
     })
     .text_document_sync(TextDocumentSyncOptions {
-        change: Some(TextDocumentSyncKind::NONE),
+        change: Some(TextDocumentSyncKind::None),
         ..TextDocumentSyncOptions::default()
     })
     .feature(

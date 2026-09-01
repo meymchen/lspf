@@ -34,9 +34,10 @@ async fn hover(
         return Ok(None);
     };
     Ok(Some(Hover {
-        contents: lspf::types::HoverContents::Scalar(lspf::types::MarkedString::String(
-            format!("{} words", document.text().split_whitespace().count()),
-        )),
+        contents: lspf::types::HoverContents::MarkupContent(lspf::types::MarkupContent {
+            kind: lspf::types::MarkupKind::PlainText,
+            value: format!("{} words", document.text().split_whitespace().count()),
+        }),
         range: None,
     }))
 }
@@ -67,7 +68,7 @@ capability knob:
 #     _params: CompletionParams,
 #     _ct: CancellationToken,
 # ) -> Result<Option<CompletionResponse>, LspError> {
-#     Ok(Some(CompletionResponse::Array(vec![])))
+#     Ok(Some(CompletionResponse::CompletionItemList(vec![])))
 # }
 # fn main() {
 let server = Server::builder(State)

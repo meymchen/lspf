@@ -60,9 +60,9 @@ pub(crate) fn sum_diagnostics(text: &str) -> Vec<Diagnostic> {
                 return None;
             }
             let (severity, message) = match answer {
-                None => (DiagnosticSeverity::WARNING, "Missing answer".to_string()),
+                None => (DiagnosticSeverity::Warning, "Missing answer".to_string()),
                 Some(actual) => (
-                    DiagnosticSeverity::ERROR,
+                    DiagnosticSeverity::Error,
                     format!("Incorrect answer: {actual}"),
                 ),
             };
@@ -70,7 +70,7 @@ pub(crate) fn sum_diagnostics(text: &str) -> Vec<Diagnostic> {
                 range: line_range(line_number as u32, line),
                 severity: Some(severity),
                 source: Some("lspf-example".to_string()),
-                message,
+                message: lspf::types::Message::String(message),
                 ..Diagnostic::default()
             })
         })

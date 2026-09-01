@@ -77,7 +77,7 @@ fn server() -> Server<AppState> {
             format_document,
         )
         .feature(
-            lspf::features::document_color(ColorProviderOptions {}),
+            lspf::features::document_color(ColorProviderOptions::default()),
             document_colors,
         )
         .feature(lspf::features::color_presentation(), color_presentations)

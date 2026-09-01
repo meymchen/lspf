@@ -1,14 +1,12 @@
 use std::io::Write;
 
 use bytes::Bytes;
-use lsp_types::NumberOrString;
 use serde::{Deserialize, Deserializer};
 use serde_json::value::RawValue;
 use std::borrow::Cow;
 
 use super::TransportError;
-use crate::raw::JsonRpcError;
-use crate::raw::RawMessage;
+use crate::raw::{JsonRpcError, RawMessage, RequestId};
 
 #[derive(Deserialize)]
 struct InEnvelope<'a> {
@@ -79,7 +77,7 @@ pub fn parse(body: Bytes) -> RawMessage {
     let id = env
         .id
         .0
-        .and_then(|value| serde_json::from_str::<NumberOrString>(value.get()).ok());
+        .and_then(|value| serde_json::from_str::<RequestId>(value.get()).ok());
 
     match (method, has_id, id, env.result.0, env.error.0) {
         (Some(method), true, Some(id), None, None) => RawMessage::Request {
@@ -263,7 +261,7 @@ mod tests {
         match &msg {
             RawMessage::Request { id, method, params } => {
                 assert_eq!(method, "initialize");
-                assert!(matches!(id, NumberOrString::Number(1)));
+                assert!(matches!(id, RequestId::Number(1)));
                 assert_eq!(&params[..], br#"{"foo":42}"#);
             }
             _ => panic!("expected request"),
@@ -289,7 +287,7 @@ mod tests {
 
         assert!(matches!(
             msg.id(),
-            Some(NumberOrString::String(id)) if id == "editor-request"
+            Some(RequestId::String(id)) if id == "editor-request"
         ));
         assert_eq!(
             serialize(&msg).unwrap(),
@@ -307,7 +305,7 @@ mod tests {
     #[test]
     fn serializes_null_result() {
         let msg = RawMessage::Response {
-            id: NumberOrString::Number(7),
+            id: RequestId::Number(7),
             result: Ok(Bytes::new()),
         };
         let out = serialize(&msg).unwrap();

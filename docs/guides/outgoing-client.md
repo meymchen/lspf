@@ -35,7 +35,7 @@ provided:
 // The message goes to the client only; it is never echoed into the server's
 // local tracing stream.
 if let Err(error) = client.show_message(ShowMessageParams {
-    typ: MessageType::INFO,
+    kind: MessageType::Info,
     message: "reindexing finished".into(),
 }) {
     tracing::warn!(%error, "show_message failed");
@@ -111,6 +111,7 @@ async fn insert_header(client: &ClientHandle, uri: Uri) -> Result<bool, ClientEr
         .apply_edit(ApplyWorkspaceEditParams {
             label: Some("insert header".into()),
             edit,
+            metadata: None,
         })
         .await?;
     Ok(response.applied)
@@ -264,7 +265,7 @@ return `Result<(), ClientError>`; request helpers return
 | `ServerContext::publish_diagnostics` | `textDocument/publishDiagnostics` | `PublishDiagnosticsParams` | `()` | stable |
 | `ClientHandle::show_document` | `window/showDocument` | `ShowDocumentParams` | `ShowDocumentResult` | stable |
 | `ClientHandle::show_message_request` | `window/showMessageRequest` | `ShowMessageRequestParams` | `Option<MessageActionItem>` | stable |
-| `ClientHandle::apply_edit` | `workspace/applyEdit` | `ApplyWorkspaceEditParams` | `ApplyWorkspaceEditResponse` | stable |
+| `ClientHandle::apply_edit` | `workspace/applyEdit` | `ApplyWorkspaceEditParams` | `ApplyWorkspaceEditResult` | stable |
 | `ClientHandle::configuration` | `workspace/configuration` | `ConfigurationParams` | `Vec<serde_json::Value>` | stable |
 | `ClientHandle::workspace_folders` | `workspace/workspaceFolders` | none (`null`) | `Option<Vec<WorkspaceFolder>>` | stable |
 | `ClientHandle::register_capability` | `client/registerCapability` | `RegistrationParams` | `()` | stable |

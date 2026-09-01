@@ -10,7 +10,7 @@
 //! map). Public values and wire responses always carry the client's original
 //! URI, never the normalized form.
 
-use lsp_types::Uri;
+use gen_lsp_types::Uri;
 
 /// The normalized identity of a client-supplied [`Uri`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -29,11 +29,7 @@ pub(crate) struct UriKey {
 
 impl UriKey {
     pub(crate) fn new(uri: &Uri) -> Self {
-        let scheme = uri
-            .scheme()
-            .map(|scheme| scheme.as_str())
-            .unwrap_or_default()
-            .to_ascii_lowercase();
+        let scheme = uri.scheme().as_str().to_ascii_lowercase();
         let authority = uri
             .authority()
             .map(|authority| {
@@ -42,10 +38,10 @@ impl UriKey {
                     normalized.push_str(userinfo.as_str());
                     normalized.push('@');
                 }
-                normalized.push_str(&authority.host().as_str().to_ascii_lowercase());
+                normalized.push_str(&authority.host().to_ascii_lowercase());
                 if let Some(port) = authority.port() {
                     normalized.push(':');
-                    normalized.push_str(port);
+                    normalized.push_str(port.as_str());
                 }
                 normalized
             })

@@ -27,12 +27,10 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 #[cfg(test)]
-use lsp_types::ServerCapabilities;
-use lsp_types::notification::Notification;
-use lsp_types::request::Request;
-use lsp_types::{
-    InitializeParams, InitializedParams, ServerInfo, TextDocumentSyncCapability,
-    TextDocumentSyncKind, TextDocumentSyncOptions, TextDocumentSyncSaveOptions,
+use gen_lsp_types::ServerCapabilities;
+use gen_lsp_types::{
+    InitializeParams, InitializedParams, Save, ServerInfo, TextDocumentSync, TextDocumentSyncKind,
+    TextDocumentSyncOptions,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -49,6 +47,8 @@ use crate::features::{FeatureSpec, NotificationFeatureSpec};
 use crate::file_provider::{SharedFileProvider, erase};
 use crate::runtime::{TaskFuture, TaskSend};
 use crate::service::{Layer, UserLayer};
+use crate::types::notification::Notification;
+use crate::types::request::Request;
 
 /// Method names owned by the framework's lifecycle; a custom request or
 /// notification may not shadow one of them.
@@ -114,7 +114,7 @@ impl ProtocolNotification {
 
 #[derive(Debug, Clone)]
 pub(crate) struct DocumentSyncSettings {
-    pub(crate) capability: TextDocumentSyncCapability,
+    pub(crate) capability: TextDocumentSync,
     pub(crate) options: TextDocumentSyncOptions,
 }
 
@@ -221,7 +221,7 @@ pub(crate) type ErasedNotificationHandler<S> =
 /// handler decodes those arguments into the typed `Args` once, invokes the
 /// typed handler, and encodes its `Output` once.
 ///
-/// [`ExecuteCommandParams`]: lsp_types::ExecuteCommandParams
+/// [`ExecuteCommandParams`]: gen_lsp_types::ExecuteCommandParams
 pub(crate) type ErasedCommandHandler<S> =
     Box<dyn SharedHandler<(Arc<S>, ServerContext, Vec<Value>, CancellationToken), HandlerFuture>>;
 
@@ -532,10 +532,7 @@ impl<S: Send + Sync + 'static> Registrations<S> {
         let wait_until = self.capabilities.has_will_save_wait_until();
 
         if let Some(explicit) = &self.document_sync {
-            let save_disabled = matches!(
-                explicit.save,
-                Some(TextDocumentSyncSaveOptions::Supported(false))
-            );
+            let save_disabled = matches!(explicit.save, Some(Save::Bool(false)));
             if save_hook && save_disabled {
                 return Err(BuildError::ConflictingCapability {
                     field: "textDocumentSync.save",
@@ -551,7 +548,7 @@ impl<S: Send + Sync + 'static> Registrations<S> {
                     field: "textDocumentSync.willSaveWaitUntil",
                 });
             }
-            if explicit.change == Some(TextDocumentSyncKind::NONE) {
+            if explicit.change == Some(TextDocumentSyncKind::None) {
                 let field = if save_hook {
                     Some("textDocumentSync.save")
                 } else if will_save_hook {
@@ -567,11 +564,11 @@ impl<S: Send + Sync + 'static> Registrations<S> {
             }
         }
 
-        let mut options = self.document_sync.clone().unwrap_or_default();
+        let mut options = self.document_sync.unwrap_or_default();
         options.open_close.get_or_insert(true);
         options
             .change
-            .get_or_insert(TextDocumentSyncKind::INCREMENTAL);
+            .get_or_insert(TextDocumentSyncKind::Incremental);
         if save_hook && options.save.is_none() {
             options.save = Some(true.into());
         }
@@ -582,22 +579,22 @@ impl<S: Send + Sync + 'static> Registrations<S> {
             options.will_save_wait_until = Some(true);
         }
 
-        if options.change == Some(TextDocumentSyncKind::NONE) {
+        if options.change == Some(TextDocumentSyncKind::None) {
             options.open_close = Some(false);
             options.will_save = Some(false);
             options.will_save_wait_until = Some(false);
             options.save = Some(false.into());
             return Ok(DocumentSyncSettings {
-                capability: TextDocumentSyncCapability::Kind(TextDocumentSyncKind::NONE),
+                capability: TextDocumentSync::Kind(TextDocumentSyncKind::None),
                 options,
             });
         }
 
         let capability =
             if self.document_sync.is_none() && !save_hook && !will_save_hook && !wait_until {
-                TextDocumentSyncCapability::Kind(TextDocumentSyncKind::INCREMENTAL)
+                TextDocumentSync::Kind(TextDocumentSyncKind::Incremental)
             } else {
-                TextDocumentSyncCapability::Options(options.clone())
+                TextDocumentSync::Options(options)
             };
         Ok(DocumentSyncSettings {
             capability,
@@ -674,7 +671,7 @@ impl<S> Router<S> {
     /// protocol-owned negotiated fields separately.
     #[cfg(test)]
     pub(crate) fn capabilities(&self) -> ServerCapabilities {
-        self.capabilities.standard.clone()
+        self.capabilities.clone()
     }
 
     pub(crate) fn generated_capabilities(&self) -> GeneratedCapabilities {
@@ -776,7 +773,7 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
     /// Register a typed custom request handler.
     ///
     /// The marker `R` implements [`lspf::types::request::Request`](crate::types)
-    /// (lspf's re-export of `lsp_types::request::Request`) and thereby fixes
+    /// (lspf's re-export of `gen_lsp_types::request::Request`) and thereby fixes
     /// the wire method, parameter type, and result type used by dispatch. The
     /// handler receives the shared application state, a [`ServerContext`], the
     /// decoded parameters, and a request-scoped [`CancellationToken`].
@@ -802,7 +799,7 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
     ///
     /// The marker `N` implements
     /// [`lspf::types::notification::Notification`](crate::types) (lspf's
-    /// re-export of `lsp_types::notification::Notification`) and fixes the wire
+    /// re-export of `gen_lsp_types::notification::Notification`) and fixes the wire
     /// method and parameter type. The handler receives the shared application
     /// state, a [`ServerContext`], and the decoded parameters. A notification has no
     /// response, so the handler returns `()` and there is no cancellation token.
@@ -1331,8 +1328,10 @@ impl<S: Send + Sync + 'static> Server<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lsp_types::request::{ExecuteCommand, HoverRequest, Shutdown};
-    use lsp_types::{CompletionOptions, HoverProviderCapability};
+    use gen_lsp_types::{
+        CompletionOptions, ExecuteCommandRequest as ExecuteCommand, HoverProvider, HoverRequest,
+        ShutdownRequest as Shutdown, WorkspaceSymbolProvider,
+    };
 
     /// A marker for a custom method, reusing an lsp-types request type only to
     /// exercise registration without inventing wire types in the test.
@@ -1341,27 +1340,27 @@ mod tests {
     async fn ok_hover(
         _state: Arc<DummyState>,
         _ctx: ServerContext,
-        _params: lsp_types::HoverParams,
+        _params: gen_lsp_types::HoverParams,
         _ct: CancellationToken,
-    ) -> Result<Option<lsp_types::Hover>, LspError> {
+    ) -> Result<Option<gen_lsp_types::Hover>, LspError> {
         Ok(None)
     }
 
     async fn ok_completion(
         _state: Arc<DummyState>,
         _ctx: ServerContext,
-        _params: lsp_types::CompletionParams,
+        _params: gen_lsp_types::CompletionParams,
         _ct: CancellationToken,
-    ) -> Result<Option<lsp_types::CompletionResponse>, LspError> {
+    ) -> Result<Option<gen_lsp_types::CompletionResponse>, LspError> {
         Ok(None)
     }
 
     async fn ok_resolve(
         _state: Arc<DummyState>,
         _ctx: ServerContext,
-        item: lsp_types::CompletionItem,
+        item: gen_lsp_types::CompletionItem,
         _ct: CancellationToken,
-    ) -> Result<lsp_types::CompletionItem, LspError> {
+    ) -> Result<gen_lsp_types::CompletionItem, LspError> {
         Ok(item)
     }
 
@@ -1427,7 +1426,7 @@ mod tests {
     #[test]
     fn a_reserved_notification_method_is_a_build_error() {
         let err = Server::builder(DummyState)
-            .notification::<lsp_types::notification::Exit, _, _>(noop_notification)
+            .notification::<gen_lsp_types::ExitNotification, _, _>(noop_notification)
             .build()
             .err()
             .expect("exit is framework-reserved");
@@ -1437,11 +1436,11 @@ mod tests {
     #[test]
     fn a_duplicate_notification_method_is_a_build_error() {
         let err = Server::builder(DummyState)
-            .notification::<lsp_types::notification::DidChangeConfiguration, _, _>(
-                |_s, _c, _p: lsp_types::DidChangeConfigurationParams| async {},
+            .notification::<gen_lsp_types::DidChangeConfigurationNotification, _, _>(
+                |_s, _c, _p: gen_lsp_types::DidChangeConfigurationParams| async {},
             )
-            .notification::<lsp_types::notification::DidChangeConfiguration, _, _>(
-                |_s, _c, _p: lsp_types::DidChangeConfigurationParams| async {},
+            .notification::<gen_lsp_types::DidChangeConfigurationNotification, _, _>(
+                |_s, _c, _p: gen_lsp_types::DidChangeConfigurationParams| async {},
             )
             .build()
             .err()
@@ -1455,8 +1454,8 @@ mod tests {
     #[test]
     fn workspace_mutation_hooks_contribute_no_catalog_capabilities() {
         let server = Server::builder(DummyState)
-            .notification::<lsp_types::notification::DidChangeConfiguration, _, _>(
-                |_s, _c, _p: lsp_types::DidChangeConfigurationParams| async {},
+            .notification::<gen_lsp_types::DidChangeConfigurationNotification, _, _>(
+                |_s, _c, _p: gen_lsp_types::DidChangeConfigurationParams| async {},
             )
             .build()
             .expect("a lone notification builds");
@@ -1477,11 +1476,11 @@ mod tests {
     #[test]
     fn a_document_sync_registration_records_a_hook_not_a_route() {
         let server = Server::builder(DummyState)
-            .notification::<lsp_types::notification::DidOpenTextDocument, _, _>(
-                |_s, _c, _p: lsp_types::DidOpenTextDocumentParams| async {},
+            .notification::<gen_lsp_types::DidOpenTextDocumentNotification, _, _>(
+                |_s, _c, _p: gen_lsp_types::DidOpenTextDocumentParams| async {},
             )
-            .notification::<lsp_types::notification::DidSaveTextDocument, _, _>(
-                |_s, _c, _p: lsp_types::DidSaveTextDocumentParams| async {},
+            .notification::<gen_lsp_types::DidSaveTextDocumentNotification, _, _>(
+                |_s, _c, _p: gen_lsp_types::DidSaveTextDocumentParams| async {},
             )
             .build()
             .expect("one hook and one ordinary notification build");
@@ -1505,8 +1504,8 @@ mod tests {
     #[test]
     fn a_progress_cancel_registration_records_a_hook_not_a_route() {
         let server = Server::builder(DummyState)
-            .notification::<lsp_types::notification::WorkDoneProgressCancel, _, _>(
-                |_s, _c, _p: lsp_types::WorkDoneProgressCancelParams| async {},
+            .notification::<gen_lsp_types::WorkDoneProgressCancelNotification, _, _>(
+                |_s, _c, _p: gen_lsp_types::WorkDoneProgressCancelParams| async {},
             )
             .build()
             .expect("a lone progress-cancel hook builds");
@@ -1534,11 +1533,11 @@ mod tests {
     #[test]
     fn a_duplicate_document_hook_is_a_build_error() {
         let err = Server::builder(DummyState)
-            .notification::<lsp_types::notification::DidChangeTextDocument, _, _>(
-                |_s, _c, _p: lsp_types::DidChangeTextDocumentParams| async {},
+            .notification::<gen_lsp_types::DidChangeTextDocumentNotification, _, _>(
+                |_s, _c, _p: gen_lsp_types::DidChangeTextDocumentParams| async {},
             )
-            .notification::<lsp_types::notification::DidChangeTextDocument, _, _>(
-                |_s, _c, _p: lsp_types::DidChangeTextDocumentParams| async {},
+            .notification::<gen_lsp_types::DidChangeTextDocumentNotification, _, _>(
+                |_s, _c, _p: gen_lsp_types::DidChangeTextDocumentParams| async {},
             )
             .build()
             .err()
@@ -1557,8 +1556,8 @@ mod tests {
             .into_router()
             .capabilities();
         let with_hook = Server::builder(DummyState)
-            .notification::<lsp_types::notification::DidCloseTextDocument, _, _>(
-                |_s, _c, _p: lsp_types::DidCloseTextDocumentParams| async {},
+            .notification::<gen_lsp_types::DidCloseTextDocumentNotification, _, _>(
+                |_s, _c, _p: gen_lsp_types::DidCloseTextDocumentParams| async {},
             )
             .build()
             .expect("a lone document hook builds")
@@ -1599,7 +1598,7 @@ mod tests {
         async fn raw_execute(
             _state: Arc<DummyState>,
             _ctx: ServerContext,
-            _params: lsp_types::ExecuteCommandParams,
+            _params: gen_lsp_types::ExecuteCommandParams,
             _ct: CancellationToken,
         ) -> Result<Option<serde_json::Value>, LspError> {
             Ok(None)
@@ -1640,10 +1639,7 @@ mod tests {
             .expect("hover builds");
         let router = server.into_router();
         let caps = router.capabilities();
-        assert_eq!(
-            caps.hover_provider,
-            Some(HoverProviderCapability::Simple(true))
-        );
+        assert_eq!(caps.hover_provider, Some(HoverProvider::Bool(true)));
         assert_eq!(caps.completion_provider, None);
         assert!(router.request("textDocument/hover").is_some());
     }
@@ -1768,9 +1764,9 @@ mod tests {
     async fn noop_on_initialize(
         _state: Arc<DummyState>,
         _ctx: ServerContext,
-        _params: lsp_types::InitializeParams,
+        _params: gen_lsp_types::InitializeParams,
         _ct: CancellationToken,
-    ) -> Result<Option<lsp_types::ServerInfo>, LspError> {
+    ) -> Result<Option<gen_lsp_types::ServerInfo>, LspError> {
         Ok(None)
     }
 
@@ -1799,7 +1795,7 @@ mod tests {
     async fn noop_on_initialized(
         _state: Arc<DummyState>,
         _ctx: ServerContext,
-        _params: lsp_types::InitializedParams,
+        _params: gen_lsp_types::InitializedParams,
     ) {
     }
 
@@ -1870,8 +1866,8 @@ mod tests {
     #[test]
     fn initialized_is_a_reserved_notification_method() {
         let err = Server::builder(DummyState)
-            .notification::<lsp_types::notification::Initialized, _, _>(
-                |_s, _c, _p: lsp_types::InitializedParams| async {},
+            .notification::<gen_lsp_types::InitializedNotification, _, _>(
+                |_s, _c, _p: gen_lsp_types::InitializedParams| async {},
             )
             .build()
             .err()
@@ -1882,52 +1878,52 @@ mod tests {
     async fn ok_workspace_symbol(
         _state: Arc<DummyState>,
         _ctx: ServerContext,
-        _params: lsp_types::WorkspaceSymbolParams,
+        _params: gen_lsp_types::WorkspaceSymbolParams,
         _ct: CancellationToken,
-    ) -> Result<Option<lsp_types::WorkspaceSymbolResponse>, LspError> {
+    ) -> Result<Option<gen_lsp_types::WorkspaceSymbolResponse>, LspError> {
         Ok(None)
     }
 
     async fn ok_symbol_resolve(
         _state: Arc<DummyState>,
         _ctx: ServerContext,
-        symbol: lsp_types::WorkspaceSymbol,
+        symbol: gen_lsp_types::WorkspaceSymbol,
         _ct: CancellationToken,
-    ) -> Result<lsp_types::WorkspaceSymbol, LspError> {
+    ) -> Result<gen_lsp_types::WorkspaceSymbol, LspError> {
         Ok(symbol)
     }
 
     async fn ok_will_rename(
         _state: Arc<DummyState>,
         _ctx: ServerContext,
-        _params: lsp_types::RenameFilesParams,
+        _params: gen_lsp_types::RenameFilesParams,
         _ct: CancellationToken,
-    ) -> Result<Option<lsp_types::WorkspaceEdit>, LspError> {
+    ) -> Result<Option<gen_lsp_types::WorkspaceEdit>, LspError> {
         Ok(None)
     }
 
     async fn noop_rename_files(
         _state: Arc<DummyState>,
         _ctx: ServerContext,
-        _params: lsp_types::RenameFilesParams,
+        _params: gen_lsp_types::RenameFilesParams,
     ) {
     }
 
-    fn rename_filters() -> lsp_types::FileOperationRegistrationOptions {
-        lsp_types::FileOperationRegistrationOptions {
-            filters: vec![lsp_types::FileOperationFilter {
+    fn rename_filters() -> gen_lsp_types::FileOperationRegistrationOptions {
+        gen_lsp_types::FileOperationRegistrationOptions {
+            filters: vec![gen_lsp_types::FileOperationFilter {
                 scheme: Some("file".to_string()),
-                pattern: lsp_types::FileOperationPattern {
+                pattern: gen_lsp_types::FileOperationPattern {
                     glob: "**/*.rs".to_string(),
-                    matches: Some(lsp_types::FileOperationPatternKind::File),
+                    matches: Some(gen_lsp_types::FileOperationPatternKind::File),
                     options: None,
                 },
             }],
         }
     }
 
-    fn workspace_symbol_options() -> lsp_types::WorkspaceSymbolOptions {
-        lsp_types::WorkspaceSymbolOptions {
+    fn workspace_symbol_options() -> gen_lsp_types::WorkspaceSymbolOptions {
+        gen_lsp_types::WorkspaceSymbolOptions {
             work_done_progress_options: Default::default(),
             resolve_provider: None,
         }
@@ -1969,7 +1965,7 @@ mod tests {
             .capabilities()
             .workspace_symbol_provider
             .expect("the family emits one workspaceSymbolProvider capability");
-        let lsp_types::OneOf::Right(options) = merged else {
+        let WorkspaceSymbolProvider::WorkspaceSymbolOptions(options) = merged else {
             panic!("the family advertises full options, not a bare boolean");
         };
         assert_eq!(options.resolve_provider, Some(true));
@@ -2069,7 +2065,7 @@ mod tests {
         async fn noop_watched(
             _state: Arc<DummyState>,
             _ctx: ServerContext,
-            _params: lsp_types::DidChangeWatchedFilesParams,
+            _params: gen_lsp_types::DidChangeWatchedFilesParams,
         ) {
         }
         let server = Server::builder(DummyState)

@@ -52,7 +52,7 @@ async fn workspace_symbol(
     _ct: CancellationToken,
 ) -> Result<Option<WorkspaceSymbolResponse>, LspError> {
     state.symbol_queries.lock().unwrap().push(params.query);
-    Ok(Some(WorkspaceSymbolResponse::Flat(vec![])))
+    Ok(Some(WorkspaceSymbolResponse::WorkspaceSymbolList(vec![])))
 }
 
 async fn symbol_resolve(
@@ -61,7 +61,7 @@ async fn symbol_resolve(
     mut symbol: WorkspaceSymbol,
     _ct: CancellationToken,
 ) -> Result<WorkspaceSymbol, LspError> {
-    symbol.container_name = Some("resolved container".to_string());
+    symbol.base_symbol_information.container_name = Some("resolved container".to_string());
     Ok(symbol)
 }
 
@@ -73,7 +73,7 @@ async fn will_create(
 ) -> Result<Option<WorkspaceEdit>, LspError> {
     let mut creates = state.creates.lock().unwrap();
     for file in params.files {
-        creates.push(file.uri);
+        creates.push(file.uri.to_string());
     }
     Ok(Some(WorkspaceEdit::default()))
 }
@@ -86,7 +86,7 @@ async fn will_rename(
 ) -> Result<Option<WorkspaceEdit>, LspError> {
     let mut renames = state.renames.lock().unwrap();
     for file in params.files {
-        renames.push((file.old_uri, file.new_uri));
+        renames.push((file.old_uri.to_string(), file.new_uri.to_string()));
     }
     Ok(Some(WorkspaceEdit::default()))
 }
@@ -99,7 +99,7 @@ async fn will_delete(
 ) -> Result<Option<WorkspaceEdit>, LspError> {
     let mut deletes = state.deletes.lock().unwrap();
     for file in params.files {
-        deletes.push(file.uri);
+        deletes.push(file.uri.to_string());
     }
     Ok(Some(WorkspaceEdit::default()))
 }
@@ -107,21 +107,21 @@ async fn will_delete(
 async fn did_rename(state: Arc<AppState>, _ctx: ServerContext, params: RenameFilesParams) {
     let mut renames = state.renames.lock().unwrap();
     for file in params.files {
-        renames.push((file.old_uri, file.new_uri));
+        renames.push((file.old_uri.to_string(), file.new_uri.to_string()));
     }
 }
 
 async fn did_create(state: Arc<AppState>, _ctx: ServerContext, params: CreateFilesParams) {
     let mut creates = state.creates.lock().unwrap();
     for file in params.files {
-        creates.push(file.uri);
+        creates.push(file.uri.to_string());
     }
 }
 
 async fn did_delete(state: Arc<AppState>, _ctx: ServerContext, params: DeleteFilesParams) {
     let mut deletes = state.deletes.lock().unwrap();
     for file in params.files {
-        deletes.push(file.uri);
+        deletes.push(file.uri.to_string());
     }
 }
 
@@ -132,7 +132,7 @@ async fn did_change_watched(
 ) {
     let mut watched = state.watched_changes.lock().unwrap();
     for change in params.changes {
-        watched.push(change.typ);
+        watched.push(change.kind);
     }
 }
 
@@ -354,14 +354,16 @@ async fn workspace_symbol_and_resolve_dispatch_typed_values_and_merge_one_capabi
 
     // Both routes dispatch typed values.
     assert_eq!(*symbol_queries.lock().unwrap(), vec!["main".to_string()]);
-    let symbols: Option<WorkspaceSymbolResponse> =
-        serde_json::from_value(ok_result(&outbox, 2).expect("workspace/symbol response")).unwrap();
-    assert!(matches!(symbols, Some(WorkspaceSymbolResponse::Flat(_))));
+    assert_eq!(
+        ok_result(&outbox, 2).expect("workspace/symbol response"),
+        json!([]),
+        "the untagged protocol union serializes an empty symbol list as an empty array"
+    );
     let resolved: WorkspaceSymbol =
         serde_json::from_value(ok_result(&outbox, 3).expect("resolve response")).unwrap();
-    assert_eq!(resolved.name, "main");
+    assert_eq!(resolved.base_symbol_information.name, "main");
     assert_eq!(
-        resolved.container_name.as_deref(),
+        resolved.base_symbol_information.container_name.as_deref(),
         Some("resolved container")
     );
 }
@@ -464,7 +466,7 @@ async fn file_operation_routes_dispatch_typed_values_and_merge_one_capability() 
     );
     assert_eq!(
         *watched_changes.lock().unwrap(),
-        vec![FileChangeType::CHANGED]
+        vec![FileChangeType::Changed]
     );
 
     // Every will* request returned its encoded WorkspaceEdit.

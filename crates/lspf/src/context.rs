@@ -1,4 +1,4 @@
-use lsp_types::PublishDiagnosticsParams;
+use gen_lsp_types::PublishDiagnosticsParams;
 use tokio_util::sync::CancellationToken;
 use tracing::Span;
 
@@ -112,7 +112,7 @@ impl ServerContext {
 mod tests {
     use std::str::FromStr;
 
-    use lsp_types::{InitializeParams, TextDocumentItem, Uri};
+    use gen_lsp_types::{InitializeParams, TextDocumentItem, Uri};
 
     use super::*;
     use crate::client::{OutboundQueue, OutboundRegistry};
@@ -138,7 +138,7 @@ mod tests {
         documents
             .open(TextDocumentItem {
                 uri: uri.clone(),
-                language_id: "rust".to_string(),
+                language_id: "rust".into(),
                 version: 1,
                 text: "fn main() {}".to_string(),
             })

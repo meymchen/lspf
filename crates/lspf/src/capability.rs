@@ -16,23 +16,19 @@
 //! [`ServerBuilder::build`](crate::ServerBuilder::build) or by the initialize
 //! transaction's commit.
 
-use lsp_types::{
-    CallHierarchyOptions, CodeActionOptions, CodeActionProviderCapability, CodeLensOptions,
-    ColorProviderOptions, CompletionOptions, DeclarationCapability, DeclarationOptions,
-    DefinitionOptions, DiagnosticOptions, DiagnosticServerCapabilities, DocumentFormattingOptions,
-    DocumentHighlightOptions, DocumentLinkOptions, DocumentOnTypeFormattingOptions,
-    DocumentRangeFormattingOptions, DocumentSymbolOptions, ExecuteCommandOptions,
-    FileOperationRegistrationOptions, FoldingProviderOptions, HoverProviderCapability,
-    ImplementationProviderCapability, InlayHintOptions, InlayHintServerCapabilities,
-    InlineValueOptions, InlineValueServerCapabilities, LinkedEditingRangeOptions,
-    LinkedEditingRangeServerCapabilities, MonikerOptions, MonikerServerCapabilities, OneOf,
-    ReferencesOptions, RenameOptions, SelectionRangeOptions, SemanticTokensFullOptions,
-    SemanticTokensOptions, SemanticTokensServerCapabilities, ServerCapabilities,
-    SignatureHelpOptions, StaticTextDocumentRegistrationOptions, TypeDefinitionProviderCapability,
-    TypeHierarchyOptions, WorkspaceFileOperationsServerCapabilities, WorkspaceServerCapabilities,
+use gen_lsp_types::{
+    CallHierarchyOptions, CodeActionOptions, CodeLensOptions, CompletionOptions,
+    DeclarationOptions, DefinitionOptions, DiagnosticOptions, DocumentColorOptions,
+    DocumentFormattingOptions, DocumentHighlightOptions, DocumentLinkOptions,
+    DocumentOnTypeFormattingOptions, DocumentRangeFormattingOptions, DocumentSymbolOptions,
+    ExecuteCommandOptions, FileOperationOptions, FileOperationRegistrationOptions,
+    FoldingRangeOptions, Full, ImplementationRegistrationOptions, InlayHintOptions,
+    InlineValueOptions, LinkedEditingRangeOptions, MonikerOptions, ReferenceOptions, RenameOptions,
+    SelectionRangeOptions, SemanticTokensFullDelta, SemanticTokensOptions,
+    SemanticTokensOptionsRange, ServerCapabilities, SignatureHelpOptions,
+    TypeDefinitionRegistrationOptions, TypeHierarchyOptions, WorkspaceOptions,
     WorkspaceSymbolOptions,
 };
-use serde::Serialize;
 
 use crate::error::BuildError;
 
@@ -55,7 +51,7 @@ pub(crate) struct CapabilityBuilder {
     commands: Vec<String>,
     call_hierarchy: BaseDependentFamily<CallHierarchyOptions>,
     type_hierarchy: BaseDependentFamily<TypeHierarchyOptions>,
-    color: BaseDependentFamily<ColorProviderOptions>,
+    color: BaseDependentFamily<DocumentColorOptions>,
     semantic_tokens: SemanticTokensFamily,
     completion: CompletionFamily,
     diagnostics: DiagnosticFamily,
@@ -133,25 +129,7 @@ fn contribute_singular<T: PartialEq>(
 }
 
 /// The complete capability object frozen from the registration catalog.
-///
-/// `lsp-types` 0.97 omits LSP 3.17's standard `typeHierarchyProvider` field,
-/// so this catalog-owned wrapper adds that field while flattening every field
-/// the dependency does model. Protocol-owned fields are still layered into
-/// `standard` by the engine after the Router freezes this value (ADR 0017).
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct GeneratedCapabilities {
-    #[serde(flatten)]
-    pub(crate) standard: ServerCapabilities,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    type_hierarchy_provider: Option<TypeHierarchyOptions>,
-}
-
-impl GeneratedCapabilities {
-    pub(crate) fn standard_mut(&mut self) -> &mut ServerCapabilities {
-        &mut self.standard
-    }
-}
+pub(crate) type GeneratedCapabilities = ServerCapabilities;
 
 #[derive(Clone, Default)]
 struct SemanticTokensFamily {
@@ -179,10 +157,13 @@ impl SemanticTokensFamily {
     ) -> Result<(), BuildError> {
         let (declared_full, declared_delta) = match options.full.take() {
             None => (None, None),
-            Some(SemanticTokensFullOptions::Bool(value)) => (Some(value), None),
-            Some(SemanticTokensFullOptions::Delta { delta }) => (Some(true), delta),
+            Some(Full::Bool(value)) => (Some(value), None),
+            Some(Full::SemanticTokensFullDelta(options)) => (Some(true), options.delta),
         };
-        let declared_range = options.range.take();
+        let declared_range = options.range.take().map(|range| match range {
+            SemanticTokensOptionsRange::Bool(value) => value,
+            SemanticTokensOptionsRange::Object(_) => true,
+        });
         if self
             .shared_options
             .as_ref()
@@ -239,11 +220,13 @@ impl SemanticTokensFamily {
 
     fn finish(mut self) -> Option<SemanticTokensOptions> {
         let mut options = self.shared_options.take()?;
-        options.range = self.range.then_some(true);
+        options.range = self.range.then_some(true.into());
         options.full = if self.delta {
-            Some(SemanticTokensFullOptions::Delta { delta: Some(true) })
+            Some(Full::SemanticTokensFullDelta(SemanticTokensFullDelta {
+                delta: Some(true),
+            }))
         } else if self.full {
-            Some(SemanticTokensFullOptions::Bool(true))
+            Some(Full::Bool(true))
         } else {
             None
         };
@@ -460,7 +443,7 @@ impl CapabilityBuilder {
     ) -> Result<(), BuildError> {
         contribute_singular(
             &mut self.caps.document_formatting_provider,
-            OneOf::Right(options),
+            options.into(),
             "documentFormattingProvider",
         )
     }
@@ -471,7 +454,7 @@ impl CapabilityBuilder {
     ) -> Result<(), BuildError> {
         contribute_singular(
             &mut self.caps.document_range_formatting_provider,
-            OneOf::Right(options),
+            options.into(),
             "documentRangeFormattingProvider",
         )
     }
@@ -489,7 +472,7 @@ impl CapabilityBuilder {
 
     pub(crate) fn set_document_color(
         &mut self,
-        options: ColorProviderOptions,
+        options: DocumentColorOptions,
     ) -> Result<(), BuildError> {
         self.color.contribute_base(options, "colorProvider")
     }
@@ -500,7 +483,7 @@ impl CapabilityBuilder {
 
     pub(crate) fn set_folding_range(
         &mut self,
-        options: FoldingProviderOptions,
+        options: FoldingRangeOptions,
     ) -> Result<(), BuildError> {
         contribute_singular(
             &mut self.caps.folding_range_provider,
@@ -526,7 +509,7 @@ impl CapabilityBuilder {
     ) -> Result<(), BuildError> {
         contribute_singular(
             &mut self.caps.inline_value_provider,
-            OneOf::Right(InlineValueServerCapabilities::Options(options)),
+            options.into(),
             "inlineValueProvider",
         )
     }
@@ -535,7 +518,7 @@ impl CapabilityBuilder {
     /// contributions are identical and never conflict; the caller already
     /// rejects a duplicate `textDocument/hover` handler before reaching here.
     pub(crate) fn set_hover(&mut self) -> Result<(), BuildError> {
-        self.caps.hover_provider = Some(HoverProviderCapability::Simple(true));
+        self.caps.hover_provider = Some(true.into());
         Ok(())
     }
 
@@ -564,7 +547,7 @@ impl CapabilityBuilder {
     ) -> Result<(), BuildError> {
         contribute_singular(
             &mut self.caps.declaration_provider,
-            DeclarationCapability::Options(options),
+            options.into(),
             "declarationProvider",
         )
     }
@@ -576,7 +559,7 @@ impl CapabilityBuilder {
     pub(crate) fn set_definition(&mut self, options: DefinitionOptions) -> Result<(), BuildError> {
         contribute_singular(
             &mut self.caps.definition_provider,
-            OneOf::Right(options),
+            options.into(),
             "definitionProvider",
         )
     }
@@ -587,11 +570,11 @@ impl CapabilityBuilder {
     /// [`BuildError::ConflictingCapability`] rather than a silent overwrite.
     pub(crate) fn set_type_definition(
         &mut self,
-        options: StaticTextDocumentRegistrationOptions,
+        options: TypeDefinitionRegistrationOptions,
     ) -> Result<(), BuildError> {
         contribute_singular(
             &mut self.caps.type_definition_provider,
-            TypeDefinitionProviderCapability::Options(options),
+            options.into(),
             "typeDefinitionProvider",
         )
     }
@@ -602,11 +585,11 @@ impl CapabilityBuilder {
     /// [`BuildError::ConflictingCapability`] rather than a silent overwrite.
     pub(crate) fn set_implementation(
         &mut self,
-        options: StaticTextDocumentRegistrationOptions,
+        options: ImplementationRegistrationOptions,
     ) -> Result<(), BuildError> {
         contribute_singular(
             &mut self.caps.implementation_provider,
-            ImplementationProviderCapability::Options(options),
+            options.into(),
             "implementationProvider",
         )
     }
@@ -615,10 +598,10 @@ impl CapabilityBuilder {
     /// `referencesProvider`. Two references features that advertise different
     /// options cannot both be honored, so a mismatch is a
     /// [`BuildError::ConflictingCapability`] rather than a silent overwrite.
-    pub(crate) fn set_references(&mut self, options: ReferencesOptions) -> Result<(), BuildError> {
+    pub(crate) fn set_references(&mut self, options: ReferenceOptions) -> Result<(), BuildError> {
         contribute_singular(
             &mut self.caps.references_provider,
-            OneOf::Right(options),
+            options.into(),
             "referencesProvider",
         )
     }
@@ -633,7 +616,7 @@ impl CapabilityBuilder {
     ) -> Result<(), BuildError> {
         contribute_singular(
             &mut self.caps.document_highlight_provider,
-            OneOf::Right(options),
+            options.into(),
             "documentHighlightProvider",
         )
     }
@@ -648,7 +631,7 @@ impl CapabilityBuilder {
     ) -> Result<(), BuildError> {
         contribute_singular(
             &mut self.caps.document_symbol_provider,
-            OneOf::Right(options),
+            options.into(),
             "documentSymbolProvider",
         )
     }
@@ -663,7 +646,7 @@ impl CapabilityBuilder {
     ) -> Result<(), BuildError> {
         contribute_singular(
             &mut self.caps.linked_editing_range_provider,
-            LinkedEditingRangeServerCapabilities::Options(options),
+            options.into(),
             "linkedEditingRangeProvider",
         )
     }
@@ -675,7 +658,7 @@ impl CapabilityBuilder {
     pub(crate) fn set_moniker(&mut self, options: MonikerOptions) -> Result<(), BuildError> {
         contribute_singular(
             &mut self.caps.moniker_provider,
-            OneOf::Right(MonikerServerCapabilities::Options(options)),
+            options.into(),
             "monikerProvider",
         )
     }
@@ -1056,7 +1039,7 @@ impl CapabilityBuilder {
     /// order (ADR 0022).
     #[cfg(test)]
     pub(crate) fn finish(self) -> ServerCapabilities {
-        self.finish_generated().standard
+        self.finish_generated()
     }
 
     pub(crate) fn finish_generated(mut self) -> GeneratedCapabilities {
@@ -1067,9 +1050,7 @@ impl CapabilityBuilder {
             self.caps.color_provider = Some(options.into());
         }
         if let Some(options) = self.semantic_tokens.finish() {
-            self.caps.semantic_tokens_provider = Some(
-                SemanticTokensServerCapabilities::SemanticTokensOptions(options),
-            );
+            self.caps.semantic_tokens_provider = Some(options.into());
         }
         if let Some(mut options) = self.completion.options {
             if self.completion.resolve {
@@ -1081,19 +1062,19 @@ impl CapabilityBuilder {
             if self.workspace_symbols.resolve {
                 options.resolve_provider = Some(true);
             }
-            self.caps.workspace_symbol_provider = Some(OneOf::Right(options));
+            self.caps.workspace_symbol_provider = Some(options.into());
         }
         if let Some(mut options) = self.rename.options {
             if self.rename.prepare {
                 options.prepare_provider = Some(true);
             }
-            self.caps.rename_provider = Some(OneOf::Right(options));
+            self.caps.rename_provider = Some(options.into());
         }
         if let Some(mut options) = self.code_actions.options {
             if self.code_actions.resolve {
                 options.resolve_provider = Some(true);
             }
-            self.caps.code_action_provider = Some(CodeActionProviderCapability::Options(options));
+            self.caps.code_action_provider = Some(options.into());
         }
         if let Some(mut options) = self.code_lens.options {
             if self.code_lens.resolve {
@@ -1111,8 +1092,7 @@ impl CapabilityBuilder {
             if self.inlay_hints.resolve {
                 options.resolve_provider = Some(true);
             }
-            self.caps.inlay_hint_provider =
-                Some(OneOf::Right(InlayHintServerCapabilities::Options(options)));
+            self.caps.inlay_hint_provider = Some(options.into());
         }
         if !self.commands.is_empty() {
             self.caps.execute_command_provider = Some(ExecuteCommandOptions {
@@ -1121,7 +1101,7 @@ impl CapabilityBuilder {
             });
         }
         if let Some(options) = self.diagnostics.options {
-            self.caps.diagnostic_provider = Some(DiagnosticServerCapabilities::Options(options));
+            self.caps.diagnostic_provider = Some(options.into());
         }
         // Each file-operation family advertises exactly the sides that
         // registered, with both sides of a family carrying the family's one
@@ -1132,7 +1112,7 @@ impl CapabilityBuilder {
             .iter()
             .any(|family| family.will || family.did)
         {
-            let file_operations = WorkspaceFileOperationsServerCapabilities {
+            let file_operations = FileOperationOptions {
                 did_create: self.file_create.did_options(),
                 will_create: self.file_create.will_options(),
                 did_rename: self.file_rename.did_options(),
@@ -1140,29 +1120,25 @@ impl CapabilityBuilder {
                 did_delete: self.file_delete.did_options(),
                 will_delete: self.file_delete.will_options(),
             };
-            self.caps.workspace = Some(WorkspaceServerCapabilities {
+            self.caps.workspace = Some(WorkspaceOptions {
                 file_operations: Some(file_operations),
-                ..WorkspaceServerCapabilities::default()
+                ..WorkspaceOptions::default()
             });
         }
-        GeneratedCapabilities {
-            standard: self.caps,
-            type_hierarchy_provider: self.type_hierarchy.options,
-        }
+        self.caps.type_hierarchy_provider = self.type_hierarchy.options.map(Into::into);
+        self.caps
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lsp_types::{
-        CallHierarchyServerCapability, CodeActionKind, ColorProviderCapability,
-        DeclarationCapability, DeclarationOptions, DefinitionOptions, DocumentHighlightOptions,
-        DocumentOnTypeFormattingOptions, DocumentSymbolOptions, FoldingRangeProviderCapability,
-        ImplementationProviderCapability, LinkedEditingRangeOptions,
-        LinkedEditingRangeServerCapabilities, MonikerOptions, MonikerServerCapabilities,
-        ReferencesOptions, SelectionRangeProviderCapability, SignatureHelpOptions,
-        StaticTextDocumentRegistrationOptions, TypeDefinitionProviderCapability,
+    use gen_lsp_types::{
+        CodeActionKind, CodeActionProvider, DeclarationOptions, DefinitionOptions,
+        DiagnosticProvider, DocumentHighlightOptions, DocumentOnTypeFormattingOptions,
+        DocumentSymbolOptions, HoverProvider, ImplementationRegistrationOptions,
+        LinkedEditingRangeOptions, MonikerOptions, ReferenceOptions, SemanticTokensProvider,
+        SignatureHelpOptions, StaticRegistrationOptions, TypeDefinitionRegistrationOptions,
         WorkDoneProgressOptions,
     };
 
@@ -1178,24 +1154,25 @@ mod tests {
             work_done_progress_options: progress(Some(true)),
         };
         let mut caps = CapabilityBuilder::default();
-        caps.set_document_formatting(formatting.clone()).unwrap();
+        caps.set_document_formatting(formatting).unwrap();
         assert_eq!(
             caps.finish(),
             ServerCapabilities {
-                document_formatting_provider: Some(OneOf::Right(formatting)),
+                document_formatting_provider: Some(formatting.into()),
                 ..ServerCapabilities::default()
             }
         );
 
         let range = DocumentRangeFormattingOptions {
             work_done_progress_options: progress(Some(false)),
+            ranges_support: None,
         };
         let mut caps = CapabilityBuilder::default();
-        caps.set_range_formatting(range.clone()).unwrap();
+        caps.set_range_formatting(range).unwrap();
         assert_eq!(
             caps.finish(),
             ServerCapabilities {
-                document_range_formatting_provider: Some(OneOf::Right(range)),
+                document_range_formatting_provider: Some(range.into()),
                 ..ServerCapabilities::default()
             }
         );
@@ -1219,28 +1196,26 @@ mod tests {
     fn presentation_features_set_only_their_provider_fields() {
         let mut color = CapabilityBuilder::default();
         color.set_color_presentation();
-        color.set_document_color(ColorProviderOptions {}).unwrap();
+        color
+            .set_document_color(DocumentColorOptions::default())
+            .unwrap();
         color.validate().unwrap();
         assert_eq!(
             color.finish(),
             ServerCapabilities {
-                color_provider: Some(ColorProviderCapability::ColorProvider(
-                    ColorProviderOptions {}
-                )),
+                color_provider: Some(DocumentColorOptions::default().into()),
                 ..ServerCapabilities::default()
             }
         );
 
         let mut folding = CapabilityBuilder::default();
         folding
-            .set_folding_range(FoldingProviderOptions {})
+            .set_folding_range(FoldingRangeOptions::default())
             .unwrap();
         assert_eq!(
             folding.finish(),
             ServerCapabilities {
-                folding_range_provider: Some(FoldingRangeProviderCapability::FoldingProvider(
-                    FoldingProviderOptions {},
-                )),
+                folding_range_provider: Some(FoldingRangeOptions::default().into()),
                 ..ServerCapabilities::default()
             }
         );
@@ -1249,15 +1224,11 @@ mod tests {
             work_done_progress_options: progress(Some(true)),
         };
         let mut selection = CapabilityBuilder::default();
-        selection
-            .set_selection_range(selection_options.clone())
-            .unwrap();
+        selection.set_selection_range(selection_options).unwrap();
         assert_eq!(
             selection.finish(),
             ServerCapabilities {
-                selection_range_provider: Some(SelectionRangeProviderCapability::Options(
-                    selection_options,
-                )),
+                selection_range_provider: Some(selection_options.into()),
                 ..ServerCapabilities::default()
             }
         );
@@ -1266,13 +1237,11 @@ mod tests {
             work_done_progress_options: progress(Some(false)),
         };
         let mut inline = CapabilityBuilder::default();
-        inline.set_inline_value(inline_options.clone()).unwrap();
+        inline.set_inline_value(inline_options).unwrap();
         assert_eq!(
             inline.finish(),
             ServerCapabilities {
-                inline_value_provider: Some(OneOf::Right(InlineValueServerCapabilities::Options(
-                    inline_options
-                ),)),
+                inline_value_provider: Some(inline_options.into()),
                 ..ServerCapabilities::default()
             }
         );
@@ -1299,11 +1268,13 @@ mod tests {
         range
             .set_range_formatting(DocumentRangeFormattingOptions {
                 work_done_progress_options: progress(None),
+                ..Default::default()
             })
             .unwrap();
         assert_eq!(
             range.set_range_formatting(DocumentRangeFormattingOptions {
                 work_done_progress_options: progress(Some(true)),
+                ..Default::default()
             }),
             Err(expected("documentRangeFormattingProvider"))
         );
@@ -1324,8 +1295,12 @@ mod tests {
         );
 
         let mut color = CapabilityBuilder::default();
-        color.set_document_color(ColorProviderOptions {}).unwrap();
-        color.set_document_color(ColorProviderOptions {}).unwrap();
+        color
+            .set_document_color(DocumentColorOptions::default())
+            .unwrap();
+        color
+            .set_document_color(DocumentColorOptions::default())
+            .unwrap();
 
         let mut selection = CapabilityBuilder::default();
         selection
@@ -1371,10 +1346,7 @@ mod tests {
         let mut caps = CapabilityBuilder::default();
         caps.set_hover().unwrap();
         let caps = caps.finish();
-        assert_eq!(
-            caps.hover_provider,
-            Some(HoverProviderCapability::Simple(true))
-        );
+        assert_eq!(caps.hover_provider, Some(HoverProvider::Bool(true)));
         assert_eq!(caps.completion_provider, None);
         assert_eq!(caps.execute_command_provider, None);
     }
@@ -1519,7 +1491,7 @@ mod tests {
         caps.set_diagnostics(options.clone()).unwrap();
         assert_eq!(
             caps.finish().diagnostic_provider,
-            Some(DiagnosticServerCapabilities::Options(options))
+            Some(DiagnosticProvider::DiagnosticOptions(options))
         );
     }
 
@@ -1591,10 +1563,10 @@ mod tests {
     fn workspace_symbol_advertises_supplied_options() {
         let options = workspace_symbol_options(None);
         let mut caps = CapabilityBuilder::default();
-        caps.set_workspace_symbol(options.clone()).unwrap();
+        caps.set_workspace_symbol(options).unwrap();
         assert_eq!(
             caps.finish().workspace_symbol_provider,
-            Some(OneOf::Right(options))
+            Some(options.into())
         );
     }
 
@@ -1628,7 +1600,7 @@ mod tests {
             .expect("the family emits one workspaceSymbolProvider capability");
         assert_eq!(
             merged,
-            OneOf::Right(workspace_symbol_options(Some(true))),
+            workspace_symbol_options(Some(true)).into(),
             "the resolve contribution augments the same capability, not a second one"
         );
     }
@@ -1672,7 +1644,7 @@ mod tests {
             .unwrap();
         let err = caps
             .set_workspace_symbol(WorkspaceSymbolOptions {
-                work_done_progress_options: lsp_types::WorkDoneProgressOptions {
+                work_done_progress_options: gen_lsp_types::WorkDoneProgressOptions {
                     work_done_progress: Some(true),
                 },
                 resolve_provider: None,
@@ -1688,11 +1660,11 @@ mod tests {
 
     fn file_operation_options(glob: &str) -> FileOperationRegistrationOptions {
         FileOperationRegistrationOptions {
-            filters: vec![lsp_types::FileOperationFilter {
+            filters: vec![gen_lsp_types::FileOperationFilter {
                 scheme: Some("file".to_string()),
-                pattern: lsp_types::FileOperationPattern {
+                pattern: gen_lsp_types::FileOperationPattern {
                     glob: glob.to_string(),
-                    matches: Some(lsp_types::FileOperationPatternKind::File),
+                    matches: Some(gen_lsp_types::FileOperationPatternKind::File),
                     options: None,
                 },
             }],
@@ -1817,8 +1789,8 @@ mod tests {
     fn rename_advertises_supplied_options() {
         let options = rename_options(None);
         let mut caps = CapabilityBuilder::default();
-        caps.set_rename(options.clone()).unwrap();
-        assert_eq!(caps.finish().rename_provider, Some(OneOf::Right(options)));
+        caps.set_rename(options).unwrap();
+        assert_eq!(caps.finish().rename_provider, Some(options.into()));
     }
 
     #[test]
@@ -1845,7 +1817,7 @@ mod tests {
             .expect("the family emits one renameProvider capability");
         assert_eq!(
             merged,
-            OneOf::Right(rename_options(Some(true))),
+            rename_options(Some(true)).into(),
             "the prepare contribution augments the same capability, not a second one"
         );
     }
@@ -1898,9 +1870,10 @@ mod tests {
 
     fn code_action_options(resolve_provider: Option<bool>) -> CodeActionOptions {
         CodeActionOptions {
-            code_action_kinds: Some(vec![CodeActionKind::QUICKFIX]),
+            code_action_kinds: Some(vec![CodeActionKind::QuickFix]),
             work_done_progress_options: Default::default(),
             resolve_provider,
+            ..Default::default()
         }
     }
 
@@ -1911,7 +1884,7 @@ mod tests {
         caps.set_code_action(options.clone()).unwrap();
         assert_eq!(
             caps.finish().code_action_provider,
-            Some(CodeActionProviderCapability::Options(options))
+            Some(CodeActionProvider::CodeActionOptions(options))
         );
     }
 
@@ -1943,7 +1916,7 @@ mod tests {
             .expect("the family emits one codeActionProvider capability");
         assert_eq!(
             merged,
-            CodeActionProviderCapability::Options(code_action_options(Some(true))),
+            CodeActionProvider::CodeActionOptions(code_action_options(Some(true))),
             "the resolve contribution augments the same capability, not a second one"
         );
     }
@@ -1996,7 +1969,10 @@ mod tests {
     }
 
     fn code_lens_options(resolve_provider: Option<bool>) -> CodeLensOptions {
-        CodeLensOptions { resolve_provider }
+        CodeLensOptions {
+            resolve_provider,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -2095,7 +2071,7 @@ mod tests {
     fn document_link_advertises_supplied_options() {
         let options = document_link_options(None);
         let mut caps = CapabilityBuilder::default();
-        caps.set_document_link(options.clone()).unwrap();
+        caps.set_document_link(options).unwrap();
         assert_eq!(caps.finish().document_link_provider, Some(options));
     }
 
@@ -2173,7 +2149,7 @@ mod tests {
         let err = caps
             .set_document_link(DocumentLinkOptions {
                 resolve_provider: None,
-                work_done_progress_options: lsp_types::WorkDoneProgressOptions {
+                work_done_progress_options: gen_lsp_types::WorkDoneProgressOptions {
                     work_done_progress: Some(true),
                 },
             })
@@ -2197,11 +2173,8 @@ mod tests {
     fn inlay_hint_advertises_supplied_options() {
         let options = inlay_hint_options(None);
         let mut caps = CapabilityBuilder::default();
-        caps.set_inlay_hint(options.clone()).unwrap();
-        assert_eq!(
-            caps.finish().inlay_hint_provider,
-            Some(OneOf::Right(InlayHintServerCapabilities::Options(options)))
-        );
+        caps.set_inlay_hint(options).unwrap();
+        assert_eq!(caps.finish().inlay_hint_provider, Some(options.into()));
     }
 
     #[test]
@@ -2230,9 +2203,7 @@ mod tests {
             .expect("the family emits one inlayHintProvider capability");
         assert_eq!(
             merged,
-            OneOf::Right(InlayHintServerCapabilities::Options(inlay_hint_options(
-                Some(true)
-            ))),
+            inlay_hint_options(Some(true)).into(),
             "the resolve contribution augments the same capability, not a second one"
         );
     }
@@ -2275,7 +2246,7 @@ mod tests {
         caps.set_inlay_hint(inlay_hint_options(None)).unwrap();
         let err = caps
             .set_inlay_hint(InlayHintOptions {
-                work_done_progress_options: lsp_types::WorkDoneProgressOptions {
+                work_done_progress_options: gen_lsp_types::WorkDoneProgressOptions {
                     work_done_progress: Some(true),
                 },
                 resolve_provider: None,
@@ -2292,7 +2263,7 @@ mod tests {
     #[test]
     fn call_hierarchy_routes_merge_into_one_prepare_capability() {
         let options = CallHierarchyOptions {
-            work_done_progress_options: lsp_types::WorkDoneProgressOptions {
+            work_done_progress_options: gen_lsp_types::WorkDoneProgressOptions {
                 work_done_progress: Some(true),
             },
         };
@@ -2302,10 +2273,7 @@ mod tests {
         caps.set_call_hierarchy_outgoing_calls();
         caps.validate().unwrap();
 
-        assert_eq!(
-            caps.finish().call_hierarchy_provider,
-            Some(CallHierarchyServerCapability::Options(options))
-        );
+        assert_eq!(caps.finish().call_hierarchy_provider, Some(options.into()));
     }
 
     #[test]
@@ -2324,19 +2292,19 @@ mod tests {
     #[test]
     fn type_hierarchy_routes_share_the_prepare_options() {
         let options = TypeHierarchyOptions {
-            work_done_progress_options: lsp_types::WorkDoneProgressOptions {
+            work_done_progress_options: gen_lsp_types::WorkDoneProgressOptions {
                 work_done_progress: Some(true),
             },
         };
         let mut caps = CapabilityBuilder::default();
         caps.set_type_hierarchy_subtypes();
-        caps.set_type_hierarchy(options.clone()).unwrap();
+        caps.set_type_hierarchy(options).unwrap();
         caps.set_type_hierarchy_supertypes();
         caps.validate().unwrap();
 
         assert_eq!(
             caps.finish_generated().type_hierarchy_provider,
-            Some(options)
+            Some(options.into())
         );
     }
 
@@ -2355,11 +2323,11 @@ mod tests {
 
     fn semantic_options() -> SemanticTokensOptions {
         SemanticTokensOptions {
-            work_done_progress_options: lsp_types::WorkDoneProgressOptions {
+            work_done_progress_options: gen_lsp_types::WorkDoneProgressOptions {
                 work_done_progress: Some(true),
             },
-            legend: lsp_types::SemanticTokensLegend {
-                token_types: vec![lsp_types::SemanticTokenType::KEYWORD],
+            legend: gen_lsp_types::SemanticTokensLegend {
+                token_types: vec!["keyword".to_string()],
                 token_modifiers: vec![],
             },
             range: None,
@@ -2371,13 +2339,15 @@ mod tests {
     fn semantic_token_routes_merge_shared_options_and_modes() {
         let mut caps = CapabilityBuilder::default();
         let mut full = semantic_options();
-        full.full = Some(SemanticTokensFullOptions::Bool(true));
+        full.full = Some(Full::Bool(true));
         caps.set_semantic_tokens_full(full).unwrap();
         let mut delta = semantic_options();
-        delta.full = Some(SemanticTokensFullOptions::Delta { delta: Some(true) });
+        delta.full = Some(Full::SemanticTokensFullDelta(SemanticTokensFullDelta {
+            delta: Some(true),
+        }));
         caps.set_semantic_tokens_full_delta(delta).unwrap();
         let mut range = semantic_options();
-        range.range = Some(true);
+        range.range = Some(true.into());
         caps.set_semantic_tokens_range(range).unwrap();
         caps.validate().unwrap();
 
@@ -2385,14 +2355,16 @@ mod tests {
             .finish()
             .semantic_tokens_provider
             .expect("one semanticTokensProvider");
-        let SemanticTokensServerCapabilities::SemanticTokensOptions(options) = provider else {
+        let SemanticTokensProvider::SemanticTokensOptions(options) = provider else {
             panic!("static features emit plain semantic-token options")
         };
         assert_eq!(options.legend, semantic_options().legend);
-        assert_eq!(options.range, Some(true));
+        assert_eq!(options.range, Some(true.into()));
         assert_eq!(
             options.full,
-            Some(SemanticTokensFullOptions::Delta { delta: Some(true) })
+            Some(Full::SemanticTokensFullDelta(SemanticTokensFullDelta {
+                delta: Some(true),
+            }))
         );
     }
 
@@ -2415,7 +2387,7 @@ mod tests {
         let mut caps = CapabilityBuilder::default();
         caps.set_semantic_tokens_full(semantic_options()).unwrap();
         let mut different_legend = semantic_options();
-        different_legend.legend.token_types = vec![lsp_types::SemanticTokenType::STRING];
+        different_legend.legend.token_types = vec!["string".to_string()];
         assert_eq!(
             caps.set_semantic_tokens_range(different_legend),
             Err(BuildError::ConflictingCapability {
@@ -2440,7 +2412,7 @@ mod tests {
 
         let mut denied = CapabilityBuilder::default();
         let mut options = semantic_options();
-        options.full = Some(SemanticTokensFullOptions::Bool(false));
+        options.full = Some(Full::Bool(false));
         denied.set_semantic_tokens_full(options).unwrap();
         assert_eq!(
             denied.validate(),
@@ -2470,15 +2442,26 @@ mod tests {
         }
     }
 
-    fn registration_options(id: &str) -> StaticTextDocumentRegistrationOptions {
-        StaticTextDocumentRegistrationOptions {
-            document_selector: None,
-            id: Some(id.to_string()),
+    fn type_definition_registration_options(id: &str) -> TypeDefinitionRegistrationOptions {
+        TypeDefinitionRegistrationOptions {
+            static_registration_options: StaticRegistrationOptions {
+                id: Some(id.to_string()),
+            },
+            ..TypeDefinitionRegistrationOptions::default()
         }
     }
 
-    fn references_options() -> ReferencesOptions {
-        ReferencesOptions {
+    fn implementation_registration_options(id: &str) -> ImplementationRegistrationOptions {
+        ImplementationRegistrationOptions {
+            static_registration_options: StaticRegistrationOptions {
+                id: Some(id.to_string()),
+            },
+            ..ImplementationRegistrationOptions::default()
+        }
+    }
+
+    fn references_options() -> ReferenceOptions {
+        ReferenceOptions {
             work_done_progress_options: progress(Some(true)),
         }
     }
@@ -2523,48 +2506,44 @@ mod tests {
 
         let declaration = declaration_options();
         let mut caps = CapabilityBuilder::default();
-        caps.set_declaration(declaration.clone()).unwrap();
+        caps.set_declaration(declaration).unwrap();
         assert_eq!(
             caps.finish(),
             ServerCapabilities {
-                declaration_provider: Some(DeclarationCapability::Options(declaration)),
+                declaration_provider: Some(declaration.into()),
                 ..ServerCapabilities::default()
             }
         );
 
         let definition = definition_options();
         let mut caps = CapabilityBuilder::default();
-        caps.set_definition(definition.clone()).unwrap();
+        caps.set_definition(definition).unwrap();
         assert_eq!(
             caps.finish(),
             ServerCapabilities {
-                definition_provider: Some(OneOf::Right(definition)),
+                definition_provider: Some(definition.into()),
                 ..ServerCapabilities::default()
             }
         );
 
-        let type_definition = registration_options("type");
+        let type_definition = type_definition_registration_options("type");
         let mut caps = CapabilityBuilder::default();
         caps.set_type_definition(type_definition.clone()).unwrap();
         assert_eq!(
             caps.finish(),
             ServerCapabilities {
-                type_definition_provider: Some(TypeDefinitionProviderCapability::Options(
-                    type_definition
-                )),
+                type_definition_provider: Some(type_definition.into()),
                 ..ServerCapabilities::default()
             }
         );
 
-        let implementation = registration_options("impl");
+        let implementation = implementation_registration_options("impl");
         let mut caps = CapabilityBuilder::default();
         caps.set_implementation(implementation.clone()).unwrap();
         assert_eq!(
             caps.finish(),
             ServerCapabilities {
-                implementation_provider: Some(ImplementationProviderCapability::Options(
-                    implementation
-                )),
+                implementation_provider: Some(implementation.into()),
                 ..ServerCapabilities::default()
             }
         );
@@ -2574,22 +2553,22 @@ mod tests {
     fn lookup_features_set_only_their_provider_fields() {
         let references = references_options();
         let mut caps = CapabilityBuilder::default();
-        caps.set_references(references.clone()).unwrap();
+        caps.set_references(references).unwrap();
         assert_eq!(
             caps.finish(),
             ServerCapabilities {
-                references_provider: Some(OneOf::Right(references)),
+                references_provider: Some(references.into()),
                 ..ServerCapabilities::default()
             }
         );
 
         let highlight = document_highlight_options();
         let mut caps = CapabilityBuilder::default();
-        caps.set_document_highlight(highlight.clone()).unwrap();
+        caps.set_document_highlight(highlight).unwrap();
         assert_eq!(
             caps.finish(),
             ServerCapabilities {
-                document_highlight_provider: Some(OneOf::Right(highlight)),
+                document_highlight_provider: Some(highlight.into()),
                 ..ServerCapabilities::default()
             }
         );
@@ -2600,31 +2579,29 @@ mod tests {
         assert_eq!(
             caps.finish(),
             ServerCapabilities {
-                document_symbol_provider: Some(OneOf::Right(symbols)),
+                document_symbol_provider: Some(symbols.into()),
                 ..ServerCapabilities::default()
             }
         );
 
         let linked = linked_editing_range_options();
         let mut caps = CapabilityBuilder::default();
-        caps.set_linked_editing_range(linked.clone()).unwrap();
+        caps.set_linked_editing_range(linked).unwrap();
         assert_eq!(
             caps.finish(),
             ServerCapabilities {
-                linked_editing_range_provider: Some(LinkedEditingRangeServerCapabilities::Options(
-                    linked
-                )),
+                linked_editing_range_provider: Some(linked.into()),
                 ..ServerCapabilities::default()
             }
         );
 
         let monikers = moniker_options();
         let mut caps = CapabilityBuilder::default();
-        caps.set_moniker(monikers.clone()).unwrap();
+        caps.set_moniker(monikers).unwrap();
         assert_eq!(
             caps.finish(),
             ServerCapabilities {
-                moniker_provider: Some(OneOf::Right(MonikerServerCapabilities::Options(monikers))),
+                moniker_provider: Some(monikers.into()),
                 ..ServerCapabilities::default()
             }
         );
@@ -2667,10 +2644,10 @@ mod tests {
 
         let mut type_definition = CapabilityBuilder::default();
         type_definition
-            .set_type_definition(registration_options("type"))
+            .set_type_definition(type_definition_registration_options("type"))
             .unwrap();
         assert_eq!(
-            type_definition.set_type_definition(registration_options("other")),
+            type_definition.set_type_definition(type_definition_registration_options("other")),
             Err(BuildError::ConflictingCapability {
                 field: "typeDefinitionProvider"
             })
@@ -2678,10 +2655,10 @@ mod tests {
 
         let mut implementation = CapabilityBuilder::default();
         implementation
-            .set_implementation(registration_options("impl"))
+            .set_implementation(implementation_registration_options("impl"))
             .unwrap();
         assert_eq!(
-            implementation.set_implementation(registration_options("other")),
+            implementation.set_implementation(implementation_registration_options("other")),
             Err(BuildError::ConflictingCapability {
                 field: "implementationProvider"
             })
@@ -2690,7 +2667,7 @@ mod tests {
         let mut references = CapabilityBuilder::default();
         references.set_references(references_options()).unwrap();
         assert_eq!(
-            references.set_references(ReferencesOptions {
+            references.set_references(ReferenceOptions {
                 work_done_progress_options: progress(Some(false)),
             }),
             Err(BuildError::ConflictingCapability {

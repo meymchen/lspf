@@ -29,13 +29,12 @@ use std::time::Duration;
 use bytes::Bytes;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 use futures_channel::mpsc::UnboundedReceiver;
-use lsp_types::error_codes::SERVER_CANCELLED;
-use lsp_types::{
+use gen_lsp_types::{
     DidChangeConfigurationParams, DidChangeTextDocumentParams, DidChangeWorkspaceFoldersParams,
     DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
-    InitializeParams, InitializedParams, OneOf, ServerInfo, SetTraceParams, TextDocumentSyncKind,
-    TextDocumentSyncOptions, TextDocumentSyncSaveOptions, WillSaveTextDocumentParams,
-    WorkDoneProgressCancelParams, WorkspaceFoldersServerCapabilities, WorkspaceServerCapabilities,
+    InitializeParams, InitializedParams, LspErrorCodes, Save, ServerInfo, SetTraceParams,
+    TextDocumentSyncKind, TextDocumentSyncOptions, TraceValue, WillSaveTextDocumentParams,
+    WorkDoneProgressCancelParams, WorkspaceFoldersServerCapabilities, WorkspaceOptions,
 };
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
@@ -87,13 +86,18 @@ use crate::{LspError, Result};
 
 fn validate_sync_changes(
     kind: TextDocumentSyncKind,
-    changes: &[lsp_types::TextDocumentContentChangeEvent],
+    changes: &[gen_lsp_types::TextDocumentContentChangeEvent],
 ) -> std::result::Result<(), LspError> {
-    if kind == TextDocumentSyncKind::INCREMENTAL {
+    if kind == TextDocumentSyncKind::Incremental {
         return Ok(());
     }
-    if kind == TextDocumentSyncKind::FULL {
-        return if changes.iter().all(|change| change.range.is_none()) {
+    if kind == TextDocumentSyncKind::Full {
+        return if changes.iter().all(|change| {
+            matches!(
+                change,
+                gen_lsp_types::TextDocumentContentChangeEvent::TextDocumentContentChangeWholeDocument(_)
+            )
+        }) {
             Ok(())
         } else {
             Err(LspError::invalid_request(
@@ -517,7 +521,7 @@ where
                         self.protocol.reject_inbound(
                             id,
                             LspError::ServerError {
-                                code: SERVER_CANCELLED as i32,
+                                code: LspErrorCodes::ServerCancelled.into(),
                                 message: INBOUND_CAPACITY_EXHAUSTED.to_string(),
                                 data: None,
                             },
@@ -908,11 +912,11 @@ where
                 validate_sync_changes(
                     self.document_sync
                         .change
-                        .unwrap_or(TextDocumentSyncKind::INCREMENTAL),
+                        .unwrap_or(TextDocumentSyncKind::Incremental),
                     &params.content_changes,
                 )?;
                 self.documents.apply_changes(
-                    &params.text_document.uri,
+                    &params.text_document.text_document_identifier.uri,
                     params.text_document.version,
                     params.content_changes,
                 )?;
@@ -937,7 +941,7 @@ where
                 let params: DidSaveTextDocumentParams = decode_params(raw_params)?;
                 if matches!(
                     &self.document_sync.save,
-                    Some(TextDocumentSyncSaveOptions::SaveOptions(options))
+                    Some(Save::SaveOptions(options))
                         if options.include_text == Some(true)
                 ) && params.text.is_none()
                 {
@@ -958,6 +962,12 @@ where
             }
             ProtocolNotification::Trace => {
                 let params: SetTraceParams = decode_params(raw_params)?;
+                if matches!(&params.value, TraceValue::Custom(_)) {
+                    return Err(LspError::invalid_params(
+                        "setTrace value must be off, messages, or verbose",
+                    )
+                    .into());
+                }
                 self.established_workspace().set_trace(params.value);
             }
             ProtocolNotification::ProgressCancel => {
@@ -976,19 +986,18 @@ where
             | ProtocolNotification::Configuration
             | ProtocolNotification::Trace
             | ProtocolNotification::ProgressCancel => true,
-            _ if self.document_sync.change == Some(TextDocumentSyncKind::NONE) => false,
+            _ if self.document_sync.change == Some(TextDocumentSyncKind::None) => false,
             ProtocolNotification::Open | ProtocolNotification::Close => {
                 self.document_sync.open_close == Some(true)
             }
             ProtocolNotification::Change => matches!(
                 self.document_sync.change,
-                Some(TextDocumentSyncKind::FULL | TextDocumentSyncKind::INCREMENTAL)
+                Some(TextDocumentSyncKind::Full | TextDocumentSyncKind::Incremental)
             ),
             ProtocolNotification::WillSave => self.document_sync.will_save == Some(true),
             ProtocolNotification::Save => matches!(
                 self.document_sync.save,
-                Some(TextDocumentSyncSaveOptions::Supported(true))
-                    | Some(TextDocumentSyncSaveOptions::SaveOptions(_))
+                Some(Save::Bool(true)) | Some(Save::SaveOptions(_))
             ),
         }
     }
@@ -1112,7 +1121,7 @@ where
 
         let position_encoding = self.documents.negotiate_position_encoding(&params);
         let mut capabilities = router.generated_capabilities();
-        let standard_capabilities = capabilities.standard_mut();
+        let standard_capabilities = &mut capabilities;
         standard_capabilities.position_encoding = Some(position_encoding);
         // Document sync is a protocol built-in rather than a registration
         // (ADR 0018): the engine applies every `didOpen`, `didChange`, and
@@ -1134,12 +1143,13 @@ where
             .workspace
             .take()
             .and_then(|workspace| workspace.file_operations);
-        standard_capabilities.workspace = Some(WorkspaceServerCapabilities {
+        standard_capabilities.workspace = Some(WorkspaceOptions {
             workspace_folders: Some(WorkspaceFoldersServerCapabilities {
                 supported: Some(true),
-                change_notifications: Some(OneOf::Left(true)),
+                change_notifications: Some(true.into()),
             }),
             file_operations,
+            ..WorkspaceOptions::default()
         });
 
         // `on_initialize` may contribute optional ServerInfo but cannot
@@ -1299,7 +1309,7 @@ fn final_close_cause(close: &CloseSignal<CloseCause>, out_tx: &OutboundQueue) ->
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use lsp_types::ProgressToken;
+    use gen_lsp_types::ProgressToken;
     use tracing_subscriber::layer::SubscriberExt;
 
     use crate::session::{InboundRegistry, TaskGroup};
@@ -1325,7 +1335,7 @@ mod tests {
     fn a_matching_cancellable_token_fires_and_opens_the_hook_gate() {
         let registry = ProgressRegistry::default();
         let cancellation = CancellationToken::new();
-        registry.register(ProgressToken::Number(1), true, cancellation.clone());
+        registry.register(ProgressToken::Int(1), true, cancellation.clone());
 
         let (gate, events) = gated_cancel(&registry, br#"{"token": 1}"#);
 
@@ -1335,7 +1345,7 @@ mod tests {
         );
         assert!(cancellation.is_cancelled());
         assert!(
-            registry.is_active(&ProgressToken::Number(1)),
+            registry.is_active(&ProgressToken::Int(1)),
             "cancellation never ends the progress: the token stays registered"
         );
         assert!(
@@ -1349,7 +1359,7 @@ mod tests {
     fn non_cancellable_and_inactive_tokens_log_at_debug_and_keep_the_gate_open() {
         let registry = ProgressRegistry::default();
         let plain = CancellationToken::new();
-        registry.register(ProgressToken::Number(1), false, plain.clone());
+        registry.register(ProgressToken::Int(1), false, plain.clone());
 
         let (gate, events) = gated_cancel(&registry, br#"{"token": 1}"#);
         assert!(matches!(gate, BuiltInGate::RunHook));
@@ -1368,7 +1378,7 @@ mod tests {
             events.messages()
         );
         assert!(
-            registry.is_active(&ProgressToken::Number(1)),
+            registry.is_active(&ProgressToken::Int(1)),
             "an unknown token leaves the registry untouched"
         );
     }
@@ -1377,7 +1387,7 @@ mod tests {
     fn malformed_cancel_params_log_at_debug_and_close_the_hook_gate() {
         let registry = ProgressRegistry::default();
         let cancellation = CancellationToken::new();
-        registry.register(ProgressToken::Number(1), true, cancellation.clone());
+        registry.register(ProgressToken::Int(1), true, cancellation.clone());
 
         for raw in [
             br#"{"token": true}"#.as_slice(),
@@ -1404,34 +1414,42 @@ mod tests {
         );
     }
 
-    fn content_change(with_range: bool) -> lsp_types::TextDocumentContentChangeEvent {
-        lsp_types::TextDocumentContentChangeEvent {
-            range: with_range.then(|| lsp_types::Range {
-                start: lsp_types::Position::new(0, 0),
-                end: lsp_types::Position::new(0, 1),
-            }),
-            range_length: None,
-            text: "replacement".to_string(),
+    fn content_change(with_range: bool) -> gen_lsp_types::TextDocumentContentChangeEvent {
+        if with_range {
+            gen_lsp_types::TextDocumentContentChangePartial::new(
+                gen_lsp_types::Range {
+                    start: gen_lsp_types::Position::new(0, 0),
+                    end: gen_lsp_types::Position::new(0, 1),
+                },
+                None,
+                "replacement".to_string(),
+            )
+            .into()
+        } else {
+            gen_lsp_types::TextDocumentContentChangeWholeDocument {
+                text: "replacement".to_string(),
+            }
+            .into()
         }
     }
 
     #[test]
     fn sync_kind_validation_accepts_only_compatible_change_shapes() {
         assert!(
-            validate_sync_changes(TextDocumentSyncKind::FULL, &[content_change(false)]).is_ok()
+            validate_sync_changes(TextDocumentSyncKind::Full, &[content_change(false)]).is_ok()
         );
         assert!(
-            validate_sync_changes(TextDocumentSyncKind::FULL, &[content_change(true)]).is_err()
+            validate_sync_changes(TextDocumentSyncKind::Full, &[content_change(true)]).is_err()
         );
         assert!(
             validate_sync_changes(
-                TextDocumentSyncKind::INCREMENTAL,
+                TextDocumentSyncKind::Incremental,
                 &[content_change(true), content_change(false)],
             )
             .is_ok()
         );
         assert!(
-            validate_sync_changes(TextDocumentSyncKind::NONE, &[content_change(false)]).is_err()
+            validate_sync_changes(TextDocumentSyncKind::None, &[content_change(false)]).is_err()
         );
     }
 
@@ -1732,14 +1750,14 @@ mod tests {
 
     enum TestOutboundNotification {}
 
-    impl lsp_types::notification::Notification for TestOutboundNotification {
+    impl crate::types::notification::Notification for TestOutboundNotification {
         type Params = serde_json::Value;
         const METHOD: &'static str = "test/outbound-notification";
     }
 
     enum TestOutboundRequest {}
 
-    impl lsp_types::request::Request for TestOutboundRequest {
+    impl crate::types::request::Request for TestOutboundRequest {
         type Params = serde_json::Value;
         type Result = String;
         const METHOD: &'static str = "test/outbound-request";

@@ -93,7 +93,7 @@ async fn color_presentation(
 async fn main() -> lspf::Result<()> {
     let server = Server::builder(State)
         .feature(
-            lspf::features::document_color(ColorProviderOptions {}),
+            lspf::features::document_color(ColorProviderOptions::default()),
             document_colors,
         )
         .feature(lspf::features::color_presentation(), color_presentation)

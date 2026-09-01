@@ -78,6 +78,7 @@ async fn resolve(
     };
     lens.command = Some(Command::new(
         format!("Evaluate {} + {}", args.left, args.right),
+        None,
         "codeLens.evaluateSum".to_string(),
         Some(vec![json!(args)]),
     ));
@@ -103,7 +104,11 @@ async fn evaluate_sum(
         ..WorkspaceEdit::default()
     };
     ctx.client()
-        .apply_edit(ApplyWorkspaceEditParams { label: None, edit })
+        .apply_edit(ApplyWorkspaceEditParams {
+            label: None,
+            edit,
+            metadata: None,
+        })
         .await
         .map_err(|error| LspError::internal(error.to_string()))?;
     Ok(())
@@ -115,6 +120,7 @@ async fn main() -> lspf::Result<()> {
         .feature(
             lspf::features::code_lens(CodeLensOptions {
                 resolve_provider: None,
+                ..Default::default()
             }),
             code_lens,
         )

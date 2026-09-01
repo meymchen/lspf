@@ -6,7 +6,7 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use lsp_types::Uri;
+use gen_lsp_types::Uri;
 
 static TRACING_CAPTURE_LOCK: Mutex<()> = Mutex::new(());
 static TRACING_INTEREST: OnceLock<tracing::Dispatch> = OnceLock::new();

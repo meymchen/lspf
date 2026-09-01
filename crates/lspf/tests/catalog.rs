@@ -19,39 +19,50 @@ use bytes::Bytes;
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
-use lspf::types::notification::{
-    DidChangeConfiguration, DidChangeTextDocument, DidChangeWatchedFiles,
-    DidChangeWorkspaceFolders, DidCloseTextDocument, DidCreateFiles, DidDeleteFiles,
-    DidOpenTextDocument, DidRenameFiles, DidSaveTextDocument, Notification, SetTrace,
-    WillSaveTextDocument,
-};
-use lspf::types::request::{
-    CallHierarchyIncomingCalls, CallHierarchyOutgoingCalls, CallHierarchyPrepare,
-    CodeActionRequest, CodeLensRequest, ColorPresentationRequest, Completion, DocumentColor,
-    DocumentDiagnosticRequest, DocumentHighlightRequest, DocumentLinkRequest,
-    DocumentSymbolRequest, FoldingRangeRequest, Formatting, GotoDeclaration, GotoDefinition,
-    GotoImplementation, GotoTypeDefinition, HoverRequest, InlayHintRequest, InlineValueRequest,
-    LinkedEditingRange, MonikerRequest, OnTypeFormatting, PrepareRenameRequest, RangeFormatting,
-    References, Rename, Request, SelectionRangeRequest, SemanticTokensFullDeltaRequest,
-    SemanticTokensFullRequest, SemanticTokensRangeRequest, SignatureHelpRequest,
-    TypeHierarchyPrepare, TypeHierarchySubtypes, TypeHierarchySupertypes, WillCreateFiles,
-    WillDeleteFiles, WillRenameFiles, WillSaveWaitUntil, WorkspaceDiagnosticRequest,
-    WorkspaceSymbolRequest,
-};
 use lspf::types::{
-    CallHierarchyOptions, CodeAction, CodeActionOptions, CodeLens, CodeLensOptions,
-    ColorProviderOptions, CompletionItem, CompletionOptions, DeclarationOptions, DefinitionOptions,
-    DiagnosticOptions, DocumentDiagnosticReport, DocumentDiagnosticReportResult,
-    DocumentFormattingOptions, DocumentHighlightOptions, DocumentLink, DocumentLinkOptions,
-    DocumentOnTypeFormattingOptions, DocumentRangeFormattingOptions, DocumentSymbolOptions,
-    FileOperationFilter, FileOperationPattern, FileOperationPatternKind,
-    FileOperationRegistrationOptions, FoldingProviderOptions, InlayHint, InlayHintOptions,
-    InlineValueOptions, LinkedEditingRangeOptions, MonikerOptions, ReferencesOptions,
-    RelatedFullDocumentDiagnosticReport, RenameOptions, SelectionRangeOptions, SemanticTokenType,
-    SemanticTokensLegend, SemanticTokensOptions, SignatureHelpOptions,
-    StaticTextDocumentRegistrationOptions, TypeHierarchyOptions, WorkDoneProgressOptions,
-    WorkspaceDiagnosticReport, WorkspaceDiagnosticReportResult, WorkspaceSymbol,
-    WorkspaceSymbolOptions,
+    CallHierarchyIncomingCallsRequest as CallHierarchyIncomingCalls, CallHierarchyOptions,
+    CallHierarchyOutgoingCallsRequest as CallHierarchyOutgoingCalls,
+    CallHierarchyPrepareRequest as CallHierarchyPrepare, CodeAction, CodeActionOptions,
+    CodeActionRequest, CodeLens, CodeLensOptions, CodeLensRequest, ColorPresentationRequest,
+    CompletionItem, CompletionOptions, CompletionRequest as Completion, DeclarationOptions,
+    DeclarationRequest as GotoDeclaration, DefinitionOptions, DefinitionRequest as GotoDefinition,
+    DiagnosticOptions, DidChangeConfigurationNotification as DidChangeConfiguration,
+    DidChangeTextDocumentNotification as DidChangeTextDocument,
+    DidChangeWatchedFilesNotification as DidChangeWatchedFiles,
+    DidChangeWorkspaceFoldersNotification as DidChangeWorkspaceFolders,
+    DidCloseTextDocumentNotification as DidCloseTextDocument,
+    DidCreateFilesNotification as DidCreateFiles, DidDeleteFilesNotification as DidDeleteFiles,
+    DidOpenTextDocumentNotification as DidOpenTextDocument,
+    DidRenameFilesNotification as DidRenameFiles,
+    DidSaveTextDocumentNotification as DidSaveTextDocument, DocumentColorOptions,
+    DocumentColorRequest as DocumentColor, DocumentDiagnosticReport, DocumentDiagnosticRequest,
+    DocumentFormattingOptions, DocumentFormattingRequest as Formatting, DocumentHighlightOptions,
+    DocumentHighlightRequest, DocumentLink, DocumentLinkOptions, DocumentLinkRequest,
+    DocumentOnTypeFormattingOptions, DocumentOnTypeFormattingRequest as OnTypeFormatting,
+    DocumentRangeFormattingOptions, DocumentRangeFormattingRequest as RangeFormatting,
+    DocumentSymbolOptions, DocumentSymbolRequest, FileOperationFilter, FileOperationPattern,
+    FileOperationPatternKind, FileOperationRegistrationOptions, FoldingRangeOptions,
+    FoldingRangeRequest, HoverRequest, ImplementationRegistrationOptions,
+    ImplementationRequest as GotoImplementation, InlayHint, InlayHintOptions, InlayHintRequest,
+    InlineValueOptions, InlineValueRequest, LinkedEditingRangeOptions,
+    LinkedEditingRangeRequest as LinkedEditingRange, MonikerOptions, MonikerRequest, Notification,
+    PrepareRenameRequest, ReferenceOptions, ReferencesRequest as References,
+    RelatedFullDocumentDiagnosticReport, RenameOptions, RenameRequest as Rename, Request,
+    SelectionRangeOptions, SelectionRangeRequest,
+    SemanticTokensDeltaRequest as SemanticTokensFullDeltaRequest, SemanticTokensLegend,
+    SemanticTokensOptions, SemanticTokensRangeRequest,
+    SemanticTokensRequest as SemanticTokensFullRequest, SetTraceNotification as SetTrace,
+    SignatureHelpOptions, SignatureHelpRequest, TypeDefinitionRegistrationOptions,
+    TypeDefinitionRequest as GotoTypeDefinition, TypeHierarchyOptions,
+    TypeHierarchyPrepareRequest as TypeHierarchyPrepare,
+    TypeHierarchySubtypesRequest as TypeHierarchySubtypes,
+    TypeHierarchySupertypesRequest as TypeHierarchySupertypes,
+    WillCreateFilesRequest as WillCreateFiles, WillDeleteFilesRequest as WillDeleteFiles,
+    WillRenameFilesRequest as WillRenameFiles,
+    WillSaveTextDocumentNotification as WillSaveTextDocument,
+    WillSaveTextDocumentWaitUntilRequest as WillSaveWaitUntil, WorkDoneProgressOptions,
+    WorkspaceDiagnosticReport, WorkspaceDiagnosticRequest, WorkspaceSymbol, WorkspaceSymbolOptions,
+    WorkspaceSymbolRequest,
 };
 use lspf::{
     CancellationToken, LspError, Outcome, RawMessage, RequestId, Server, ServerContext, Transport,
@@ -185,10 +196,12 @@ async fn document_diagnostic(
     _ctx: ServerContext,
     _params: <DocumentDiagnosticRequest as Request>::Params,
     _ct: CancellationToken,
-) -> Result<DocumentDiagnosticReportResult, LspError> {
-    Ok(DocumentDiagnosticReportResult::Report(
-        DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport::default()),
-    ))
+) -> Result<DocumentDiagnosticReport, LspError> {
+    Ok(
+        DocumentDiagnosticReport::RelatedFullDocumentDiagnosticReport(
+            RelatedFullDocumentDiagnosticReport::default(),
+        ),
+    )
 }
 
 async fn workspace_diagnostic(
@@ -196,10 +209,8 @@ async fn workspace_diagnostic(
     _ctx: ServerContext,
     _params: <WorkspaceDiagnosticRequest as Request>::Params,
     _ct: CancellationToken,
-) -> Result<WorkspaceDiagnosticReportResult, LspError> {
-    Ok(WorkspaceDiagnosticReportResult::Report(
-        WorkspaceDiagnosticReport::default(),
-    ))
+) -> Result<WorkspaceDiagnosticReport, LspError> {
+    Ok(WorkspaceDiagnosticReport::default())
 }
 
 /// Generate one stub notification handler per marker.
@@ -247,14 +258,20 @@ enum CatalogExtension {}
 impl Request for CatalogExtension {
     type Params = Value;
     type Result = Value;
-    const METHOD: &'static str = "catalog/extension";
+    const METHOD: lspf::types::LspRequestMethod<'static> =
+        lspf::types::LspRequestMethod::Custom("catalog/extension");
+    const MESSAGE_DIRECTION: lspf::types::MessageDirection =
+        lspf::types::MessageDirection::ClientToServer;
 }
 
 enum CatalogNotice {}
 
 impl Notification for CatalogNotice {
     type Params = Value;
-    const METHOD: &'static str = "catalog/notice";
+    const METHOD: lspf::types::LspNotificationMethod<'static> =
+        lspf::types::LspNotificationMethod::Custom("catalog/notice");
+    const MESSAGE_DIRECTION: lspf::types::MessageDirection =
+        lspf::types::MessageDirection::ClientToServer;
 }
 
 async fn custom_request(
@@ -278,7 +295,7 @@ fn semantic_options() -> SemanticTokensOptions {
     SemanticTokensOptions {
         work_done_progress_options: work_done_options(),
         legend: SemanticTokensLegend {
-            token_types: vec![SemanticTokenType::KEYWORD],
+            token_types: vec!["keyword".to_string()],
             token_modifiers: vec![],
         },
         range: None,
@@ -325,21 +342,15 @@ fn catalog_registrations(builder: lspf::ServerBuilder<AppState>) -> lspf::Server
             definition,
         )
         .feature(
-            lspf::features::type_definition(StaticTextDocumentRegistrationOptions {
-                document_selector: None,
-                id: None,
-            }),
+            lspf::features::type_definition(TypeDefinitionRegistrationOptions::default()),
             type_definition,
         )
         .feature(
-            lspf::features::implementation(StaticTextDocumentRegistrationOptions {
-                document_selector: None,
-                id: None,
-            }),
+            lspf::features::implementation(ImplementationRegistrationOptions::default()),
             implementation,
         )
         .feature(
-            lspf::features::references(ReferencesOptions {
+            lspf::features::references(ReferenceOptions {
                 work_done_progress_options: work_done_options(),
             }),
             references,
@@ -363,7 +374,10 @@ fn catalog_registrations(builder: lspf::ServerBuilder<AppState>) -> lspf::Server
         )
         .feature(lspf::features::code_action_resolve(), resolve_code_action)
         .feature(
-            lspf::features::code_lens(CodeLensOptions { resolve_provider: None }),
+            lspf::features::code_lens(CodeLensOptions {
+                resolve_provider: None,
+                ..CodeLensOptions::default()
+            }),
             code_lens,
         )
         .feature(lspf::features::code_lens_resolve(), resolve_code_lens)
@@ -385,6 +399,7 @@ fn catalog_registrations(builder: lspf::ServerBuilder<AppState>) -> lspf::Server
         .feature(
             lspf::features::range_formatting(DocumentRangeFormattingOptions {
                 work_done_progress_options: work_done_options(),
+                ranges_support: None,
             }),
             range_formatting,
         )
@@ -401,12 +416,12 @@ fn catalog_registrations(builder: lspf::ServerBuilder<AppState>) -> lspf::Server
         )
         .feature(lspf::features::prepare_rename(), prepare_rename)
         .feature(
-            lspf::features::document_color(ColorProviderOptions {}),
+            lspf::features::document_color(DocumentColorOptions::default()),
             document_color,
         )
         .feature(lspf::features::color_presentation(), color_presentation)
         .feature(
-            lspf::features::folding_range(FoldingProviderOptions {}),
+            lspf::features::folding_range(FoldingRangeOptions::default()),
             folding_range,
         )
         .feature(

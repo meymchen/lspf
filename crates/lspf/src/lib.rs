@@ -85,8 +85,130 @@ mod workspace;
 mod test_util;
 
 pub mod types {
-    //! LSP protocol types — re-exported from `lsp-types` per ADR 0014.
-    pub use lsp_types::*;
+    //! LSP protocol types — re-exported from `gen-lsp-types` per ADR 0032.
+    pub use gen_lsp_types::*;
+    pub use gen_lsp_types::{
+        ApplyWorkspaceEditResult as ApplyWorkspaceEditResponse,
+        CodeActionResponse as CodeActionOrCommand, Contents as HoverContents,
+        DefinitionParams as GotoDefinitionParams, DefinitionResponse as GotoDefinitionResponse,
+        DiagnosticProvider as DiagnosticServerCapabilities,
+        DocumentColorOptions as ColorProviderOptions,
+        DocumentDiagnosticReport as DocumentDiagnosticReportResult, Label as InlayHintLabel,
+        PrepareRenameResult as PrepareRenameResponse, ReferenceOptions as ReferencesOptions,
+        Save as TextDocumentSyncSaveOptions, SemanticTokenModifiers as SemanticTokenModifier,
+        SemanticTokenTypes as SemanticTokenType, SemanticTokens as SemanticTokensRangeResult,
+        SemanticTokens as SemanticTokensResult,
+        SemanticTokensDeltaResponse as SemanticTokensFullDeltaResult,
+        TextDocumentSync as TextDocumentSyncCapability, Tooltip as InlayHintTooltip,
+        WorkspaceDiagnosticReport as WorkspaceDiagnosticReportResult,
+        WorkspaceOptions as WorkspaceServerCapabilities,
+    };
+
+    /// Request markers and the custom-request trait compatibility boundary.
+    pub mod request {
+        use serde::Serialize;
+        use serde::de::DeserializeOwned;
+
+        /// A typed LSP request marker.
+        pub trait Request {
+            /// Request parameters.
+            type Params: DeserializeOwned + Serialize + Send + Sync + 'static;
+            /// Successful response value.
+            type Result: DeserializeOwned + Serialize + Send + Sync + 'static;
+            /// JSON-RPC method name.
+            const METHOD: &'static str;
+        }
+
+        impl<T: gen_lsp_types::Request> Request for T {
+            type Params = T::Params;
+            type Result = T::Result;
+            const METHOD: &'static str = T::METHOD.as_str();
+        }
+
+        pub use gen_lsp_types::{
+            ApplyWorkspaceEditRequest as ApplyWorkspaceEdit,
+            CallHierarchyIncomingCallsRequest as CallHierarchyIncomingCalls,
+            CallHierarchyOutgoingCallsRequest as CallHierarchyOutgoingCalls,
+            CallHierarchyPrepareRequest as CallHierarchyPrepare, CodeActionRequest,
+            CodeActionResolveRequest, CodeLensRefreshRequest as CodeLensRefresh, CodeLensRequest,
+            CodeLensResolveRequest as CodeLensResolve, ColorPresentationRequest,
+            CompletionRequest as Completion, CompletionResolveRequest as ResolveCompletionItem,
+            ConfigurationRequest as WorkspaceConfiguration,
+            DeclarationParams as GotoDeclarationParams, DeclarationRequest as GotoDeclaration,
+            DeclarationResponse as GotoDeclarationResponse, DefinitionRequest as GotoDefinition,
+            DiagnosticRefreshRequest as WorkspaceDiagnosticRefresh,
+            DocumentColorRequest as DocumentColor, DocumentDiagnosticRequest,
+            DocumentFormattingRequest as Formatting, DocumentHighlightRequest, DocumentLinkRequest,
+            DocumentLinkResolveRequest as DocumentLinkResolve,
+            DocumentOnTypeFormattingRequest as OnTypeFormatting,
+            DocumentRangeFormattingRequest as RangeFormatting, DocumentSymbolRequest,
+            ExecuteCommandRequest as ExecuteCommand, FoldingRangeRefreshRequest,
+            FoldingRangeRequest, HoverRequest, ImplementationParams as GotoImplementationParams,
+            ImplementationRequest as GotoImplementation,
+            ImplementationResponse as GotoImplementationResponse, InlayHintRefreshRequest,
+            InlayHintRequest, InlayHintResolveRequest, InlineValueRefreshRequest,
+            InlineValueRequest, LinkedEditingRangeRequest as LinkedEditingRange, MonikerRequest,
+            PrepareRenameRequest, ReferencesRequest as References,
+            RegistrationRequest as RegisterCapability, RenameRequest as Rename,
+            SelectionRangeRequest, SemanticTokensDeltaRequest as SemanticTokensFullDeltaRequest,
+            SemanticTokensRangeRequest, SemanticTokensRefreshRequest as SemanticTokensRefresh,
+            SemanticTokensRequest as SemanticTokensFullRequest,
+            ShowDocumentRequest as ShowDocument, ShowMessageRequest, ShutdownRequest as Shutdown,
+            SignatureHelpRequest, TextDocumentContentRefreshRequest,
+            TypeDefinitionParams as GotoTypeDefinitionParams,
+            TypeDefinitionRequest as GotoTypeDefinition,
+            TypeDefinitionResponse as GotoTypeDefinitionResponse,
+            TypeHierarchyPrepareRequest as TypeHierarchyPrepare,
+            TypeHierarchySubtypesRequest as TypeHierarchySubtypes,
+            TypeHierarchySupertypesRequest as TypeHierarchySupertypes,
+            UnregistrationRequest as UnregisterCapability,
+            WillCreateFilesRequest as WillCreateFiles, WillDeleteFilesRequest as WillDeleteFiles,
+            WillRenameFilesRequest as WillRenameFiles,
+            WillSaveTextDocumentWaitUntilRequest as WillSaveWaitUntil,
+            WorkDoneProgressCreateRequest as WorkDoneProgressCreate, WorkspaceDiagnosticRequest,
+            WorkspaceFoldersRequest, WorkspaceSymbolRequest,
+            WorkspaceSymbolResolveRequest as WorkspaceSymbolResolve,
+        };
+    }
+
+    /// Notification markers and the custom-notification trait compatibility boundary.
+    pub mod notification {
+        use serde::Serialize;
+        use serde::de::DeserializeOwned;
+
+        /// A typed LSP notification marker.
+        pub trait Notification {
+            /// Notification parameters.
+            type Params: DeserializeOwned + Serialize + Send + Sync + 'static;
+            /// JSON-RPC method name.
+            const METHOD: &'static str;
+        }
+
+        impl<T: gen_lsp_types::Notification> Notification for T {
+            type Params = T::Params;
+            const METHOD: &'static str = T::METHOD.as_str();
+        }
+
+        pub use gen_lsp_types::{
+            CancelNotification as Cancel,
+            DidChangeConfigurationNotification as DidChangeConfiguration,
+            DidChangeTextDocumentNotification as DidChangeTextDocument,
+            DidChangeWatchedFilesNotification as DidChangeWatchedFiles,
+            DidChangeWorkspaceFoldersNotification as DidChangeWorkspaceFolders,
+            DidCloseTextDocumentNotification as DidCloseTextDocument,
+            DidCreateFilesNotification as DidCreateFiles,
+            DidDeleteFilesNotification as DidDeleteFiles,
+            DidOpenTextDocumentNotification as DidOpenTextDocument,
+            DidRenameFilesNotification as DidRenameFiles,
+            DidSaveTextDocumentNotification as DidSaveTextDocument, ExitNotification as Exit,
+            InitializedNotification as Initialized, LogMessageNotification as LogMessage,
+            LogTraceNotification as LogTrace, ProgressNotification as Progress,
+            PublishDiagnosticsNotification as PublishDiagnostics, SetTraceNotification as SetTrace,
+            ShowMessageNotification as ShowMessage, TelemetryEventNotification as TelemetryEvent,
+            WillSaveTextDocumentNotification as WillSaveTextDocument,
+            WorkDoneProgressCancelNotification as WorkDoneProgressCancel,
+        };
+    }
 }
 
 /// Compiles the Rust in the repository's user-facing Markdown as doc-tests, so
