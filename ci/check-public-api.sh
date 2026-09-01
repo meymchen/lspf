@@ -71,7 +71,6 @@ if ! jq -e '
     and (.approvals | type == "array")
     and all(.approvals[];
         (.baselineVersion | type == "string")
-        and (.currentVersion | type == "string")
         and (.target | type == "string")
         and (.features | type == "string")
         and (.findingsSha256 | type == "string")
@@ -105,18 +104,13 @@ if ((current_major < baseline_major)) \
     fail_setup "current version $current_version is older than baseline $baseline_version"
 fi
 
-release_type=patch
-if ((current_major > baseline_major)); then
-    release_type=major
-elif ((current_minor > baseline_minor)); then
-    release_type=minor
-fi
-breaking_approvals_allowed=false
-if [[ $release_type == major ]] \
-    || ([[ $release_type == minor ]] \
-        && ((baseline_major == 0 && current_major == 0))); then
-    breaking_approvals_allowed=true
-fi
+# The manifest version is deliberately not consulted beyond that sanity check.
+# release-plz owns the bump: it opens the release pull request that raises the
+# version and runs the same pinned cargo-semver-checks to choose major, minor,
+# or patch. A feature branch therefore still carries the published version
+# while it introduces the break, so requiring a bump here would force every
+# breaking pull request to hand-edit a number that release-plz is about to
+# compute. An approval records the reviewed findings instead.
 
 rows_file=$(mktemp "$report_dir/rows.XXXXXX")
 trap 'rm -f "$rows_file"' EXIT
@@ -197,20 +191,20 @@ check_surface() {
             findings_hash=$(printf '%s' "$canonical_findings" \
                 | sha256sum \
                 | cut -d' ' -f1)
-            approved_hash=$(jq -er \
+            # Match on the fingerprint rather than reading one out and
+            # comparing: successive breaking changes accumulate entries under
+            # the same baseline, so more than one row can match the surface.
+            if jq -e \
                 --arg baseline "$baseline_version" \
-                --arg current "$current_version" \
                 --arg target "$target_name" \
                 --arg features "$surface_features" \
-                '.approvals[] | select(
+                --arg hash "$findings_hash" \
+                'any(.approvals[];
                     .baselineVersion == $baseline
-                    and .currentVersion == $current
                     and (.target == $target or .target == "*")
                     and (.features == $features or .features == "*")
-                ) | .findingsSha256' \
-                "$APPROVALS_PATH" 2>/dev/null || true)
-            if [[ $breaking_approvals_allowed == true \
-                && $approved_hash == "$findings_hash" ]]; then
+                    and .findingsSha256 == $hash)' \
+                "$APPROVALS_PATH" >/dev/null 2>&1; then
                 result=approved-breaking-changes
                 effective_exit=0
             else
@@ -252,32 +246,29 @@ jq -s \
     --arg crate "$CRATE_NAME" \
     --arg baselineVersion "$baseline_version" \
     --arg currentVersion "$current_version" \
-    --arg releaseType "$release_type" \
     '{schemaVersion: 1, crate: $crate, baselineVersion: $baselineVersion,
-      currentVersion: $currentVersion, releaseType: $releaseType,
+      currentVersion: $currentVersion,
       intentionalPre1BreakingChanges:
         (any(.[]; .result == "approved-breaking-changes")
-          and ($baselineVersion | startswith("0."))
-          and ($releaseType == "minor")),
+          and ($baselineVersion | startswith("0."))),
       success: (all(.[]; .exitCode == 0)), rows: .}' \
     "$rows_file" >"$report_path"
 
 echo "Public API compatibility report: $report_path"
 if ((overall_exit != 0)); then
-    if [[ $breaking_approvals_allowed != true ]] \
-        && jq -s -e 'any(.[]; .result == "breaking-changes")' "$rows_file" >/dev/null
+    if jq -s -e 'any(.[]; .result == "breaking-changes")' "$rows_file" >/dev/null
     then
-        echo "public-api error: breaking changes require a new pre-1.0 minor version; current version is $current_version" >&2
+        echo "public-api error: unapproved breaking changes; add the candidate below to $APPROVALS_PATH to record the break as reviewed. release-plz picks the version bump from the same findings, so do not edit the manifest version." >&2
     fi
-    jq -rs --arg baseline "$baseline_version" --arg current "$current_version" '
+    jq -rs --arg baseline "$baseline_version" '
         [ .[] | select(.result == "breaking-changes") ] as $breaks
         | if ($breaks | length) > 0
             and ([$breaks[].findingsSha256] | unique | length) == 1
-          then [{baselineVersion: $baseline, currentVersion: $current,
+          then [{baselineVersion: $baseline,
                  target: "*", features: "*",
                  findingsSha256: $breaks[0].findingsSha256}]
           else [$breaks[]
-                | {baselineVersion: $baseline, currentVersion: $current,
+                | {baselineVersion: $baseline,
                    target, features, findingsSha256}]
           end
         | unique

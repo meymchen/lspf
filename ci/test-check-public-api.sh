@@ -104,7 +104,6 @@ fi
 assert_report '
     .schemaVersion == 1
     and .success == false
-    and .releaseType == "minor"
     and .intentionalPre1BreakingChanges == false
     and (.rows | length == 4)
     and ([.rows[] | select(.result == "breaking-changes")] | length == 4)
@@ -137,7 +136,7 @@ findings_hash=$(jq -r \
 jq -n \
     --arg hash "$findings_hash" \
     '{schemaVersion: 1, approvals: [{
-        baselineVersion: "0.5.2", currentVersion: "0.6.0",
+        baselineVersion: "0.5.2",
         target: "*", features: "*", findingsSha256: $hash
     }]}' >"$test_root/ci/public-api-breaking-approvals.json"
 
@@ -164,14 +163,37 @@ assert_report '
         | length == 4)
 '
 
-export FAKE_CURRENT_VERSION=0.5.3
+# The manifest version belongs to release-plz, which bumps it in its own
+# release pull request. A feature branch therefore still carries the published
+# version while it introduces the break, so an approval must hold whatever the
+# manifest currently says: the approval records the reviewed findings, not a
+# version the branch has no way to know.
+export FAKE_CURRENT_VERSION=0.5.2
+run_gate
+assert_report '
+    .success == true
+    and .intentionalPre1BreakingChanges == true
+    and ([.rows[] | select(.result == "approved-breaking-changes")]
+        | length == 4)
+'
+
+export FAKE_CURRENT_VERSION=0.6.0
+run_gate
+assert_report '.success == true'
+
+# An approval still binds to the findings it recorded: a different break under
+# the same baseline has a different fingerprint and stays unapproved.
+jq '.approvals[0].findingsSha256 |= (.[0:63] + "0")' \
+    "$test_root/ci/public-api-breaking-approvals.json" \
+    >"$test_root/ci/approvals.tmp"
+mv "$test_root/ci/approvals.tmp" "$test_root/ci/public-api-breaking-approvals.json"
+export FAKE_CURRENT_VERSION=0.5.2
 if run_gate; then
-    echo 'test failure: a patch release accepted a breaking-change approval' >&2
+    echo 'test failure: an approval matched findings it does not record' >&2
     exit 1
 fi
 assert_report '
     .success == false
-    and .releaseType == "patch"
     and .intentionalPre1BreakingChanges == false
     and ([.rows[] | select(.result == "breaking-changes")] | length == 4)
 '

@@ -359,11 +359,11 @@ async fn outgoing_journey(
     // 6. Every stable workspace refresh: no parameters, a `null`
     //    acknowledgement, and no recomputation policy owned by the helper.
     let refreshes = [
-        ("codeLens", client.code_lens_refresh().await),
-        ("diagnostic", client.diagnostic_refresh().await),
-        ("inlayHint", client.inlay_hint_refresh().await),
-        ("inlineValue", client.inline_value_refresh().await),
-        ("semanticTokens", client.semantic_tokens_refresh().await),
+        ("codeLens", client.refresh_code_lenses().await),
+        ("diagnostic", client.refresh_diagnostics().await),
+        ("inlayHint", client.refresh_inlay_hints().await),
+        ("inlineValue", client.refresh_inline_values().await),
+        ("semanticTokens", client.refresh_semantic_tokens().await),
     ];
     for (name, result) in refreshes {
         record(&mut steps, name, result.map(|()| "refreshed".to_string()));

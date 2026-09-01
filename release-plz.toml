@@ -9,6 +9,49 @@ git_release_enable = false
 # happens to carry an unreleased version number.
 release_always = false
 
+# The changelog is generated, never hand-edited. A breaking change carries its
+# explanation in the commit body, and the template renders that body under the
+# entry, so the prose that used to be written into `## [Unreleased]` by hand now
+# comes from the commit that made the change.
+[changelog]
+trim = true
+# Keep a breaking commit in the changelog even when no parser group claims it.
+protect_breaking_commits = true
+
+# The default template, plus the indented commit body for breaking changes.
+# `upper_first` restores the sentence case of the existing entries, which
+# conventional commit subjects (lowercase by convention) would otherwise break.
+body = """
+
+## [{{ version }}]\
+{%- if release_link %}({{ release_link }}){% endif %} - {{ timestamp | date(format="%Y-%m-%d") }}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+{% for commit in commits %}
+- {% if commit.scope %}*({{ commit.scope }})* {% endif %}\
+{%- if commit.breaking %}[**breaking**] {% endif %}\
+{{ commit.message | upper_first }}\
+{%- if commit.links %} ({% for link in commit.links %}[{{ link.text }}]({{ link.href }}){% endfor %}){% endif %}
+{%- if commit.breaking and commit.body %}
+
+{{ commit.body | trim | indent(prefix="  ", first=true) }}
+{%- endif %}
+{%- endfor %}
+{% endfor %}
+"""
+
+# Map conventional types onto the Keep a Changelog sections this file already
+# uses. Without `^refactor`, a breaking rename lands under "Other".
+commit_parsers = [
+  { message = "^feat", group = "Added" },
+  { message = "^fix", group = "Fixed" },
+  { message = "^refactor", group = "Changed" },
+  { message = "^perf", group = "Changed" },
+  { message = "^deprecate", group = "Deprecated" },
+  { message = "^security", group = "Security" },
+  { message = "^.*", group = "Other" },
+]
+
 [[package]]
 name = "lspf"
 git_tag_enable = true

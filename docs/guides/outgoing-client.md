@@ -148,11 +148,11 @@ async fn watch_files(client: &ClientHandle) -> Result<(), ClientError> {
 ## Workspace refresh
 
 Five helpers ask the client to re-pull a stable workspace feature —
-[`code_lens_refresh`](lspf::ClientHandle::code_lens_refresh),
-[`diagnostic_refresh`](lspf::ClientHandle::diagnostic_refresh),
-[`inlay_hint_refresh`](lspf::ClientHandle::inlay_hint_refresh),
-[`inline_value_refresh`](lspf::ClientHandle::inline_value_refresh), and
-[`semantic_tokens_refresh`](lspf::ClientHandle::semantic_tokens_refresh). Each
+[`refresh_code_lenses`](lspf::ClientHandle::refresh_code_lenses),
+[`refresh_diagnostics`](lspf::ClientHandle::refresh_diagnostics),
+[`refresh_inlay_hints`](lspf::ClientHandle::refresh_inlay_hints),
+[`refresh_inline_values`](lspf::ClientHandle::refresh_inline_values), and
+[`refresh_semantic_tokens`](lspf::ClientHandle::refresh_semantic_tokens). Each
 takes no parameters and returns the client's `null` acknowledgement as `()`;
 the helper owns no recomputation policy, and the framework keeps no lens,
 diagnostic, hint, value, or token state for it to touch.
@@ -270,11 +270,11 @@ return `Result<(), ClientError>`; request helpers return
 | `ClientHandle::workspace_folders` | `workspace/workspaceFolders` | none (`null`) | `Option<Vec<WorkspaceFolder>>` | stable |
 | `ClientHandle::register_capability` | `client/registerCapability` | `RegistrationParams` | `()` | stable |
 | `ClientHandle::unregister_capability` | `client/unregisterCapability` | `UnregistrationParams` | `()` | stable |
-| `ClientHandle::code_lens_refresh` | `workspace/codeLens/refresh` | none (`null`) | `()` | stable |
-| `ClientHandle::diagnostic_refresh` | `workspace/diagnostic/refresh` | none (`null`) | `()` | stable |
-| `ClientHandle::inlay_hint_refresh` | `workspace/inlayHint/refresh` | none (`null`) | `()` | stable |
-| `ClientHandle::inline_value_refresh` | `workspace/inlineValue/refresh` | none (`null`) | `()` | stable |
-| `ClientHandle::semantic_tokens_refresh` | `workspace/semanticTokens/refresh` | none (`null`) | `()` | stable |
+| `ClientHandle::refresh_code_lenses` | `workspace/codeLens/refresh` | none (`null`) | `()` | stable |
+| `ClientHandle::refresh_diagnostics` | `workspace/diagnostic/refresh` | none (`null`) | `()` | stable |
+| `ClientHandle::refresh_inlay_hints` | `workspace/inlayHint/refresh` | none (`null`) | `()` | stable |
+| `ClientHandle::refresh_inline_values` | `workspace/inlineValue/refresh` | none (`null`) | `()` | stable |
+| `ClientHandle::refresh_semantic_tokens` | `workspace/semanticTokens/refresh` | none (`null`) | `()` | stable |
 | `ClientHandle::refresh_folding_ranges` | `workspace/foldingRange/refresh` | none (`null`) | `()` | proposed |
 | `ClientHandle::refresh_text_document_content` | `workspace/textDocumentContent/refresh` | `TextDocumentContentRefreshParams` | `()` | proposed |
 | `ClientHandle::begin_progress` | `window/workDoneProgress/create`, then `$/progress` begin | `ProgressOptions` | `ProgressHandle` | stable |
