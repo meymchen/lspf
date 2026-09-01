@@ -11,9 +11,9 @@ use gen_lsp_types::{InitializedParams, LogMessageParams, MessageType};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::conformance_support::{self, LspError, Outcome, Server, ServerContext, TaskSend};
-use crate::types::notification::Notification;
-use crate::types::request::Request;
+use super::conformance_support::{
+    self, LspError, Notification, Outcome, Request, Server, ServerContext, TaskSend,
+};
 
 pub(crate) trait WireClient {
     fn send(&mut self, message: Value) -> impl Future<Output = ()> + TaskSend;

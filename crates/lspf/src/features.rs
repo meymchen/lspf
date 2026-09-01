@@ -188,7 +188,7 @@ pub fn declaration(options: DeclarationOptions) -> DeclarationFeature {
 #[allow(private_interfaces)]
 impl sealed::Sealed for DeclarationFeature {
     fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
-        caps.set_declaration(self.options.clone())
+        caps.set_declaration(self.options)
     }
 }
 impl FeatureSpec for DeclarationFeature {
@@ -211,7 +211,7 @@ pub fn definition(options: DefinitionOptions) -> DefinitionFeature {
 #[allow(private_interfaces)]
 impl sealed::Sealed for DefinitionFeature {
     fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
-        caps.set_definition(self.options.clone())
+        caps.set_definition(self.options)
     }
 }
 impl FeatureSpec for DefinitionFeature {
@@ -282,7 +282,7 @@ pub fn references(options: ReferencesOptions) -> ReferencesFeature {
 #[allow(private_interfaces)]
 impl sealed::Sealed for ReferencesFeature {
     fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
-        caps.set_references(self.options.clone())
+        caps.set_references(self.options)
     }
 }
 impl FeatureSpec for ReferencesFeature {
@@ -306,7 +306,7 @@ pub fn document_highlight(options: DocumentHighlightOptions) -> DocumentHighligh
 #[allow(private_interfaces)]
 impl sealed::Sealed for DocumentHighlightFeature {
     fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
-        caps.set_document_highlight(self.options.clone())
+        caps.set_document_highlight(self.options)
     }
 }
 impl FeatureSpec for DocumentHighlightFeature {
@@ -354,7 +354,7 @@ pub fn linked_editing_range(options: LinkedEditingRangeOptions) -> LinkedEditing
 #[allow(private_interfaces)]
 impl sealed::Sealed for LinkedEditingRangeFeature {
     fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
-        caps.set_linked_editing_range(self.options.clone())
+        caps.set_linked_editing_range(self.options)
     }
 }
 impl FeatureSpec for LinkedEditingRangeFeature {
@@ -377,7 +377,7 @@ pub fn moniker(options: MonikerOptions) -> MonikerFeature {
 #[allow(private_interfaces)]
 impl sealed::Sealed for MonikerFeature {
     fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
-        caps.set_moniker(self.options.clone())
+        caps.set_moniker(self.options)
     }
 }
 impl FeatureSpec for MonikerFeature {
@@ -397,7 +397,7 @@ pub fn document_formatting(options: DocumentFormattingOptions) -> DocumentFormat
 #[allow(private_interfaces)]
 impl sealed::Sealed for DocumentFormattingFeature {
     fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
-        caps.set_document_formatting(self.options.clone())
+        caps.set_document_formatting(self.options)
     }
 }
 impl FeatureSpec for DocumentFormattingFeature {
@@ -417,7 +417,7 @@ pub fn range_formatting(options: DocumentRangeFormattingOptions) -> RangeFormatt
 #[allow(private_interfaces)]
 impl sealed::Sealed for RangeFormattingFeature {
     fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
-        caps.set_range_formatting(self.options.clone())
+        caps.set_range_formatting(self.options)
     }
 }
 impl FeatureSpec for RangeFormattingFeature {
@@ -457,7 +457,7 @@ pub fn document_color(options: ColorProviderOptions) -> DocumentColorFeature {
 #[allow(private_interfaces)]
 impl sealed::Sealed for DocumentColorFeature {
     fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
-        caps.set_document_color(self.options.clone())
+        caps.set_document_color(self.options)
     }
 }
 impl FeatureSpec for DocumentColorFeature {
@@ -496,7 +496,7 @@ pub fn folding_range(options: FoldingProviderOptions) -> FoldingRangeFeature {
 #[allow(private_interfaces)]
 impl sealed::Sealed for FoldingRangeFeature {
     fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
-        caps.set_folding_range(self.options.clone())
+        caps.set_folding_range(self.options)
     }
 }
 impl FeatureSpec for FoldingRangeFeature {
@@ -516,7 +516,7 @@ pub fn selection_range(options: SelectionRangeOptions) -> SelectionRangeFeature 
 #[allow(private_interfaces)]
 impl sealed::Sealed for SelectionRangeFeature {
     fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
-        caps.set_selection_range(self.options.clone())
+        caps.set_selection_range(self.options)
     }
 }
 impl FeatureSpec for SelectionRangeFeature {
@@ -536,7 +536,7 @@ pub fn inline_value(options: InlineValueOptions) -> InlineValueFeature {
 #[allow(private_interfaces)]
 impl sealed::Sealed for InlineValueFeature {
     fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
-        caps.set_inline_value(self.options.clone())
+        caps.set_inline_value(self.options)
     }
 }
 impl FeatureSpec for InlineValueFeature {
@@ -618,7 +618,7 @@ pub fn type_hierarchy_prepare(options: TypeHierarchyOptions) -> TypeHierarchyPre
 #[allow(private_interfaces)]
 impl sealed::Sealed for TypeHierarchyPrepareFeature {
     fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
-        caps.set_type_hierarchy(self.options.clone())
+        caps.set_type_hierarchy(self.options)
     }
 }
 impl FeatureSpec for TypeHierarchyPrepareFeature {
@@ -839,7 +839,7 @@ pub fn workspace_symbol(options: WorkspaceSymbolOptions) -> WorkspaceSymbolFeatu
 #[allow(private_interfaces)]
 impl sealed::Sealed for WorkspaceSymbolFeature {
     fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
-        caps.set_workspace_symbol(self.options.clone())
+        caps.set_workspace_symbol(self.options)
     }
 }
 impl FeatureSpec for WorkspaceSymbolFeature {
@@ -889,7 +889,7 @@ pub fn rename(options: RenameOptions) -> RenameFeature {
 #[allow(private_interfaces)]
 impl sealed::Sealed for RenameFeature {
     fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
-        caps.set_rename(self.options.clone())
+        caps.set_rename(self.options)
     }
 }
 impl FeatureSpec for RenameFeature {
@@ -1043,7 +1043,7 @@ pub fn document_link(options: DocumentLinkOptions) -> DocumentLinkFeature {
 #[allow(private_interfaces)]
 impl sealed::Sealed for DocumentLinkFeature {
     fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
-        caps.set_document_link(self.options.clone())
+        caps.set_document_link(self.options)
     }
 }
 impl FeatureSpec for DocumentLinkFeature {
@@ -1094,7 +1094,7 @@ pub fn inlay_hint(options: InlayHintOptions) -> InlayHintFeature {
 #[allow(private_interfaces)]
 impl sealed::Sealed for InlayHintFeature {
     fn contribute(&self, caps: &mut CapabilityBuilder) -> Result<(), BuildError> {
-        caps.set_inlay_hint(self.options.clone())
+        caps.set_inlay_hint(self.options)
     }
 }
 impl FeatureSpec for InlayHintFeature {
@@ -1510,16 +1510,16 @@ mod tests {
         let inline = InlineValueOptions::default();
         let mut caps = CapabilityBuilder::default();
 
-        sealed::Sealed::contribute(&document_formatting(formatting.clone()), &mut caps).unwrap();
-        sealed::Sealed::contribute(&range_formatting(range.clone()), &mut caps).unwrap();
+        sealed::Sealed::contribute(&document_formatting(formatting), &mut caps).unwrap();
+        sealed::Sealed::contribute(&range_formatting(range), &mut caps).unwrap();
         sealed::Sealed::contribute(&on_type_formatting(on_type.clone()), &mut caps).unwrap();
         sealed::Sealed::contribute(&document_color(ColorProviderOptions::default()), &mut caps)
             .unwrap();
         sealed::Sealed::contribute(&color_presentation(), &mut caps).unwrap();
         sealed::Sealed::contribute(&folding_range(FoldingProviderOptions::default()), &mut caps)
             .unwrap();
-        sealed::Sealed::contribute(&selection_range(selection.clone()), &mut caps).unwrap();
-        sealed::Sealed::contribute(&inline_value(inline.clone()), &mut caps).unwrap();
+        sealed::Sealed::contribute(&selection_range(selection), &mut caps).unwrap();
+        sealed::Sealed::contribute(&inline_value(inline), &mut caps).unwrap();
         caps.validate().unwrap();
 
         assert_eq!(
@@ -2211,19 +2211,17 @@ mod tests {
         let mut caps = CapabilityBuilder::default();
 
         sealed::Sealed::contribute(&signature_help(signature_options.clone()), &mut caps).unwrap();
-        sealed::Sealed::contribute(&declaration(declaration_options.clone()), &mut caps).unwrap();
-        sealed::Sealed::contribute(&definition(definition_options.clone()), &mut caps).unwrap();
+        sealed::Sealed::contribute(&declaration(declaration_options), &mut caps).unwrap();
+        sealed::Sealed::contribute(&definition(definition_options), &mut caps).unwrap();
         sealed::Sealed::contribute(&type_definition(type_definition_options.clone()), &mut caps)
             .unwrap();
         sealed::Sealed::contribute(&implementation(implementation_options.clone()), &mut caps)
             .unwrap();
-        sealed::Sealed::contribute(&references(references_options.clone()), &mut caps).unwrap();
-        sealed::Sealed::contribute(&document_highlight(highlight_options.clone()), &mut caps)
-            .unwrap();
+        sealed::Sealed::contribute(&references(references_options), &mut caps).unwrap();
+        sealed::Sealed::contribute(&document_highlight(highlight_options), &mut caps).unwrap();
         sealed::Sealed::contribute(&document_symbol(symbols_options.clone()), &mut caps).unwrap();
-        sealed::Sealed::contribute(&linked_editing_range(linked_options.clone()), &mut caps)
-            .unwrap();
-        sealed::Sealed::contribute(&moniker(moniker_options.clone()), &mut caps).unwrap();
+        sealed::Sealed::contribute(&linked_editing_range(linked_options), &mut caps).unwrap();
+        sealed::Sealed::contribute(&moniker(moniker_options), &mut caps).unwrap();
         caps.validate().unwrap();
 
         assert_eq!(

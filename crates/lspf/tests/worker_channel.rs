@@ -17,6 +17,8 @@ use lspf::{
 };
 
 mod conformance_support {
+    pub(crate) use lspf::types::notification::Notification;
+    pub(crate) use lspf::types::request::Request;
     pub(crate) use lspf::{LspError, Outcome, Result, Server, ServerContext, TaskSend};
 }
 

@@ -564,7 +564,7 @@ impl<S: Send + Sync + 'static> Registrations<S> {
             }
         }
 
-        let mut options = self.document_sync.clone().unwrap_or_default();
+        let mut options = self.document_sync.unwrap_or_default();
         options.open_close.get_or_insert(true);
         options
             .change
@@ -594,7 +594,7 @@ impl<S: Send + Sync + 'static> Registrations<S> {
             if self.document_sync.is_none() && !save_hook && !will_save_hook && !wait_until {
                 TextDocumentSync::Kind(TextDocumentSyncKind::Incremental)
             } else {
-                TextDocumentSync::Options(options.clone())
+                TextDocumentSync::Options(options)
             };
         Ok(DocumentSyncSettings {
             capability,

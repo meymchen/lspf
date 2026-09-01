@@ -1154,7 +1154,7 @@ mod tests {
             work_done_progress_options: progress(Some(true)),
         };
         let mut caps = CapabilityBuilder::default();
-        caps.set_document_formatting(formatting.clone()).unwrap();
+        caps.set_document_formatting(formatting).unwrap();
         assert_eq!(
             caps.finish(),
             ServerCapabilities {
@@ -1168,7 +1168,7 @@ mod tests {
             ranges_support: None,
         };
         let mut caps = CapabilityBuilder::default();
-        caps.set_range_formatting(range.clone()).unwrap();
+        caps.set_range_formatting(range).unwrap();
         assert_eq!(
             caps.finish(),
             ServerCapabilities {
@@ -1224,9 +1224,7 @@ mod tests {
             work_done_progress_options: progress(Some(true)),
         };
         let mut selection = CapabilityBuilder::default();
-        selection
-            .set_selection_range(selection_options.clone())
-            .unwrap();
+        selection.set_selection_range(selection_options).unwrap();
         assert_eq!(
             selection.finish(),
             ServerCapabilities {
@@ -1239,7 +1237,7 @@ mod tests {
             work_done_progress_options: progress(Some(false)),
         };
         let mut inline = CapabilityBuilder::default();
-        inline.set_inline_value(inline_options.clone()).unwrap();
+        inline.set_inline_value(inline_options).unwrap();
         assert_eq!(
             inline.finish(),
             ServerCapabilities {
@@ -1565,7 +1563,7 @@ mod tests {
     fn workspace_symbol_advertises_supplied_options() {
         let options = workspace_symbol_options(None);
         let mut caps = CapabilityBuilder::default();
-        caps.set_workspace_symbol(options.clone()).unwrap();
+        caps.set_workspace_symbol(options).unwrap();
         assert_eq!(
             caps.finish().workspace_symbol_provider,
             Some(options.into())
@@ -1791,7 +1789,7 @@ mod tests {
     fn rename_advertises_supplied_options() {
         let options = rename_options(None);
         let mut caps = CapabilityBuilder::default();
-        caps.set_rename(options.clone()).unwrap();
+        caps.set_rename(options).unwrap();
         assert_eq!(caps.finish().rename_provider, Some(options.into()));
     }
 
@@ -2073,7 +2071,7 @@ mod tests {
     fn document_link_advertises_supplied_options() {
         let options = document_link_options(None);
         let mut caps = CapabilityBuilder::default();
-        caps.set_document_link(options.clone()).unwrap();
+        caps.set_document_link(options).unwrap();
         assert_eq!(caps.finish().document_link_provider, Some(options));
     }
 
@@ -2175,7 +2173,7 @@ mod tests {
     fn inlay_hint_advertises_supplied_options() {
         let options = inlay_hint_options(None);
         let mut caps = CapabilityBuilder::default();
-        caps.set_inlay_hint(options.clone()).unwrap();
+        caps.set_inlay_hint(options).unwrap();
         assert_eq!(caps.finish().inlay_hint_provider, Some(options.into()));
     }
 
@@ -2300,7 +2298,7 @@ mod tests {
         };
         let mut caps = CapabilityBuilder::default();
         caps.set_type_hierarchy_subtypes();
-        caps.set_type_hierarchy(options.clone()).unwrap();
+        caps.set_type_hierarchy(options).unwrap();
         caps.set_type_hierarchy_supertypes();
         caps.validate().unwrap();
 
@@ -2508,7 +2506,7 @@ mod tests {
 
         let declaration = declaration_options();
         let mut caps = CapabilityBuilder::default();
-        caps.set_declaration(declaration.clone()).unwrap();
+        caps.set_declaration(declaration).unwrap();
         assert_eq!(
             caps.finish(),
             ServerCapabilities {
@@ -2519,7 +2517,7 @@ mod tests {
 
         let definition = definition_options();
         let mut caps = CapabilityBuilder::default();
-        caps.set_definition(definition.clone()).unwrap();
+        caps.set_definition(definition).unwrap();
         assert_eq!(
             caps.finish(),
             ServerCapabilities {
@@ -2555,7 +2553,7 @@ mod tests {
     fn lookup_features_set_only_their_provider_fields() {
         let references = references_options();
         let mut caps = CapabilityBuilder::default();
-        caps.set_references(references.clone()).unwrap();
+        caps.set_references(references).unwrap();
         assert_eq!(
             caps.finish(),
             ServerCapabilities {
@@ -2566,7 +2564,7 @@ mod tests {
 
         let highlight = document_highlight_options();
         let mut caps = CapabilityBuilder::default();
-        caps.set_document_highlight(highlight.clone()).unwrap();
+        caps.set_document_highlight(highlight).unwrap();
         assert_eq!(
             caps.finish(),
             ServerCapabilities {
@@ -2588,7 +2586,7 @@ mod tests {
 
         let linked = linked_editing_range_options();
         let mut caps = CapabilityBuilder::default();
-        caps.set_linked_editing_range(linked.clone()).unwrap();
+        caps.set_linked_editing_range(linked).unwrap();
         assert_eq!(
             caps.finish(),
             ServerCapabilities {
@@ -2599,7 +2597,7 @@ mod tests {
 
         let monikers = moniker_options();
         let mut caps = CapabilityBuilder::default();
-        caps.set_moniker(monikers.clone()).unwrap();
+        caps.set_moniker(monikers).unwrap();
         assert_eq!(
             caps.finish(),
             ServerCapabilities {
