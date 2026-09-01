@@ -172,13 +172,13 @@ async fn shutdown_timeout_terminates_then_kills_and_reaps_the_child() {
         .spawn(fixture_command("shutdown-timeout"))
         .await
         .expect("the stubborn child initializes");
-    let pid = child.id();
+    let _pid = child.id();
 
     let error = child.shutdown().await.unwrap_err();
 
     assert!(matches!(error, ChildError::Lifecycle(ClientError::Timeout)));
     #[cfg(unix)]
-    assert_reaped(pid).await;
+    assert_reaped(_pid).await;
 }
 
 async fn early_child_exit_reports_status_and_resolves_the_connection() {
@@ -201,12 +201,12 @@ async fn dropping_a_connection_reclaims_its_child() {
         .spawn(fixture_command("shutdown-timeout"))
         .await
         .expect("the stubborn child initializes");
-    let pid = child.id();
+    let _pid = child.id();
 
     drop(child);
 
     #[cfg(unix)]
-    assert_reaped(pid).await;
+    assert_reaped(_pid).await;
 }
 
 async fn invalid_client_configuration_fails_before_spawning() {
@@ -238,13 +238,13 @@ async fn cancelling_a_terminal_future_still_reclaims_the_child() {
         .spawn(fixture_command("shutdown-timeout"))
         .await
         .expect("the stubborn child initializes");
-    let pid = child.id();
+    let _pid = child.id();
 
     let cancelled = tokio::time::timeout(Duration::from_millis(50), child.wait()).await;
 
     assert!(cancelled.is_err());
     #[cfg(unix)]
-    assert_reaped(pid).await;
+    assert_reaped(_pid).await;
 }
 
 fn main() {
@@ -267,7 +267,7 @@ fn main() {
         cancelling_a_terminal_future_still_reclaims_the_child().await;
     });
 
-    let dropped_inside_pid = runtime.block_on(async {
+    let _dropped_inside_pid = runtime.block_on(async {
         let child = Client::builder(ClientCapabilities::default())
             .spawn(fixture_command("shutdown-timeout"))
             .await
@@ -278,7 +278,7 @@ fn main() {
     });
     drop(runtime);
     #[cfg(unix)]
-    assert_reaped_blocking(dropped_inside_pid);
+    assert_reaped_blocking(_dropped_inside_pid);
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -291,12 +291,12 @@ fn main() {
             .await
             .expect("the child initializes before its runtime stops")
     });
-    let pid = child.id();
+    let _pid = child.id();
     drop(runtime);
     drop(child);
     #[cfg(unix)]
     assert!(
-        !process_exists(pid),
+        !process_exists(_pid),
         "drop without a runtime reaps the child"
     );
 }

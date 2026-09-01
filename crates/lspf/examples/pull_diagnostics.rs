@@ -86,7 +86,7 @@ async fn document_diagnostic(
             },
         )
     };
-    Ok(report.into())
+    Ok(report)
 }
 
 async fn workspace_diagnostic(
@@ -129,7 +129,7 @@ async fn workspace_diagnostic(
             }
         })
         .collect();
-    Ok(WorkspaceDiagnosticReport { items }.into())
+    Ok(WorkspaceDiagnosticReport { items })
 }
 
 fn options() -> DiagnosticOptions {

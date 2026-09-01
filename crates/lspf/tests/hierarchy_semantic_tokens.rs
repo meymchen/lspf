@@ -130,7 +130,7 @@ async fn semantic_full(
     _: SemanticTokensParams,
     _: CancellationToken,
 ) -> Result<Option<SemanticTokensResult>, LspError> {
-    Ok(Some(tokens("full").into()))
+    Ok(Some(tokens("full")))
 }
 
 async fn semantic_delta(
@@ -158,7 +158,7 @@ async fn semantic_range(
     _: SemanticTokensRangeParams,
     _: CancellationToken,
 ) -> Result<Option<SemanticTokensRangeResult>, LspError> {
-    Ok(Some(tokens("range").into()))
+    Ok(Some(tokens("range")))
 }
 
 fn hierarchy_options() -> lspf::types::WorkDoneProgressOptions {

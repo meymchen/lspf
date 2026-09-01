@@ -36,8 +36,7 @@ async fn document_diagnostic(
                     items: Vec::new(),
                 },
             },
-        )
-        .into(),
+        ),
     )
 }
 
@@ -48,7 +47,7 @@ async fn workspace_diagnostic(
     _ct: CancellationToken,
 ) -> Result<WorkspaceDiagnosticReportResult, LspError> {
     assert_eq!(params.identifier.as_deref(), Some("compiler"));
-    Ok(WorkspaceDiagnosticReport::default().into())
+    Ok(WorkspaceDiagnosticReport::default())
 }
 
 fn options(identifier: &str, workspace_diagnostics: bool) -> DiagnosticOptions {
