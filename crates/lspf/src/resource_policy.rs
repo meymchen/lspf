@@ -20,6 +20,8 @@ pub enum ResourcePolicyField {
     OutboundRequestTimeout,
     /// [`ResourcePolicy::handler_timeout`].
     HandlerTimeout,
+    /// [`ResourcePolicy::max_notebooks`].
+    MaxNotebooks,
 }
 
 impl fmt::Display for ResourcePolicyField {
@@ -30,6 +32,7 @@ impl fmt::Display for ResourcePolicyField {
             Self::MaxOutboundBytes => "max_outbound_bytes",
             Self::MaxDocuments => "max_documents",
             Self::MaxDocumentBytes => "max_document_bytes",
+            Self::MaxNotebooks => "max_notebooks",
             Self::OutboundRequestTimeout => "outbound_request_timeout",
             Self::HandlerTimeout => "handler_timeout",
         })
@@ -45,7 +48,8 @@ impl fmt::Display for ResourcePolicyField {
 ///
 /// The production defaults admit 64 inbound requests, queue 1,024 outbound
 /// messages using at most 16 MiB, track 1,024 Documents using at most 64 MiB
-/// of text, and apply 30-second outbound-request and handler deadlines.
+/// of text, track 256 Notebooks, and apply 30-second outbound-request and
+/// handler deadlines.
 /// Inbound admission happens before parameter decoding, cancellation-token
 /// allocation, or handler-task creation; excess requests receive LSP
 /// `ServerCancelled` (`-32802`) with the stable message
@@ -59,9 +63,14 @@ impl fmt::Display for ResourcePolicyField {
 /// connection close admits nothing new and drains the already-accounted queue.
 /// Document opens and changes that exceed either Document budget are rejected
 /// before mutation with the stable messages `document count capacity exhausted`
-/// and `document text capacity exhausted`, respectively. Rejection skips the
-/// notification hook and preserves the prior snapshot; `didClose` and
-/// connection shutdown release the corresponding accounting.
+/// and `document text capacity exhausted`, respectively. Notebook cell
+/// Documents consume those same budgets, while `max_notebooks` bounds notebook
+/// metadata even when a notebook has no cells. An over-limit notebook open is
+/// rejected with `notebook count capacity exhausted` through the same overload
+/// path, without retaining the notebook or any cells opened by that
+/// notification. Rejection skips the notification hook and preserves the prior
+/// snapshot; closes and connection shutdown release the corresponding
+/// accounting.
 /// When an outbound request reaches its deadline, its pending entry is removed,
 /// the caller receives [`ClientError::Timeout`](crate::ClientError::Timeout),
 /// and one `$/cancelRequest` is attempted if the request was enqueued. Late
@@ -87,6 +96,8 @@ pub struct ResourcePolicy {
     pub max_documents: usize,
     /// Maximum total text bytes retained across tracked Documents.
     pub max_document_bytes: usize,
+    /// Maximum Notebooks tracked for the connection.
+    pub max_notebooks: usize,
     /// Default deadline for a server-to-client request, or `None` to disable it.
     pub outbound_request_timeout: Option<Duration>,
     /// Default deadline for an inbound request handler.
@@ -113,6 +124,7 @@ impl ResourcePolicy {
                 ResourcePolicyField::MaxDocumentBytes,
                 self.max_document_bytes,
             ),
+            (ResourcePolicyField::MaxNotebooks, self.max_notebooks),
         ] {
             if value == 0 {
                 return Err(BuildError::InvalidResourcePolicy { field });
@@ -140,6 +152,7 @@ impl Default for ResourcePolicy {
             max_outbound_bytes: 16 * 1024 * 1024,
             max_documents: 1_024,
             max_document_bytes: 64 * 1024 * 1024,
+            max_notebooks: 256,
             outbound_request_timeout: Some(Duration::from_secs(30)),
             handler_timeout: Duration::from_secs(30),
         }

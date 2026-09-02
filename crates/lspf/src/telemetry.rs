@@ -35,6 +35,7 @@ pub(crate) enum Resource {
     InboundRequests,
     OutboundQueue,
     Documents,
+    Notebooks,
     PendingRequests,
 }
 
@@ -44,6 +45,7 @@ impl Resource {
             Self::InboundRequests => "inbound_requests",
             Self::OutboundQueue => "outbound_queue",
             Self::Documents => "documents",
+            Self::Notebooks => "notebooks",
             Self::PendingRequests => "pending_requests",
         }
     }

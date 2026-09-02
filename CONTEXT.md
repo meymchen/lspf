@@ -74,7 +74,10 @@ _Avoid_: Endpoint, engine (those own direction-specific policy).
 **Resource policy**:
 The single connection-owned value that declares finite budgets for admitted
 inbound requests, queued outbound messages and bytes, tracked Documents and
-their text, and request and handler deadlines. Inbound request admission occurs
+their text, tracked Notebooks, and request and handler deadlines. Each Notebook
+cell's Document consumes the existing Document count and text budgets, while a
+separate notebook-count budget gives even an empty Notebook finite cost.
+Inbound request admission occurs
 before parameter decoding, cancellation-token allocation, registry insertion,
 and handler-task creation. Once the budget is full, a unique request receives
 `ServerCancelled` (`-32802`, `inbound request capacity exhausted`) without
@@ -90,6 +93,9 @@ budget is full. Required
 responses, protocol errors, and `$/cancelRequest` use the connection's single
 failure-close path if admission fails; normal close stops admission and drains
 the already-accounted queue.
+Opening a Notebook that exceeds its notebook-count budget or either Document
+budget follows the same overload path as an over-limit text-document open and
+commits neither the Notebook nor any of its new cell Documents.
 A Layer may replace the policy's finite handler timeout for one inbound
 request before forwarding it.
 _Avoid_: Concurrency limit (only one budget), resource options (does not express

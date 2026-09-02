@@ -22,6 +22,7 @@ fn production_resource_defaults_are_finite_and_buildable() {
             max_outbound_bytes: 16 * 1024 * 1024,
             max_documents: 1_024,
             max_document_bytes: 64 * 1024 * 1024,
+            max_notebooks: 256,
             outbound_request_timeout: Some(Duration::from_secs(30)),
             handler_timeout: Duration::from_secs(30),
         }
@@ -100,6 +101,13 @@ fn every_zero_connection_budget_fails_server_build() {
             ResourcePolicyField::MaxDocumentBytes,
             ResourcePolicy {
                 max_document_bytes: 0,
+                ..ResourcePolicy::default()
+            },
+        ),
+        (
+            ResourcePolicyField::MaxNotebooks,
+            ResourcePolicy {
+                max_notebooks: 0,
                 ..ResourcePolicy::default()
             },
         ),

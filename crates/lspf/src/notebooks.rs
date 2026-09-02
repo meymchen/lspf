@@ -13,7 +13,10 @@ use gen_lsp_types::{
 };
 
 use crate::error::LspError;
+use crate::telemetry::{ConnectionTrace, Resource, ResourceAction};
 use crate::uri_key::UriKey;
+
+const NOTEBOOK_COUNT_CAPACITY_EXHAUSTED: &str = "notebook count capacity exhausted";
 
 const NOTEBOOK_NOT_FOUND: &str = "notebook not found";
 const CELL_STRUCTURE_OUT_OF_RANGE: &str = "notebook cell structure change is out of range";
@@ -69,16 +72,24 @@ impl Notebook {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct NotebooksInner {
     by_uri: HashMap<UriKey, Notebook>,
     notebook_by_cell: HashMap<UriKey, UriKey>,
+    max_notebooks: usize,
 }
 
 /// Concurrency-safe store of synchronized notebooks owned by one connection.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub(crate) struct Notebooks {
     inner: Arc<RwLock<NotebooksInner>>,
+    trace: ConnectionTrace,
+}
+
+impl Default for Notebooks {
+    fn default() -> Self {
+        Self::with_resource_policy(crate::ResourcePolicy::default(), ConnectionTrace::new())
+    }
 }
 
 impl Notebooks {
@@ -87,12 +98,56 @@ impl Notebooks {
         Self::default()
     }
 
+    pub(crate) fn with_resource_policy(
+        policy: crate::ResourcePolicy,
+        trace: ConnectionTrace,
+    ) -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(NotebooksInner {
+                by_uri: HashMap::new(),
+                notebook_by_cell: HashMap::new(),
+                max_notebooks: policy.max_notebooks,
+            })),
+            trace,
+        }
+    }
+
     /// Register a notebook, returning the notebook the same URI already held.
     ///
     /// A replaced notebook's cell text Documents are the caller's to close:
     /// the notebook layer never touches the document store.
+    #[cfg(test)]
     pub(crate) fn open(&self, document: NotebookDocument) -> Option<Notebook> {
-        self.commit(Notebook::from_document(document))
+        self.try_open(document)
+            .expect("the default notebook budget admits unit-test fixtures")
+    }
+
+    pub(crate) fn try_open(
+        &self,
+        document: NotebookDocument,
+    ) -> Result<Option<Notebook>, LspError> {
+        let notebook = Notebook::from_document(document);
+        let notebook_key = UriKey::new(notebook.uri());
+        let mut inner = self.inner.write().unwrap();
+        if !inner.by_uri.contains_key(&notebook_key) && inner.by_uri.len() >= inner.max_notebooks {
+            self.trace.resource_budget(
+                Resource::Notebooks,
+                ResourceAction::Reject,
+                inner.by_uri.len(),
+                inner.max_notebooks,
+                None,
+            );
+            return Err(LspError::invalid_request(NOTEBOOK_COUNT_CAPACITY_EXHAUSTED));
+        }
+        let previous = commit(&mut inner, notebook_key, notebook);
+        self.trace.resource_budget(
+            Resource::Notebooks,
+            ResourceAction::Admit,
+            inner.by_uri.len(),
+            inner.max_notebooks,
+            None,
+        );
+        Ok(previous)
     }
 
     /// Install `notebook` as the state for its URI, rebuilding the cell index,
@@ -100,18 +155,14 @@ impl Notebooks {
     pub(crate) fn commit(&self, notebook: Notebook) -> Option<Notebook> {
         let notebook_key = UriKey::new(notebook.uri());
         let mut inner = self.inner.write().unwrap();
-        let previous = inner.by_uri.remove(&notebook_key);
-        if let Some(previous) = &previous {
-            for cell in previous.cells() {
-                inner.notebook_by_cell.remove(&UriKey::new(&cell.document));
-            }
-        }
-        for cell in notebook.cells() {
-            inner
-                .notebook_by_cell
-                .insert(UriKey::new(&cell.document), notebook_key.clone());
-        }
-        inner.by_uri.insert(notebook_key, notebook);
+        let previous = commit(&mut inner, notebook_key, notebook);
+        self.trace.resource_budget(
+            Resource::Notebooks,
+            ResourceAction::Update,
+            inner.by_uri.len(),
+            inner.max_notebooks,
+            None,
+        );
         previous
     }
 
@@ -123,6 +174,13 @@ impl Notebooks {
         for cell in removed.cells() {
             inner.notebook_by_cell.remove(&UriKey::new(&cell.document));
         }
+        self.trace.resource_budget(
+            Resource::Notebooks,
+            ResourceAction::Release,
+            inner.by_uri.len(),
+            inner.max_notebooks,
+            None,
+        );
         Some(removed)
     }
 
@@ -193,6 +251,13 @@ impl Notebooks {
         let mut inner = self.inner.write().unwrap();
         inner.by_uri = HashMap::new();
         inner.notebook_by_cell = HashMap::new();
+        self.trace.resource_budget(
+            Resource::Notebooks,
+            ResourceAction::Release,
+            0,
+            inner.max_notebooks,
+            None,
+        );
     }
 
     fn get(&self, uri: &Uri) -> Option<Notebook> {
@@ -215,6 +280,26 @@ impl Notebooks {
             notebooks: self.clone(),
         }
     }
+}
+
+fn commit(
+    inner: &mut NotebooksInner,
+    notebook_key: UriKey,
+    notebook: Notebook,
+) -> Option<Notebook> {
+    let previous = inner.by_uri.remove(&notebook_key);
+    if let Some(previous) = &previous {
+        for cell in previous.cells() {
+            inner.notebook_by_cell.remove(&UriKey::new(&cell.document));
+        }
+    }
+    for cell in notebook.cells() {
+        inner
+            .notebook_by_cell
+            .insert(UriKey::new(&cell.document), notebook_key.clone());
+    }
+    inner.by_uri.insert(notebook_key, notebook);
+    previous
 }
 
 /// Read-only access to the synchronized notebooks owned by one connection.
