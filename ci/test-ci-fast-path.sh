@@ -37,4 +37,22 @@ do
     ' <<<"$ci_json" >/dev/null
 done
 
+jq -e '
+  .jobs["commit-messages"] as $job
+  | $job.name == "commit messages"
+    and $job.if == "${{ github.event_name == '\''pull_request'\'' }}"
+    and $job.permissions == {"contents": "read"}
+    and ($job.steps | any(
+      .uses == "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
+      and .with["fetch-depth"] == 0
+      and .with["persist-credentials"] == false
+    ))
+    and ($job.steps | any(.run == "bash ci/test-check-commit-messages.sh"))
+    and ($job.steps | any(
+      .env.BASE_SHA == "${{ github.event.pull_request.base.sha }}"
+      and .env.HEAD_SHA == "${{ github.event.pull_request.head.sha }}"
+      and .run == "bash ci/check-commit-messages.sh \"$BASE_SHA\" \"$HEAD_SHA\""
+    ))
+' <<<"$ci_json" >/dev/null
+
 echo 'CI pull-request fast-path contract verified'

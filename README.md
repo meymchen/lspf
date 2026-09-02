@@ -502,7 +502,8 @@ Before opening a PR, please skim:
   either justify the deviation in the PR description or write a new
   ADR.
 
-Install the repository's pre-commit hooks with [prek](https://prek.j178.dev/):
+Install the repository's pre-commit and commit-message hooks with
+[prek](https://prek.j178.dev/):
 
 ```bash
 prek install

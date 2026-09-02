@@ -2,6 +2,7 @@
   "workflows": {
     ".github/workflows/ci.yml": {
       "feature-matrix": { "contents": "read" },
+      "commit-messages": { "contents": "read" },
       "markdownlint": { "contents": "read" },
       "fuzz-contract": { "contents": "read" },
       "fmt": { "contents": "read" },

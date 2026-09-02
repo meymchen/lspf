@@ -52,6 +52,25 @@ jobs:
       - id: matrix
         run: echo "value=$(jq -c . ci/native-feature-matrix.json)" >> "$GITHUB_OUTPUT"
 
+  commit-messages:
+    name: commit messages
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Test commit message policy
+        run: bash ci/test-check-commit-messages.sh
+      - name: Check pull request commit messages
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: bash ci/check-commit-messages.sh "$BASE_SHA" "$HEAD_SHA"
+
   markdownlint:
     name: markdownlint
     runs-on: ubuntu-latest

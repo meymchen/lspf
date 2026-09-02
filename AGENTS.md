@@ -8,9 +8,15 @@ Never hand-edit the version in `Cargo.toml` or write entries into the
 changelog. release-plz owns both: it opens the release pull request that bumps
 the version and generates `crates/lspf/CHANGELOG.md` from the commits.
 
-Write the explanation into the commit body instead. Use a conventional commit
-subject, mark a breaking change with `!` (`refactor!: …`), and the changelog
-template in `release-plz.toml` renders that body under the entry.
+Use a Conventional Commit subject. Leave the body empty when the subject is
+self-explanatory; otherwise use at most 500 characters to explain why, with at
+most 1000 explanatory characters across a pull request. Keep implementation
+details, test evidence, and development history in the pull request body. Final
+Git trailers do not count toward these limits.
+
+Mark a breaking change with `!` (`refactor!: …`) and give it a concise body
+that states the impact and migration. The changelog template in
+`release-plz.toml` renders that body under the entry.
 
 A breaking change needs its findings recorded in
 `ci/public-api-breaking-approvals.json`. Run `bash ci/check-public-api.sh` and
