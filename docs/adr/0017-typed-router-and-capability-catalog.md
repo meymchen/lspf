@@ -18,6 +18,10 @@ sorted, registration-order-independent command-merging wording: the
 execute-command capability list preserves registration order. The historical
 body below is unchanged.
 
+[ADR 0034](0034-notebook-sync-joins-the-stable-catalog.md) supersedes this
+ADR's notebook exclusion. Its registration, capability, and catalog-stability
+decisions remain in force. The historical body below is unchanged.
+
 ## Context
 
 ADR 0004 coupled user handlers and advertised capabilities through

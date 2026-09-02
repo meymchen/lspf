@@ -1,5 +1,8 @@
 # v1 scope: server-only, no notebooks, built-in helper coverage
 
+Status note: ADR 0034 supersedes this record's notebook exclusion. Its other
+v1 scope decisions remain in force. The historical body below is unchanged.
+
 For v1, lspf builds **language servers only**. The framework does not
 expose APIs for building LSP clients, does not implement notebook
 document support, and does not include built-in metrics — observability
