@@ -1,0 +1,31 @@
+{
+  "method": "workspace/applyEdit",
+  "params": {
+    "label": "extract function",
+    "edit": {
+      "documentChanges": [
+        {
+          "textDocument": {
+            "version": 7,
+            "uri": "file:///main.rs"
+          },
+          "edits": [
+            {
+              "range": {
+                "start": { "line": 2, "character": 4 },
+                "end": { "line": 2, "character": 9 }
+              },
+              "snippet": {
+                "value": "${1:name}($0)",
+                "kind": "snippet"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "metadata": {
+      "isRefactoring": true
+    }
+  }
+}

@@ -17,23 +17,32 @@
 //! local route dispatchable.
 
 use std::borrow::Cow;
+use std::fmt::Debug;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
 use lspf::types::request::Request;
 use lspf::types::{
-    ApplyWorkspaceEditResponse, MessageActionItem, ShowDocumentResult, WorkspaceFolder,
+    ApplyKind, ApplyWorkspaceEditParams, ApplyWorkspaceEditResponse, CodeAction, CodeActionTag,
+    Command, CompletionItemApplyKinds, CompletionList, Diagnostic, MarkupContent, MarkupKind,
+    MessageActionItem, OptionalVersionedTextDocumentIdentifier, Position, Range,
+    ShowDocumentResult, SnippetTextEdit, StringValue, TextDocumentEdit, TextDocumentIdentifier,
+    Uri, WorkspaceEdit, WorkspaceEditMetadata, WorkspaceFolder,
 };
 use lspf::{
     CancellationToken, ClientError, ClientHandle, RawMessage, RequestId, Server, ServerContext,
     Transport, TransportError, TransportReader, TransportWriter,
 };
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use serde_json::json;
 use tokio::sync::mpsc;
 
 const SHOW_DOCUMENT_FIXTURE: &str = include_str!("fixtures/show_document_request.json");
 const SHOW_MESSAGE_REQUEST_FIXTURE: &str = include_str!("fixtures/show_message_request.json");
 const APPLY_EDIT_FIXTURE: &str = include_str!("fixtures/apply_edit_request.json");
+const APPLY_EDIT_318_FIXTURE: &str = include_str!("fixtures/apply_edit_318_request.json");
 const CONFIGURATION_FIXTURE: &str = include_str!("fixtures/configuration_request.json");
 const WORKSPACE_FOLDERS_FIXTURE: &str = include_str!("fixtures/workspace_folders_request.json");
 const REGISTER_CAPABILITY_FIXTURE: &str = include_str!("fixtures/register_capability_request.json");
@@ -773,6 +782,208 @@ fn text_document_content_refresh_params_contain_only_the_uri() {
         json!({ "uri": "file:///main.rs" }),
         "the params serialize to exactly the uri field"
     );
+}
+
+// --- LSP 3.18 type widenings (issue #246) ----------------------------------
+
+fn assert_318_round_trip<T>(value: &T, expected: serde_json::Value)
+where
+    T: Serialize + DeserializeOwned + PartialEq + Debug,
+{
+    let serialized = serde_json::to_value(value).expect("the 3.18 value serializes");
+    assert_eq!(
+        serialized, expected,
+        "the 3.18 wire shape matches the metaModel"
+    );
+
+    let round_tripped: T =
+        serde_json::from_value(serialized).expect("the 3.18 wire shape deserializes");
+    assert_eq!(
+        &round_tripped, value,
+        "deserialization preserves the constructed 3.18 value"
+    );
+}
+
+#[test]
+fn command_tooltip_round_trips_with_318_wire_shape() {
+    let command = Command::new(
+        "Explain selection".to_string(),
+        Some("Explain the selected code".to_string()),
+        "lspf.explain".to_string(),
+        None,
+    );
+
+    assert_318_round_trip(
+        &command,
+        json!({
+            "title": "Explain selection",
+            "tooltip": "Explain the selected code",
+            "command": "lspf.explain"
+        }),
+    );
+}
+
+#[test]
+fn code_action_tags_round_trip_with_318_wire_shape() {
+    let action = CodeAction::new(
+        "Generate tests".to_string(),
+        None,
+        None,
+        None,
+        None,
+        Some(WorkspaceEdit::default()),
+        None,
+        None,
+        Some(vec![CodeActionTag::LLMGenerated]),
+    );
+
+    assert_318_round_trip(
+        &action,
+        json!({
+            "title": "Generate tests",
+            "edit": {},
+            "tags": [1]
+        }),
+    );
+}
+
+#[test]
+fn completion_list_apply_kind_round_trips_with_318_wire_shape() {
+    let list = CompletionList::new(
+        false,
+        None,
+        Some(CompletionItemApplyKinds::new(
+            Some(ApplyKind::Merge),
+            Some(ApplyKind::Replace),
+        )),
+        vec![],
+    );
+
+    assert_318_round_trip(
+        &list,
+        json!({
+            "isIncomplete": false,
+            "applyKind": {
+                "commitCharacters": 2,
+                "data": 1
+            },
+            "items": []
+        }),
+    );
+}
+
+#[test]
+fn diagnostic_markup_message_round_trips_with_318_wire_shape() {
+    let diagnostic = Diagnostic::new(
+        Range::new(Position::new(3, 1), Position::new(3, 5)),
+        None,
+        None,
+        None,
+        None,
+        MarkupContent::new(MarkupKind::Markdown, "Use **snake_case**".to_string()).into(),
+        None,
+        None,
+        None,
+    );
+
+    assert_318_round_trip(
+        &diagnostic,
+        json!({
+            "range": {
+                "start": { "line": 3, "character": 1 },
+                "end": { "line": 3, "character": 5 }
+            },
+            "message": {
+                "kind": "markdown",
+                "value": "Use **snake_case**"
+            }
+        }),
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_edit_round_trips_318_metadata_and_snippet_text_edit_over_the_wire() {
+    let params = ApplyWorkspaceEditParams::new(
+        Some("extract function".to_string()),
+        WorkspaceEdit::new(
+            None,
+            Some(vec![
+                TextDocumentEdit::new(
+                    OptionalVersionedTextDocumentIdentifier::new(
+                        Some(7),
+                        TextDocumentIdentifier::new(
+                            Uri::from_str("file:///main.rs").expect("the document URI parses"),
+                        ),
+                    ),
+                    vec![
+                        SnippetTextEdit::new(
+                            Range::new(Position::new(2, 4), Position::new(2, 9)),
+                            StringValue::new("${1:name}($0)".to_string()),
+                            None,
+                        )
+                        .into(),
+                    ],
+                )
+                .into(),
+            ]),
+            None,
+        ),
+        Some(WorkspaceEditMetadata::new(Some(true))),
+    );
+    let sent_params = params.clone();
+    let server = Server::builder(())
+        .request::<Trigger, _, _>(
+            move |_state: Arc<()>,
+                  ctx: ServerContext,
+                  _trigger: serde_json::Value,
+                  _ct: CancellationToken| {
+                let params = sent_params.clone();
+                async move {
+                    ctx.client()
+                        .apply_edit(params)
+                        .await
+                        .expect("the client accepts the workspace edit");
+                    Ok("applied".to_string())
+                }
+            },
+        )
+        .build()
+        .expect("the outgoing-request server builds");
+    let mut session = start(server).await;
+    init(&mut session).await;
+
+    session
+        .in_tx
+        .send(inbound_request(2, Trigger::METHOD, json!(null)))
+        .unwrap();
+    let outbound = receive(&mut session.out_rx).await;
+    assert_wire_request(&outbound, APPLY_EDIT_318_FIXTURE);
+    let RawMessage::Request {
+        id,
+        params: wire_params,
+        ..
+    } = &outbound
+    else {
+        panic!("expected an apply-edit request, got {outbound:?}")
+    };
+    let round_tripped: ApplyWorkspaceEditParams =
+        serde_json::from_slice(wire_params).expect("the apply-edit params round-trip");
+    assert_eq!(round_tripped, params);
+
+    session
+        .in_tx
+        .send(success_response(
+            match id {
+                RequestId::Number(id) => *id,
+                other => panic!("expected a numeric request ID, got {other:?}"),
+            },
+            json!({ "applied": true }),
+        ))
+        .unwrap();
+    let response = receive(&mut session.out_rx).await;
+    assert_eq!(response.id(), Some(&RequestId::Number(2)));
+    assert_eq!(result_string(&response), "applied");
+    finish(session).await;
 }
 
 // --- Router freeze integration test (issue #106) ----------------------------
