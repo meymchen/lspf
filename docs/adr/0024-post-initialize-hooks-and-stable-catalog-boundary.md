@@ -3,6 +3,9 @@
 Status: Accepted. Extends ADR 0018's lifecycle hooks and ADR 0017's capability
 catalog.
 
+Partially superseded by ADR 0034: notebook document synchronization joins the
+stable catalog. The lifecycle-hook decisions in this record remain in force.
+
 ADR 0018 named three lifecycle hooks; this ADR adds the fourth, `on_initialized`,
 and fixes the boundaries of the stable catalog the 0.3 PRD defines.
 
@@ -42,10 +45,12 @@ hook contributes no capability.
 
 ## Stable catalog boundary
 
-The default catalog is stable LSP 3.17 only: no notebook method and no
-proposed or 3.18-draft method appears in the default catalog or the default
-capabilities. Custom requests and notifications remain registrable beside the
-whole catalog and contribute nothing to `ServerCapabilities`;
+The default catalog is stable LSP 3.17 only. This record originally excluded
+notebook methods; ADR 0034 supersedes that exclusion because notebook document
+synchronization is part of LSP 3.17. No proposed or 3.18-draft method appears
+in the default catalog or the default capabilities. Custom requests and
+notifications remain registrable beside the whole catalog and contribute
+nothing to `ServerCapabilities`;
 `$/cancelRequest` stays a protocol built-in, and `workspace/executeCommand`
 stays owned by the Command registry.
 

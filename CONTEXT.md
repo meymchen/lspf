@@ -124,6 +124,22 @@ address one [[Document]], while public values keep the client's original
 URI.
 _Avoid_: Document store (correct but verbose).
 
+**Notebook**:
+A synchronized notebook resource identified by URI, with notebook type,
+version, metadata, and an ordered collection of [[Notebook cell]]s. The
+notebook layer owns that structure but not cell text; each cell's text lives in
+the existing [[Documents]] store as a [[Document]].
+_Avoid_: Notebook document (use the shorter domain term except when naming the
+LSP protocol feature).
+
+**Notebook cell**:
+One ordered cell in a [[Notebook]], identified by its text-document URI and
+carrying cell kind, metadata, and execution summary. Its text is an ordinary
+[[Document]] in [[Documents]], so handlers use the notebook view for membership
+and ordering and the documents view for contents.
+_Avoid_: Cell document (it obscures the distinction between notebook metadata
+and the cell's [[Document]] text).
+
 **Workspace**:
 The cloneable handle to the connection's workspace state, exposed
 through [[ServerContext]] (ADR 0017). The Server protocol engine establishes it from
