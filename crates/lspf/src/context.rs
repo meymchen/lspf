@@ -5,6 +5,7 @@ use tracing::Span;
 use crate::client::ClientHandle;
 use crate::documents::DocumentsView;
 use crate::error::ClientError;
+use crate::notebooks::NotebooksView;
 use crate::partial_result::{PartialResultRequest, PartialResultScope, PartialResultSink};
 use crate::progress::{ProgressHandle, ProgressOptions};
 use crate::raw::RequestId;
@@ -13,9 +14,9 @@ use crate::workspace::Workspace;
 /// Per-request handle to framework state (see ADR 0009).
 ///
 /// The handle exposes connection-scoped capabilities — the established
-/// [`Workspace`] (initialization metadata, roots, workspace folders, and the
-/// read-only [`DocumentsView`]) and the [`ClientHandle`] — without exposing
-/// protocol-owned queues or registries.
+/// [`Workspace`] (initialization metadata, roots, workspace folders, and its
+/// read-only document and notebook views) and the [`ClientHandle`] without
+/// exposing protocol-owned queues or registries.
 #[derive(Debug, Clone)]
 pub struct ServerContext {
     pub(crate) request_id: Option<RequestId>,
@@ -108,6 +109,11 @@ impl ServerContext {
         self.workspace.documents()
     }
 
+    /// The connection's notebooks, as a read-only [`NotebooksView`].
+    pub fn notebooks(&self) -> NotebooksView {
+        self.workspace.notebooks()
+    }
+
     /// A cheap clone of the typed handle for this connection's LSP client.
     pub fn client(&self) -> ClientHandle {
         self.client.clone()
@@ -173,13 +179,14 @@ mod tests {
 
     use futures_channel::mpsc::UnboundedReceiver;
     use gen_lsp_types::{
-        DocumentSymbolPartialResponse, DocumentSymbolRequest, InitializeParams, ProgressToken,
-        TextDocumentItem, Uri,
+        DocumentSymbolPartialResponse, DocumentSymbolRequest, InitializeParams, NotebookCell,
+        NotebookCellKind, NotebookDocument, ProgressToken, TextDocumentItem, Uri,
     };
 
     use super::*;
     use crate::client::{OutboundQueue, OutboundRegistry};
     use crate::documents::Documents;
+    use crate::notebooks::Notebooks;
     use crate::raw::RawMessage;
 
     fn context() -> (ServerContext, Documents) {
@@ -190,6 +197,23 @@ mod tests {
         (
             ServerContext::for_notification(Span::none(), client, workspace),
             documents,
+        )
+    }
+
+    fn context_with_notebooks() -> (ServerContext, Documents, Notebooks) {
+        let (out_tx, _out_rx) = OutboundQueue::bounded(usize::MAX, usize::MAX);
+        let documents = Documents::new();
+        let notebooks = Notebooks::new();
+        let workspace = Workspace::from_params_with_notebooks(
+            &InitializeParams::default(),
+            documents.clone(),
+            notebooks.clone(),
+        );
+        let client = ClientHandle::new(out_tx, OutboundRegistry::default(), None);
+        (
+            ServerContext::for_notification(Span::none(), client, workspace),
+            documents,
+            notebooks,
         )
     }
 
@@ -232,6 +256,108 @@ mod tests {
             clone.workspace().roots(),
             ctx.workspace().roots(),
             "a cloned context shares the one workspace"
+        );
+    }
+
+    #[test]
+    fn notebooks_view_maps_a_notebook_to_its_cells_in_document_order() {
+        let (ctx, _documents, notebooks) = context_with_notebooks();
+        let notebook_uri = Uri::from_str("file:///analysis.ipynb").unwrap();
+        let first_cell_uri = Uri::from_str("file:///analysis.ipynb#cell-1").unwrap();
+        let second_cell_uri = Uri::from_str("file:///analysis.ipynb#cell-2").unwrap();
+        notebooks.open(NotebookDocument::new(
+            notebook_uri.clone(),
+            "jupyter-notebook".into(),
+            3,
+            None,
+            vec![
+                NotebookCell::new(NotebookCellKind::Markup, first_cell_uri.clone(), None, None),
+                NotebookCell::new(NotebookCellKind::Code, second_cell_uri.clone(), None, None),
+            ],
+        ));
+        let notebook = ctx
+            .notebooks()
+            .get(&notebook_uri)
+            .expect("the view resolves the opened notebook");
+
+        assert_eq!(notebook.uri(), &notebook_uri);
+        assert_eq!(notebook.notebook_type(), "jupyter-notebook");
+        assert_eq!(notebook.version(), 3);
+        assert_eq!(notebook.metadata(), None);
+        assert_eq!(
+            notebook
+                .cells()
+                .iter()
+                .map(|cell| &cell.document)
+                .collect::<Vec<_>>(),
+            vec![&first_cell_uri, &second_cell_uri]
+        );
+    }
+
+    #[test]
+    fn notebooks_view_maps_a_cell_to_its_notebook_and_rejects_an_unknown_cell() {
+        let (ctx, _documents, notebooks) = context_with_notebooks();
+        let notebook_uri = Uri::from_str("file:///analysis.ipynb").unwrap();
+        let cell_uri = Uri::from_str("file:///analysis.ipynb#cell-1").unwrap();
+        let unknown_uri = Uri::from_str("file:///other.ipynb#cell-1").unwrap();
+        notebooks.open(NotebookDocument::new(
+            notebook_uri.clone(),
+            "jupyter-notebook".into(),
+            3,
+            None,
+            vec![NotebookCell::new(
+                NotebookCellKind::Code,
+                cell_uri.clone(),
+                None,
+                None,
+            )],
+        ));
+        assert_eq!(
+            ctx.notebooks()
+                .notebook_for_cell(&cell_uri)
+                .expect("the synchronized cell has an owning notebook")
+                .uri(),
+            &notebook_uri
+        );
+        assert!(ctx.notebooks().notebook_for_cell(&unknown_uri).is_none());
+    }
+
+    #[test]
+    fn notebook_cell_text_is_read_through_the_documents_view() {
+        let (ctx, documents, notebooks) = context_with_notebooks();
+        let notebook_uri = Uri::from_str("file:///analysis.ipynb").unwrap();
+        let cell_uri = Uri::from_str("file:///analysis.ipynb#cell-1").unwrap();
+        notebooks.open(NotebookDocument::new(
+            notebook_uri.clone(),
+            "jupyter-notebook".into(),
+            3,
+            None,
+            vec![NotebookCell::new(
+                NotebookCellKind::Code,
+                cell_uri.clone(),
+                None,
+                None,
+            )],
+        ));
+        documents
+            .open(TextDocumentItem {
+                uri: cell_uri.clone(),
+                language_id: "python".into(),
+                version: 7,
+                text: "print('one text engine')".into(),
+            })
+            .expect("the default policy accepts the cell document");
+        let notebook = ctx
+            .notebooks()
+            .get(&notebook_uri)
+            .expect("the notebook is synchronized");
+        let cell = &notebook.cells()[0];
+        assert_eq!(
+            ctx.documents()
+                .get(&cell.document)
+                .expect("the cell text is an ordinary document")
+                .text(),
+            "print('one text engine')"
         );
     }
 

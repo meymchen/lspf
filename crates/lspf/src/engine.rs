@@ -52,6 +52,7 @@ use crate::documents::{DocumentMutationError, Documents};
 use crate::error::Error;
 use crate::failure::{ConnectionDirection, ConnectionFailureCategory, FailureReporter};
 use crate::file_provider::SharedFileProvider;
+use crate::notebooks::Notebooks;
 use crate::progress::{ProgressCancel, ProgressRegistry};
 use crate::raw::{RawMessage, RequestId};
 use crate::runtime::{Runtime, default_runtime, ensure_runtime_available};
@@ -353,6 +354,7 @@ enum Lifecycle<S> {
 struct ProtocolEngine<S, R> {
     state: Arc<S>,
     documents: Documents,
+    notebooks: Notebooks,
     workspace: Option<Workspace>,
     document_sync: TextDocumentSyncOptions,
     lifecycle: Lifecycle<S>,
@@ -390,6 +392,7 @@ where
         Self {
             state: server.state,
             documents: Documents::with_resource_policy(server.resource_policy, trace),
+            notebooks: Notebooks::default(),
             workspace: None,
             // Document notifications are processed only after initialize has
             // replaced this with the validated effective configuration.
@@ -1147,11 +1150,12 @@ where
         // ADR 0018's precedence, the Workspace is established (step 4) before
         // protocol-owned fields are negotiated and capabilities generated
         // (step 5). The Workspace takes ownership of the connection's
-        // Documents handle; the engine keeps its own clone for the built-in
-        // document-sync mutations.
-        let established = Workspace::from_params_with_provider(
+        // Documents and Notebooks handles; the engine keeps its own clones for
+        // built-in synchronization mutations.
+        let established = Workspace::from_params_with_stores_and_provider(
             &params,
             self.documents.clone(),
+            self.notebooks.clone(),
             file_provider,
             self.client.shared_trace(),
         );

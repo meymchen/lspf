@@ -21,9 +21,10 @@ use serde_json::Value;
 
 use crate::documents::{Document, Documents, DocumentsView};
 use crate::file_provider::SharedFileProvider;
+use crate::notebooks::{Notebooks, NotebooksView};
 use crate::uri_key::{UriKey, percent_decode};
 
-/// Cloneable handle to the connection's workspace state (ADR 0017).
+/// Cloneable handle to the connection's workspace state (ADR 0017, ADR 0034).
 ///
 /// Cheap to clone: every copy shares one `Arc`, so clones observe the same
 /// connection state rather than a snapshot of it. The engine owns
@@ -43,6 +44,7 @@ struct WorkspaceState {
     configuration: RwLock<Option<Value>>,
     trace: SharedTrace,
     documents: Documents,
+    notebooks: Notebooks,
     file_provider: SharedFileProvider,
 }
 
@@ -111,6 +113,7 @@ impl std::fmt::Debug for WorkspaceState {
             .field("configuration", &self.configuration)
             .field("trace", &self.trace)
             .field("documents", &self.documents)
+            .field("notebooks", &self.notebooks)
             .field("file_provider", &"<FileProvider>")
             .finish()
     }
@@ -123,11 +126,12 @@ impl Workspace {
     /// (possibly deprecated) `rootUri`, and the announced workspace folders —
     /// all verbatim, folder order included; an absent `workspaceFolders` list
     /// yields no folders. `documents` is the connection's document store,
-    /// which the workspace owns from here on.
+    /// which the workspace owns from here on. The workspace also owns a
+    /// notebook store; its cell text remains in `documents`.
     ///
     /// This test-only constructor gives the workspace a private trace cell;
-    /// the engine uses [`Workspace::from_params_with_provider`] so the cell
-    /// is the one the connection's [`ClientHandle`](crate::ClientHandle) reads.
+    /// the engine uses `Workspace::from_params_with_stores_and_provider` so
+    /// the cell is the one the connection's [`ClientHandle`](crate::ClientHandle) reads.
     #[cfg(test)]
     pub(crate) fn from_params(params: &InitializeParams, documents: Documents) -> Self {
         Self::from_params_with_provider(
@@ -138,9 +142,26 @@ impl Workspace {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn from_params_with_provider(
         params: &InitializeParams,
         documents: Documents,
+        file_provider: SharedFileProvider,
+        trace: SharedTrace,
+    ) -> Self {
+        Self::from_params_with_stores_and_provider(
+            params,
+            documents,
+            Notebooks::default(),
+            file_provider,
+            trace,
+        )
+    }
+
+    pub(crate) fn from_params_with_stores_and_provider(
+        params: &InitializeParams,
+        documents: Documents,
+        notebooks: Notebooks,
         file_provider: SharedFileProvider,
         trace: SharedTrace,
     ) -> Self {
@@ -167,9 +188,25 @@ impl Workspace {
                 configuration: RwLock::new(None),
                 trace,
                 documents,
+                notebooks,
                 file_provider,
             }),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_params_with_notebooks(
+        params: &InitializeParams,
+        documents: Documents,
+        notebooks: Notebooks,
+    ) -> Self {
+        Self::from_params_with_stores_and_provider(
+            params,
+            documents,
+            notebooks,
+            crate::file_provider::erase(crate::MemoryFileProvider::new()),
+            SharedTrace::default(),
+        )
     }
 
     /// The client info (`clientInfo.name` / `clientInfo.version`) announced at
@@ -247,6 +284,14 @@ impl Workspace {
     /// same view).
     pub fn documents(&self) -> DocumentsView {
         self.inner.documents.view()
+    }
+
+    /// The connection's notebooks, as a read-only [`NotebooksView`].
+    ///
+    /// Notebook snapshots contain metadata and ordered cell membership. Read
+    /// each cell's text through [`Workspace::documents`] using its URI.
+    pub fn notebooks(&self) -> NotebooksView {
+        self.inner.notebooks.view()
     }
 
     /// Resolve a document snapshot, preferring editor-open text over the

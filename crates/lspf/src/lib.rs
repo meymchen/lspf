@@ -50,6 +50,7 @@ mod client_progress;
 mod codec;
 mod context;
 mod documents;
+mod notebooks;
 // Serving needs an executor: the engine exists wherever a runtime is
 // available (ADR 0020). On native targets that is the `runtime-tokio`
 // feature; on wasm32 the `wasm` feature, which the check above enforces.
@@ -256,6 +257,7 @@ pub use file_provider::EmptyFileProvider;
 pub use file_provider::{FileProvider, MemoryFileProvider};
 #[cfg(all(not(target_arch = "wasm32"), feature = "runtime-tokio"))]
 pub use file_provider::{OsFileProvider, OsFileProviderBuilder};
+pub use notebooks::{Notebook, NotebooksView};
 pub use partial_result::{PartialResultRequest, PartialResultSink};
 pub use progress::{ProgressHandle, ProgressOptions};
 pub use raw::{JsonRpcError, RawMessage, RequestId};
