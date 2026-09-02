@@ -65,6 +65,7 @@ selected native Transport uses Tokio internally.
 | `wasm32-unknown-unknown` default or `stdio` | Unsupported | stdio is a native adapter; disable default features |
 | `wasm32-unknown-unknown` with `tcp` or `websocket` | Intentionally invalid | These adapters require native Tokio sockets and emit a compile error |
 | `wasm32-unknown-unknown` with `testing` | Intentionally invalid | The deterministic testing surface uses Tokio's native virtual clock |
+
 Do not combine native adapters with `worker-channel` in one build. A project
 that ships native and WASM artifacts selects their features in separate Cargo
 commands.
