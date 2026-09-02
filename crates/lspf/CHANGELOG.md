@@ -7,6 +7,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0](https://github.com/meymchen/lspf/compare/v0.10.0...v0.11.0) - 2026-09-02
+
+### Added
+
+- Serve new LSP 3.18 inbound methods ([#281](https://github.com/meymchen/lspf/pull/281))
+
+### Changed
+
+- [**breaking**] Unify the ClientHandle refresh helpers on a verb-prefix name ([#278](https://github.com/meymchen/lspf/pull/278))
+
+  * ci: let release-plz own version bumps and changelog prose
+
+  The compatibility gate only approved a breaking change when the manifest
+  version was already a minor ahead of the crates.io baseline. release-plz
+  raises the version in its own release pull request, so a feature branch
+  still carries the published version while it introduces the break: the
+  gate refused every breaking pull request until someone hand-edited a
+  number release-plz was about to compute. 849ba5a, c3286b9, f5b659b,
+  b117fec, and 9369be6 all carry that edit.
+
+  Stop consulting the manifest version. An approval now records the
+  reviewed findings under a baseline, which is what a reviewer actually
+  looked at, and release-plz picks the bump from the same pinned
+  cargo-semver-checks the gate runs. Match approvals on the fingerprint
+  rather than reading one out, since successive breaks accumulate entries
+  under one baseline and more than one row can match a surface.
+
+  Generate the changelog prose too: the template renders a breaking
+  commit's body under its entry, so the explanation that used to be hand
+  written into `[Unreleased]` now comes from the commit that made the
+  change. Stop linting the changelog, which is now generator output rather
+  than something an author writes.
+
+  Clear the hand-written `[Unreleased]` entry as part of the switch.
+  release-plz inserts a new version section directly beneath that heading,
+  so prose left there would be filed under the next release while
+  release-plz separately generated an entry for the same change from its
+  own commit.
+
+  * refactor!: unify the ClientHandle refresh helpers on a verb-prefix name
+
+  The seven workspace refresh helpers used two naming styles: five carried
+  the operation as a suffix, two as a verb prefix, so a reader could not
+  predict which form a given helper used. Settle on the verb-prefix form,
+  matching the rest of the handle, where every method is verb-first.
+
+  `code_lens_refresh` becomes `refresh_code_lenses`, `diagnostic_refresh`
+  becomes `refresh_diagnostics`, `inlay_hint_refresh` becomes
+  `refresh_inlay_hints`, `inline_value_refresh` becomes
+  `refresh_inline_values`, and `semantic_tokens_refresh` becomes
+  `refresh_semantic_tokens`. The subject is plural wherever a refresh
+  recomputes a set of results, including `refresh_folding_ranges`, whose
+  wire method `workspace/foldingRange/refresh` is singular; it stays
+  singular in `refresh_text_document_content`, which refreshes one named
+  document's cached content.
+
+  This lands before the two proposed refresh requests are promoted to
+  stable, so they do not arrive on a naming baseline about to change.
+
+### Other
+
+- Enforce concise commit messages
+- *(catalog)* Guard the capability catalog against the 3.18 metaModel ([#280](https://github.com/meymchen/lspf/pull/280))
+
 ## [0.10.0](https://github.com/meymchen/lspf/compare/v0.9.2...v0.10.0) - 2026-09-01
 
 ### Fixed
