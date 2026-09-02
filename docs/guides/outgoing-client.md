@@ -275,8 +275,8 @@ return `Result<(), ClientError>`; request helpers return
 | `ClientHandle::refresh_inlay_hints` | `workspace/inlayHint/refresh` | none (`null`) | `()` | stable |
 | `ClientHandle::refresh_inline_values` | `workspace/inlineValue/refresh` | none (`null`) | `()` | stable |
 | `ClientHandle::refresh_semantic_tokens` | `workspace/semanticTokens/refresh` | none (`null`) | `()` | stable |
-| `ClientHandle::refresh_folding_ranges` | `workspace/foldingRange/refresh` | none (`null`) | `()` | proposed |
-| `ClientHandle::refresh_text_document_content` | `workspace/textDocumentContent/refresh` | `TextDocumentContentRefreshParams` | `()` | proposed |
+| `ClientHandle::refresh_folding_ranges` | `workspace/foldingRange/refresh` | none (`null`) | `()` | stable |
+| `ClientHandle::refresh_text_document_content` | `workspace/textDocumentContent/refresh` | `TextDocumentContentRefreshParams` | `()` | stable |
 | `ClientHandle::begin_progress` | `window/workDoneProgress/create`, then `$/progress` begin | `ProgressOptions` | `ProgressHandle` | stable |
 | `ProgressHandle::report` | `$/progress` report | `Option<String>` message, `Option<u32>` percentage | `()` | stable |
 | `ProgressHandle::end` | `$/progress` end | `Option<String>` message | `()` | stable |

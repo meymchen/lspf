@@ -13,17 +13,18 @@ use gen_lsp_types::{
     ApplyWorkspaceEditParams, ApplyWorkspaceEditRequest as ApplyWorkspaceEdit,
     ApplyWorkspaceEditResult, CodeLensRefreshRequest as CodeLensRefresh, ConfigurationParams,
     ConfigurationRequest as WorkspaceConfiguration,
-    DiagnosticRefreshRequest as WorkspaceDiagnosticRefresh, InlayHintRefreshRequest,
-    InlineValueRefreshRequest, LogMessageNotification as LogMessage, LogMessageParams,
-    LogTraceNotification as LogTrace, LogTraceParams, MessageActionItem,
+    DiagnosticRefreshRequest as WorkspaceDiagnosticRefresh, FoldingRangeRefreshRequest,
+    InlayHintRefreshRequest, InlineValueRefreshRequest, LogMessageNotification as LogMessage,
+    LogMessageParams, LogTraceNotification as LogTrace, LogTraceParams, MessageActionItem,
     ProgressNotification as Progress, ProgressParams,
     PublishDiagnosticsNotification as PublishDiagnostics, PublishDiagnosticsParams,
     RegistrationParams, RegistrationRequest as RegisterCapability,
     SemanticTokensRefreshRequest as SemanticTokensRefresh, ShowDocumentParams,
     ShowDocumentRequest as ShowDocument, ShowDocumentResult,
     ShowMessageNotification as ShowMessage, ShowMessageParams, ShowMessageRequest,
-    ShowMessageRequestParams, TraceValue, UnregistrationParams,
-    UnregistrationRequest as UnregisterCapability, WorkspaceFolder, WorkspaceFoldersRequest,
+    ShowMessageRequestParams, TextDocumentContentRefreshParams, TextDocumentContentRefreshRequest,
+    TraceValue, UnregistrationParams, UnregistrationRequest as UnregisterCapability,
+    WorkspaceFolder, WorkspaceFoldersRequest,
 };
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
@@ -1456,7 +1457,7 @@ impl ClientHandle {
     }
 
     /// Ask the client to recompute its folding ranges with
-    /// `workspace/foldingRange/refresh` (proposed LSP), awaiting the client's
+    /// `workspace/foldingRange/refresh` (stable since LSP 3.18), awaiting the client's
     /// `null` acknowledgement as `()`.
     ///
     /// The request carries no parameters (`Params = ()`, sent as `null`); the
@@ -1465,10 +1466,6 @@ impl ClientHandle {
     /// folding-range state, so nothing local changes when the client
     /// acknowledges.
     ///
-    /// This helper exists only with the crate's `proposed` Cargo feature:
-    /// `lsp-types` 0.97.x has no marker for this request, so the marker comes
-    /// from [`crate::proposed`].
-    ///
     /// # Errors
     ///
     /// Behaves exactly as [`ClientHandle::request`]: [`ClientError::ConnectionClosed`],
@@ -1478,26 +1475,19 @@ impl ClientHandle {
     /// success result cannot be decoded; [`ClientError::Cancelled`] if the
     /// session closes before the client answers; [`ClientError::Timeout`] if
     /// the configured deadline expires.
-    #[cfg(feature = "proposed")]
     pub async fn refresh_folding_ranges(&self) -> Result<(), ClientError> {
-        self.request::<crate::proposed::FoldingRangeRefresh>(())
-            .await
+        self.request::<FoldingRangeRefreshRequest>(()).await
     }
 
     /// Ask the client to refresh one document's cached content with
-    /// `workspace/textDocumentContent/refresh` (proposed LSP), awaiting the
+    /// `workspace/textDocumentContent/refresh` (stable since LSP 3.18), awaiting the
     /// client's `null` acknowledgement as `()`.
     ///
-    /// The [`TextDocumentContentRefreshParams`](crate::proposed::TextDocumentContentRefreshParams)
-    /// are sent exactly as provided: they name only the target document's URI
-    /// and the helper owns no refresh policy — how the client re-pulls the
-    /// content is entirely the client's concern. The framework keeps no
-    /// text-document-content pull state, so nothing local changes when the
-    /// client acknowledges.
-    ///
-    /// This helper exists only with the crate's `proposed` Cargo feature:
-    /// `lsp-types` 0.97.x has no marker or params type for this request, so
-    /// both come from [`crate::proposed`].
+    /// The [`TextDocumentContentRefreshParams`] are sent exactly as provided:
+    /// they name only the target document's URI and the helper owns no refresh
+    /// policy — how the client re-pulls the content is entirely the client's
+    /// concern. The framework keeps no text-document-content pull state, so
+    /// nothing local changes when the client acknowledges.
     ///
     /// # Errors
     ///
@@ -1508,12 +1498,11 @@ impl ClientHandle {
     /// success result cannot be decoded; [`ClientError::Cancelled`] if the
     /// session closes before the client answers; [`ClientError::Timeout`] if
     /// the configured deadline expires.
-    #[cfg(feature = "proposed")]
     pub async fn refresh_text_document_content(
         &self,
-        params: crate::proposed::TextDocumentContentRefreshParams,
+        params: TextDocumentContentRefreshParams,
     ) -> Result<(), ClientError> {
-        self.request::<crate::proposed::TextDocumentContentRefresh>(params)
+        self.request::<TextDocumentContentRefreshRequest>(params)
             .await
     }
 
