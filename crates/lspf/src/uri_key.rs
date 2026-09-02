@@ -4,7 +4,9 @@
 //! [`UriKey`] — when they differ only in scheme or authority case, in
 //! percent-encoding, or in the case of a Windows drive letter in a `file:`
 //! path. Ordinary path case is preserved: the key must not merge
-//! `file:///Foo` with `file:///foo` on a case-sensitive filesystem.
+//! `file:///Foo` with `file:///foo` on a case-sensitive filesystem, and a
+//! differing fragment keeps two URIs apart because that is how clients name
+//! the individual cells of one notebook (ADR 0034).
 //!
 //! The key exists for framework-internal identity only (the `Documents`
 //! map). Public values and wire responses always carry the client's original
@@ -25,6 +27,11 @@ pub(crate) struct UriKey {
     path: String,
     /// The query, percent-decoded like the path.
     query: String,
+    /// The fragment, percent-decoded like the path. A fragment names a
+    /// secondary resource, and a notebook cell is exactly that: clients
+    /// address the cells of one notebook by fragment, so dropping it would
+    /// merge every cell of a notebook into one Document (ADR 0034).
+    fragment: String,
 }
 
 impl UriKey {
@@ -56,11 +63,16 @@ impl UriKey {
             .query()
             .map(|query| percent_decode(query.as_str()))
             .unwrap_or_default();
+        let fragment = uri
+            .fragment()
+            .map(|fragment| percent_decode(fragment.as_str()))
+            .unwrap_or_default();
         Self {
             scheme,
             authority,
             path,
             query,
+            fragment,
         }
     }
 }
@@ -206,6 +218,25 @@ mod tests {
     fn distinct_documents_stay_distinct() {
         assert_ne!(key("file:///a.rs"), key("file:///b.rs"));
         assert_ne!(key("file:///a.rs"), key("untitled:///a.rs"));
+    }
+
+    #[test]
+    fn a_fragment_distinguishes_notebook_cells_of_one_notebook() {
+        assert_ne!(
+            key("vscode-notebook-cell:/c%3A/nb.ipynb#W0sZmlsZQ"),
+            key("vscode-notebook-cell:/c%3A/nb.ipynb#W1sZmlsZQ"),
+            "cells of one notebook differ only by fragment"
+        );
+        assert_ne!(
+            key("file:///nb.ipynb"),
+            key("file:///nb.ipynb#cell-1"),
+            "a cell is not its notebook"
+        );
+        assert_eq!(
+            key("file:///nb.ipynb#cell%2D1"),
+            key("file:///nb.ipynb#cell-1"),
+            "the fragment decodes by the same rule as the path and query"
+        );
     }
 
     #[cfg(not(target_arch = "wasm32"))]

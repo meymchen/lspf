@@ -15,7 +15,8 @@ _Avoid_: Feature, callback, endpoint.
 **Built-in handler**:
 A handler that the framework ships out of the box. Scope: LSP lifecycle
 (`initialize`, `initialized`, `shutdown`, `exit`), text-document sync
-(`didOpen`, `didChange`, `didClose`, `willSave`, `didSave`), cancellation
+(`didOpen`, `didChange`, `didClose`, `willSave`, `didSave`), notebook sync
+(`didOpen`, `didChange`, `didSave`, `didClose`), cancellation
 (`$/cancelRequest`), `$/setTrace`, workspace-folder sync, and work-done
 progress cancellation. The protocol built-ins fixed by ADR 0018 and ADR 0023
 cannot be replaced; registering one of their notification methods records a
@@ -118,10 +119,10 @@ struct, or hand it back through a getter. Mutations happen only through
 the Server protocol engine's built-in document-sync handlers; user code reads it
 through a read-only `DocumentsView` from the [[ServerContext]] parameter
 (`ctx.documents()`), and post-mutation hooks observe the updated state.
-Identity is one normalized URI key (ADR 0021): equivalent spellings —
+Identity is one normalized URI key (ADR 0021, ADR 0035): equivalent spellings —
 scheme and host case, percent-encoding, Windows drive-letter case —
-address one [[Document]], while public values keep the client's original
-URI.
+address one [[Document]], while a differing fragment addresses a different
+one, and public values keep the client's original URI.
 _Avoid_: Document store (correct but verbose).
 
 **Notebook**:
@@ -136,7 +137,9 @@ LSP protocol feature).
 One ordered cell in a [[Notebook]], identified by its text-document URI and
 carrying cell kind, metadata, and execution summary. Its text is an ordinary
 [[Document]] in [[Documents]], so handlers use the notebook view for membership
-and ordering and the documents view for contents.
+and ordering and the documents view for contents. Cells of one notebook are
+commonly distinguished only by URI fragment, which is why the [[Documents]]
+identity key keeps it (ADR 0035).
 _Avoid_: Cell document (it obscures the distinction between notebook metadata
 and the cell's [[Document]] text).
 

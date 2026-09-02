@@ -391,6 +391,32 @@ impl Documents {
         removed
     }
 
+    /// Reinstate a snapshot taken before a mutation, restoring its text,
+    /// version, and byte accounting.
+    ///
+    /// One `notebookDocument/didChange` can edit several cell Documents, and a
+    /// refusal partway through must leave every earlier cell exactly as it was.
+    /// Restoring needs no budget check: the snapshot's bytes were already
+    /// accounted for when it was the store's current state.
+    pub(crate) fn restore(&self, document: Document) {
+        let mut inner = self.inner.write().unwrap();
+        let key = UriKey::new(&document.uri);
+        let replaced_bytes = inner
+            .by_uri
+            .get(&key)
+            .map(|current| current.text.len_bytes())
+            .unwrap_or(0);
+        inner.document_bytes = inner.document_bytes - replaced_bytes + document.text.len_bytes();
+        inner.by_uri.insert(key, document);
+        self.trace.resource_budget(
+            Resource::Documents,
+            ResourceAction::Update,
+            inner.by_uri.len(),
+            inner.max_documents,
+            Some((inner.document_bytes, inner.max_document_bytes)),
+        );
+    }
+
     /// Release every connection-owned document and its byte accounting.
     pub(crate) fn clear(&self) {
         let mut inner = self.inner.write().unwrap();
