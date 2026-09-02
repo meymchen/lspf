@@ -3,4 +3,4 @@
 # Open target/coverage/html/index.html in a browser to inspect.
 # `worker-channel` is wasm32-only (ADR 0020), so "all native features" is
 # spelled out rather than `--all-features`.
-coverage = "llvm-cov --features stdio,tcp,websocket,proposed --all-targets --html --output-dir target/coverage"
+coverage = "llvm-cov --features stdio,tcp,websocket --all-targets --html --output-dir target/coverage"

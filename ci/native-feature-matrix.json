@@ -18,13 +18,8 @@
     },
     {
       "name": "all-native-features",
-      "cargo_args": "--no-default-features --features stdio,tcp,websocket,proposed,testing",
+      "cargo_args": "--no-default-features --features stdio,tcp,websocket,testing",
       "msrv_rustflags": "-D warnings"
-    },
-    {
-      "name": "proposed",
-      "cargo_args": "--no-default-features --features proposed",
-      "msrv_rustflags": ""
     }
   ]
 }

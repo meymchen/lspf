@@ -1008,20 +1008,3 @@ async fn the_full_catalog_keeps_command_registration_order() {
         "the command list is de-duplicated and registration-order stable"
     );
 }
-
-/// Enabling the `proposed` Cargo feature must not move the catalog boundary
-/// (issue #108): the full-catalog capability bytes stay pinned to the fixture.
-/// The feature now exposes only compatibility aliases for outgoing request
-/// types, so the Router catalog cannot change.
-#[cfg(feature = "proposed")]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_proposed_feature_leaves_the_stable_catalog_untouched() {
-    let (wire, outcome) = initialize_wire(full_catalog()).await;
-    assert_eq!(outcome, Outcome::Exit { code: 1 });
-
-    let fixture = include_str!("fixtures/full_catalog_capabilities.json").trim_end();
-    assert_eq!(
-        wire, fixture,
-        "enabling `proposed` must not change the stable capability snapshot"
-    );
-}

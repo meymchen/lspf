@@ -83,7 +83,7 @@ fn vscode_has_quick_full_and_example_tasks() {
             "test",
             "--workspace",
             "--features",
-            "stdio,tcp,websocket,proposed",
+            "stdio,tcp,websocket",
             "--all-targets"
         ])
     );
@@ -208,7 +208,7 @@ fn zed_has_quick_full_run_and_debug_entries() {
             "test",
             "--workspace",
             "--features",
-            "stdio,tcp,websocket,proposed",
+            "stdio,tcp,websocket",
             "--all-targets"
         ])
     );

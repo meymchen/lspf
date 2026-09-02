@@ -147,24 +147,18 @@ async fn watch_files(client: &ClientHandle) -> Result<(), ClientError> {
 
 ## Workspace refresh
 
-Five helpers ask the client to re-pull a stable workspace feature —
+Seven helpers ask the client to re-pull a stable workspace feature —
 [`refresh_code_lenses`](lspf::ClientHandle::refresh_code_lenses),
 [`refresh_diagnostics`](lspf::ClientHandle::refresh_diagnostics),
 [`refresh_inlay_hints`](lspf::ClientHandle::refresh_inlay_hints),
-[`refresh_inline_values`](lspf::ClientHandle::refresh_inline_values), and
-[`refresh_semantic_tokens`](lspf::ClientHandle::refresh_semantic_tokens). Each
-takes no parameters and returns the client's `null` acknowledgement as `()`;
-the helper owns no recomputation policy, and the framework keeps no lens,
-diagnostic, hint, value, or token state for it to touch.
-
-With the non-default `proposed` Cargo feature,
-[`refresh_folding_ranges`](lspf::ClientHandle::refresh_folding_ranges) and
+[`refresh_inline_values`](lspf::ClientHandle::refresh_inline_values),
+[`refresh_semantic_tokens`](lspf::ClientHandle::refresh_semantic_tokens),
+[`refresh_folding_ranges`](lspf::ClientHandle::refresh_folding_ranges), and
 [`refresh_text_document_content`](lspf::ClientHandle::refresh_text_document_content)
-join the surface, using request markers from
-[`lspf::proposed`](lspf::proposed) because `lsp-types` 0.97.x lacks them.
-Enabling the feature only adds API; it never changes the advertised
-capabilities. The default surface contains no proposed, draft, or notebook
-method.
+from LSP 3.18. All except `refresh_text_document_content` take no parameters;
+that helper names the target document URI. Each returns the client's `null`
+acknowledgement as `()`. The helpers trigger no recomputation, and the
+framework stores no feature state for them.
 
 ## Work-done progress
 

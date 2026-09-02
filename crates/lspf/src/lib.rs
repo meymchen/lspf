@@ -3,9 +3,7 @@
 //! See `CONTEXT.md` and `docs/adr/` at the repository root for the domain
 //! language and the architectural decisions that shape this crate.
 //!
-//! The default documentation covers the stable LSP surface. Compatibility
-//! aliases in the `proposed` module appear only when the `proposed` feature is
-//! enabled.
+//! The public protocol surface follows the stable LSP specification.
 
 #![deny(missing_docs)]
 // A protocol-only feature row intentionally has no serving engine. The
@@ -65,8 +63,6 @@ mod file_provider;
 #[doc(hidden)]
 pub mod fuzzing;
 mod progress;
-#[cfg(feature = "proposed")]
-pub mod proposed;
 mod raw;
 mod resource_policy;
 mod runtime;

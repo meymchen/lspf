@@ -298,17 +298,13 @@ never add, replace, or remove a local Router entry and never recompute
 
 ### Protocol stability boundary
 
-The default capability catalog targets stable LSP 3.17. lspf pins
-`lsp-types` to the `0.97.x` release line, consistent with ADR 0014; updating
-outside that line requires an explicit compatibility decision.
+The capability catalog exposes only protocol items that lspf treats as stable.
+It has no draft-only Cargo feature. If a future draft item needs one, adding a
+new opt-in feature does not change the registration and freeze rules in this
+ADR.
 
-Any proposed method or 3.18-draft method, descriptor, capability field, marker
-re-export, or helper is available only behind lspf's `proposed` Cargo feature.
-Enabling `proposed` extends the catalog without changing the registration and
-freeze rules in this ADR. Stable applications do not see or advertise those
-items by default.
-
-`workspace/textDocumentContent/refresh` is not a default stable helper.
+The folding-range and text-document-content refresh requests are stable LSP
+3.18 helpers on `ClientHandle`.
 Notebook methods and notebook protocol types are excluded from the v1 Router
 catalog, matching ADR 0008. A custom marker can still name an application
 extension method, but doing so does not make it a catalog feature or advertise
@@ -323,7 +319,7 @@ initialization-dependent registrations.
 
 We rejected open implementation of `FeatureSpec`. Allowing downstream
 pseudo-standard descriptors would make lspf responsible for merging arbitrary
-capability fragments and would erase the stable-versus-proposed boundary.
+capability fragments and would erase the stable-versus-draft boundary.
 Typed custom `Request` and `Notification` markers provide the extension seam
 without claiming catalog support.
 
@@ -358,7 +354,7 @@ which simplifies concurrent dispatch. Servers that accept multiple clients
 must construct one `Server<S>` per connection and choose explicitly whether
 their application state is shared above those servers.
 
-The sealed catalog makes adding a stable or proposed standard feature an lspf
+The sealed catalog makes adding a stable or draft standard feature an lspf
 release task: the implementation must add its descriptor, erased adaptation,
 capability merge rule, and tests. In return, downstream users cannot create
 capability combinations the framework does not know how to validate.
@@ -430,7 +426,7 @@ The builder and Router milestones must add public-interface tests proving:
 - capabilities are computed from the permanently frozen Router after a
   successful transaction;
 - dynamic-registration helpers do not mutate or recompute the local Router;
-- default builds expose only stable 3.17 catalog entries, while `proposed`
-  builds expose draft entries without exposing notebook support; and
+- default builds expose only catalog entries lspf treats as stable, with no
+  draft or notebook support; and
 - one `Server` rejects a second connection lifecycle while two separately
   built servers operate independently.

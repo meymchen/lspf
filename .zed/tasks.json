@@ -18,7 +18,7 @@
       "test",
       "--workspace",
       "--features",
-      "stdio,tcp,websocket,proposed",
+      "stdio,tcp,websocket",
       "--all-targets"
     ],
     "cwd": "$ZED_WORKTREE_ROOT"

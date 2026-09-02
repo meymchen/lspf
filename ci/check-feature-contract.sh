@@ -140,63 +140,20 @@ do
         "the WASM-only build must not enable the Tokio runtime"
 done
 
-proposed_features=$(cargo tree \
-    -p lspf \
-    --locked \
-    --no-default-features \
-    --features proposed \
-    -e normal,features \
-    -i lspf \
-    --prefix none)
-for transport_feature in \
-    'lspf feature "runtime-tokio"' \
-    'lspf feature "stdio"' \
-    'lspf feature "tcp"' \
-    'lspf feature "websocket"' \
-    'lspf feature "wasm"' \
-    'lspf feature "worker-channel"'
-do
-    assert_excludes \
-        "$proposed_features" \
-        "$transport_feature" \
-        "proposed must remain independent of every Transport feature"
-done
-for feature in stdio tcp websocket wasm worker-channel
-do
-    feature_graph=$(cargo tree \
-        -p lspf \
-        --locked \
-        --no-default-features \
-        --features "$feature" \
-        -e normal,features \
-        -i lspf \
-        --prefix none)
-    assert_excludes \
-        "$feature_graph" \
-        'lspf feature "proposed"' \
-        "Transport feature '$feature' must remain independent of proposed"
-done
-
-# Compile every supported selection here, including `proposed` as an
-# orthogonal addition. This is deliberately more exhaustive than the test
-# matrix: this gate owns the public target/feature contract.
+# Compile every supported selection here. This is deliberately more exhaustive
+# than the test matrix: this gate owns the public target/feature contract.
 for features in "${NATIVE_FEATURE_SELECTIONS[@]}"
 do
     if [[ $features == none ]]; then
         cargo check -p lspf --locked --no-default-features
-        cargo check -p lspf --locked --no-default-features --features proposed
     else
         cargo check -p lspf --locked --no-default-features --features "$features"
-        cargo check -p lspf --locked --no-default-features \
-            --features "$features,proposed"
     fi
 done
 for features in "${WASM_FEATURE_SELECTIONS[@]}"
 do
     cargo check -p lspf --locked --target wasm32-unknown-unknown \
         --no-default-features --features "$features"
-    cargo check -p lspf --locked --target wasm32-unknown-unknown \
-        --no-default-features --features "$features,proposed"
 done
 
 expect_compile_error \

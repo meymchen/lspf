@@ -222,8 +222,8 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: ./.github/actions/setup-rust
       - run: bash ci/test-check-editor-validation.sh
-      - run: cargo test --workspace --features stdio,tcp,websocket,proposed,testing --all-targets
-      - run: cargo test --workspace --features stdio,tcp,websocket,proposed,testing --doc
+      - run: cargo test --workspace --features stdio,tcp,websocket,testing --all-targets
+      - run: cargo test --workspace --features stdio,tcp,websocket,testing --doc
 
   native-lifecycle:
     name: native lifecycle (${{ matrix.name }})
@@ -287,7 +287,7 @@ jobs:
       - name: Test the test-coverage gate behavior
         run: bash ci/test-check-test-coverage.sh
       - name: Exercise the whole workspace
-        run: cargo llvm-cov --workspace --features stdio,tcp,websocket,proposed,testing --all-targets --no-report
+        run: cargo llvm-cov --workspace --features stdio,tcp,websocket,testing --all-targets --no-report
       - name: Generate human- and machine-readable reports
         run: |
           cargo llvm-cov report --html --output-dir target/test-coverage

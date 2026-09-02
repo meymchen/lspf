@@ -32,7 +32,7 @@ readonly -a WASM_FEATURE_SELECTIONS=(
 # only the core surface and the additive maximal surface for each target.
 readonly -a PUBLIC_API_SURFACES=(
     'native|none'
-    'native|stdio,tcp,websocket,proposed,testing'
-    'wasm32-unknown-unknown|wasm,proposed'
-    'wasm32-unknown-unknown|worker-channel,proposed'
+    'native|stdio,tcp,websocket,testing'
+    'wasm32-unknown-unknown|wasm'
+    'wasm32-unknown-unknown|worker-channel'
 )

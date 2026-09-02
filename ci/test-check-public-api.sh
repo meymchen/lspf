@@ -114,7 +114,7 @@ assert_report '
           and (.findingsSha256 | test("^[0-9a-f]{64}$")))
     and (.rows[] | select(
             .target == "wasm32-unknown-unknown"
-            and .features == "wasm,proposed")
+            and .features == "wasm")
         | (.command | contains("RUSTDOCFLAGS="))
           and ((.command | contains("RUSTFLAGS=")) | not))
 '

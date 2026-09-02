@@ -31,16 +31,12 @@ document() {
 }
 
 # Default is a documented selection in its own right. The loop then mirrors
-# every supported native selection from the support contract and builds each
-# stable surface again with the orthogonal proposed API enabled.
+# every supported native selection from the support contract.
 echo "Documenting native default features"
 default_args=(-p lspf --no-deps --locked --target x86_64-unknown-linux-gnu)
 cargo doc "${default_args[@]}"
-echo "Documenting native default features plus proposed"
-cargo doc "${default_args[@]}" --features proposed
 
 document x86_64-unknown-linux-gnu
-document x86_64-unknown-linux-gnu proposed
 
 for features in "${NATIVE_FEATURE_SELECTIONS[@]}"
 do
@@ -48,15 +44,13 @@ do
         continue
     fi
     document x86_64-unknown-linux-gnu "$features"
-    document x86_64-unknown-linux-gnu "$features,proposed"
 done
 
 # WASM supports its runtime-only custom-Transport surface and the first-party
-# worker-channel adapter. Proposed is independent of both selections.
+# worker-channel adapter.
 for features in "${WASM_FEATURE_SELECTIONS[@]}"
 do
     document wasm32-unknown-unknown "$features"
-    document wasm32-unknown-unknown "$features,proposed"
 done
 
 echo "Public API documentation contract verified"

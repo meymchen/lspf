@@ -56,9 +56,9 @@ target to this matrix.
 ## Cargo feature contract
 
 Default features select `stdio`. The rows below cover every supported feature
-selection. Features in the same supported native row may be combined;
-`proposed` may be added to any supported row, and `testing` may be added to any
-native row. No other cross-target combination is supported.
+selection. Features in the same supported native row may be combined, and
+`testing` may be added to any native row. No other cross-target combination is
+supported.
 
 | Target family | Feature selection | Status | Enforcement gate |
 | --- | --- | --- | --- |
@@ -76,13 +76,10 @@ native row. No other cross-target combination is supported.
 | `wasm32-unknown-unknown` | default features or `stdio` | Unsupported | Not applicable; this selection is outside the support contract |
 | `wasm32-unknown-unknown` | `tcp` or `websocket` | Intentionally invalid | CI `feature-contract` checks the compile-time diagnostics |
 | `wasm32-unknown-unknown` | `testing` | Intentionally invalid | CI `feature-contract` checks the compile-time diagnostic |
-| Any supported row | add `proposed` | Supported as an unstable API surface; it never selects a runtime or Transport | CI `msrv` row `proposed`, CI `native-matrix`, and CI `test` |
-
 The [Transport guide](./docs/guides/transports.md) gives build commands and
 describes the APIs enabled by each feature. CI `feature-contract` compiles
-every supported selection with and without `proposed`. It also checks that
-Transport-specific dependencies do not leak into the default build and that
-`proposed` stays independent of every Transport.
+every supported selection and checks that Transport-specific dependencies do
+not leak into the default build.
 
 Pull requests use a fast feedback path: `feature-contract`, maximal workspace
 tests, public documentation, packaging, compatibility, security, WASM, and the
@@ -107,16 +104,12 @@ loosening an input requirement is normally compatible. Changing a default
 feature, removing a feature, tightening a public bound, or dropping a
 supported target is breaking.
 
-APIs behind `proposed` track draft LSP specifications. A patch release does
-not intentionally break them, but a minor release may change or remove them
-without a deprecation cycle. Such changes still appear in the changelog.
-
 CI `public API compatibility` compares the crate with the latest version on
 crates.io, which is the maintained baseline. The exhaustive `feature-contract`
 and public-docs gates own combination correctness. Compatibility checks the
 core and additive maximal API surfaces for native and WASM targets: native
-without features, native with `stdio,tcp,websocket,proposed,testing`, WASM with
-`wasm,proposed`, and WASM with `worker-channel,proposed`. The job uploads
+without features, native with `stdio,tcp,websocket,testing`, WASM with `wasm`,
+and WASM with `worker-channel`. The job uploads
 `public-api-compatibility-report`, a JSON artifact containing the baseline,
 current version, command output, result, and exit code for every surface.
 

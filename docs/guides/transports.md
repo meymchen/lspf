@@ -42,7 +42,6 @@ adapter; keep the default features when using stdio.
 | `runtime-tokio` | Through a native Transport | `tokio` | Native execution for `Server::serve`; no I/O adapter by itself |
 | `wasm` | No | `wasm-bindgen-futures` | WASM execution for `Server::serve`; no I/O adapter by itself |
 | `worker-channel` | No | `wasm`, `js-sys`, `wasm-bindgen`, `web-sys` | `worker_channel` and its `MessagePort` Transport types on `wasm32` |
-| `proposed` | No | Nothing else | Draft LSP types and client helpers; independent of every Transport |
 | `testing` | No | `runtime-tokio`, `tokio/test-util` | Native in-memory Transport, scripted peer, wire capture, virtual clock, and lifecycle journeys |
 
 Application code also lists dependencies it names directly. For example, a
@@ -66,8 +65,6 @@ selected native Transport uses Tokio internally.
 | `wasm32-unknown-unknown` default or `stdio` | Unsupported | stdio is a native adapter; disable default features |
 | `wasm32-unknown-unknown` with `tcp` or `websocket` | Intentionally invalid | These adapters require native Tokio sockets and emit a compile error |
 | `wasm32-unknown-unknown` with `testing` | Intentionally invalid | The deterministic testing surface uses Tokio's native virtual clock |
-| Any supported row plus `proposed` | Supported | `proposed` adds protocol API and selects no Transport or runtime |
-
 Do not combine native adapters with `worker-channel` in one build. A project
 that ships native and WASM artifacts selects their features in separate Cargo
 commands.
