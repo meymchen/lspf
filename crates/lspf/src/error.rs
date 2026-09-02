@@ -221,6 +221,14 @@ pub enum LspError {
     #[error("content modified")]
     ContentModified,
 
+    /// A syntactically valid request failed (`-32803`).
+    #[error("{0}")]
+    RequestFailed(String),
+
+    /// The server cancelled the request (`-32802`).
+    #[error("{0}")]
+    ServerCancelled(String),
+
     /// A request arrived before initialization completed (`-32002`).
     #[error("server not initialized")]
     ServerNotInitialized,
@@ -265,6 +273,8 @@ impl LspError {
             Self::MethodNotFound(_) => -32601,
             Self::RequestCancelled => -32800,
             Self::ContentModified => -32801,
+            Self::RequestFailed(_) => -32803,
+            Self::ServerCancelled(_) => -32802,
             Self::ServerNotInitialized => -32002,
             Self::InvalidRequest(_) => -32600,
             Self::ServerError { code, .. } => *code,
@@ -277,7 +287,9 @@ impl LspError {
             Self::Internal(m)
             | Self::InvalidParams(m)
             | Self::MethodNotFound(m)
-            | Self::InvalidRequest(m) => m.clone(),
+            | Self::InvalidRequest(m)
+            | Self::RequestFailed(m)
+            | Self::ServerCancelled(m) => m.clone(),
             Self::RequestCancelled => "request cancelled".to_string(),
             Self::ContentModified => "content modified".to_string(),
             Self::ServerNotInitialized => "server not initialized".to_string(),

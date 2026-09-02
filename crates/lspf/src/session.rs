@@ -15,7 +15,6 @@ use futures_channel::mpsc::UnboundedReceiver;
 use futures_util::FutureExt;
 use futures_util::future::{Either, select};
 use futures_util::select_biased;
-use gen_lsp_types::LspErrorCodes;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Span, warn};
 
@@ -594,11 +593,9 @@ where
                     handler_timeout.finish(crate::telemetry::DeadlineAction::Expired);
                     cancellation.cancel();
                     let _ = completion.now_or_never();
-                    ServiceResult::Error(LspError::ServerError {
-                        code: LspErrorCodes::ServerCancelled.into(),
-                        message: HANDLER_DEADLINE_EXPIRED.to_string(),
-                        data: None,
-                    })
+                    ServiceResult::Error(LspError::ServerCancelled(
+                        HANDLER_DEADLINE_EXPIRED.to_string(),
+                    ))
                 }
             }
         }
@@ -607,7 +604,7 @@ where
         ServiceResult::Error(LspError::RequestCancelled) => {
             crate::telemetry::DeadlineAction::Cancelled
         }
-        ServiceResult::Error(LspError::ServerError { message, .. })
+        ServiceResult::Error(LspError::ServerCancelled(message))
             if message == HANDLER_DEADLINE_EXPIRED =>
         {
             crate::telemetry::DeadlineAction::Expired
@@ -1027,7 +1024,7 @@ fn completion_kind(result: &std::result::Result<Bytes, LspError>) -> Completion 
     match result {
         Ok(_) => Completion::Success,
         Err(LspError::RequestCancelled) => Completion::Cancelled,
-        Err(LspError::ServerError { message, .. }) if message == HANDLER_DEADLINE_EXPIRED => {
+        Err(LspError::ServerCancelled(message)) if message == HANDLER_DEADLINE_EXPIRED => {
             Completion::DeadlineExpired
         }
         Err(_) => Completion::Error,

@@ -1,10 +1,11 @@
-use gen_lsp_types::PublishDiagnosticsParams;
+use gen_lsp_types::{ProgressToken, PublishDiagnosticsParams};
 use tokio_util::sync::CancellationToken;
 use tracing::Span;
 
 use crate::client::ClientHandle;
 use crate::documents::DocumentsView;
 use crate::error::ClientError;
+use crate::progress::{ProgressHandle, ProgressOptions};
 use crate::raw::RequestId;
 use crate::workspace::Workspace;
 
@@ -24,6 +25,7 @@ pub struct ServerContext {
     /// observes one — there is no workspace-less dispatch.
     pub(crate) workspace: Workspace,
     pub(crate) cancellation: Option<CancellationToken>,
+    pub(crate) work_done_token: Option<ProgressToken>,
 }
 
 impl ServerContext {
@@ -39,6 +41,7 @@ impl ServerContext {
             client,
             workspace,
             cancellation: None,
+            work_done_token: None,
         }
     }
 
@@ -49,11 +52,17 @@ impl ServerContext {
             client,
             workspace,
             cancellation: None,
+            work_done_token: None,
         }
     }
 
     pub(crate) fn with_cancellation(mut self, cancellation: CancellationToken) -> Self {
         self.cancellation = Some(cancellation);
+        self
+    }
+
+    pub(crate) fn with_work_done_token(mut self, token: Option<ProgressToken>) -> Self {
+        self.work_done_token = token;
         self
     }
 
@@ -85,6 +94,21 @@ impl ServerContext {
     /// A cheap clone of the typed handle for this connection's LSP client.
     pub fn client(&self) -> ClientHandle {
         self.client.clone()
+    }
+
+    /// Begin progress on the token supplied with this inbound request.
+    ///
+    /// Returns `Ok(None)` when the request carried no `workDoneToken`. When a
+    /// token is present, this sends the begin notification directly on that
+    /// token without a `window/workDoneProgress/create` round trip.
+    pub fn begin_progress(
+        &self,
+        options: ProgressOptions,
+    ) -> Result<Option<ProgressHandle>, ClientError> {
+        self.work_done_token
+            .clone()
+            .map(|token| self.client.begin_progress_with_token(token, options))
+            .transpose()
     }
 
     /// The connection's [`Workspace`], established from `InitializeParams`

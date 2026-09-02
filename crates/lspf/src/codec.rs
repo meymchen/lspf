@@ -28,6 +28,23 @@ pub(crate) fn decode_value(params: &Bytes) -> Result<Value, LspError> {
     decode_params(params)
 }
 
+/// Read one optional token field from already-decoded request parameters.
+///
+/// Both endpoint directions use this lookup so work-done and partial-result
+/// token handling agree on missing and explicit-null fields.
+pub(crate) fn request_token<T: DeserializeOwned>(
+    params: &Value,
+    field: &str,
+) -> Result<Option<T>, serde_json::Error> {
+    let Some(token) = params.get(field) else {
+        return Ok(None);
+    };
+    if token.is_null() {
+        return Ok(None);
+    }
+    serde_json::from_value(token.clone()).map(Some)
+}
+
 /// Convert one typed handler result into the decoded, method-erased value that
 /// unwinds through the Service stack.
 pub(crate) fn erase_value<R: Serialize>(value: R) -> Result<Value, LspError> {

@@ -346,8 +346,10 @@ impl SharedProgress {
     }
 }
 
-/// The connection-scoped handle for one work-done progress operation,
-/// created by [`ClientHandle::begin_progress`].
+/// The connection-scoped handle for one work-done progress operation, created
+/// with a server-allocated token by [`ClientHandle::begin_progress`] or with
+/// the inbound request's token by
+/// [`ServerContext::begin_progress`](crate::ServerContext::begin_progress).
 ///
 /// The handle reports through [`ProgressHandle::report`] and finishes through
 /// [`ProgressHandle::end`], which consumes it. Dropping an active handle
@@ -436,6 +438,50 @@ impl Drop for ProgressHandle {
 }
 
 impl ClientHandle {
+    pub(crate) fn begin_progress_with_token(
+        &self,
+        token: ProgressToken,
+        options: ProgressOptions,
+    ) -> Result<ProgressHandle, ClientError> {
+        if let Some(percentage) = options.percentage
+            && percentage > 100
+        {
+            return Err(ClientError::InvalidHelperParams(format!(
+                "work-done begin percentage {percentage} is outside the range 0..=100"
+            )));
+        }
+
+        let registry = self.progress_registry().clone();
+        let cancellation = CancellationToken::new();
+        if !registry.register(token.clone(), options.cancellable, cancellation.clone()) {
+            return Err(ProgressError::UnknownToken.into());
+        }
+
+        let begin = ProgressParams {
+            token: token.clone(),
+            value: progress_value(WorkDoneProgressBegin {
+                title: options.title,
+                cancellable: Some(options.cancellable),
+                message: options.message,
+                percentage: options.percentage,
+            }),
+        };
+        if let Err(error) = self.notify_logged::<Progress>(begin) {
+            registry.remove(&token);
+            return Err(error);
+        }
+
+        Ok(ProgressHandle {
+            shared: SharedProgress::new(
+                self.clone(),
+                registry,
+                token,
+                options.cancellable,
+                cancellation,
+            ),
+        })
+    }
+
     /// Begin one connection-scoped work-done progress operation (LSP 3.17).
     ///
     /// The sequence is one failure-safe lifecycle: allocate a
@@ -479,39 +525,7 @@ impl ClientHandle {
         })
         .await?;
 
-        let cancellation = CancellationToken::new();
-        if !registry.register(token.clone(), options.cancellable, cancellation.clone()) {
-            // Only a client-originated registration racing in between
-            // allocation and here can occupy an allocated token.
-            registry.remove(&token);
-            return Err(ProgressError::UnknownToken.into());
-        }
-
-        let begin = ProgressParams {
-            token: token.clone(),
-            value: progress_value(WorkDoneProgressBegin {
-                title: options.title,
-                cancellable: Some(options.cancellable),
-                message: options.message,
-                percentage: options.percentage,
-            }),
-        };
-        if let Err(error) = self.notify_logged::<Progress>(begin) {
-            // The begin never reached the wire: reclaim the token so the
-            // failed lifecycle leaves no registered token behind.
-            registry.remove(&token);
-            return Err(error);
-        }
-
-        Ok(ProgressHandle {
-            shared: SharedProgress::new(
-                self.clone(),
-                registry,
-                token,
-                options.cancellable,
-                cancellation,
-            ),
-        })
+        self.begin_progress_with_token(token, options)
     }
 }
 
@@ -523,6 +537,7 @@ mod tests {
     use tracing_subscriber::layer::SubscriberExt;
 
     use super::*;
+    use crate::LspError;
     use crate::client::{OutboundQueue, OutboundRegistry};
     use crate::raw::{RawMessage, RequestId};
 
@@ -777,11 +792,12 @@ mod tests {
                 let RequestId::Number(id) = id else {
                     panic!("numeric id")
                 };
+                let failure = LspError::RequestFailed("Request failed".into());
                 assert!(outbound.complete(
                     id as u32,
                     Err(crate::raw::JsonRpcError {
-                        code: -32803,
-                        message: "Request failed".into(),
+                        code: failure.code(),
+                        message: failure.message(),
                         data: None,
                     })
                 ));

@@ -32,7 +32,7 @@ use futures_channel::mpsc::UnboundedReceiver;
 use gen_lsp_types::{
     DidChangeConfigurationParams, DidChangeTextDocumentParams, DidChangeWorkspaceFoldersParams,
     DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
-    InitializeParams, InitializedParams, LspErrorCodes, Save, ServerInfo, SetTraceParams,
+    InitializeParams, InitializedParams, ProgressToken, Save, ServerInfo, SetTraceParams,
     TextDocumentSyncKind, TextDocumentSyncOptions, TraceValue, WillSaveTextDocumentParams,
     WorkDoneProgressCancelParams, WorkspaceFoldersServerCapabilities,
 };
@@ -46,7 +46,7 @@ use crate::builder::{
 };
 use crate::capability::GeneratedCapabilities;
 use crate::client::ClientHandle;
-use crate::codec::{decode_params, decode_value, encode_body};
+use crate::codec::{decode_params, decode_value, encode_body, request_token};
 use crate::context::ServerContext;
 use crate::documents::{DocumentMutationError, Documents};
 use crate::error::Error;
@@ -520,11 +520,7 @@ where
                         );
                         self.protocol.reject_inbound(
                             id,
-                            LspError::ServerError {
-                                code: LspErrorCodes::ServerCancelled.into(),
-                                message: INBOUND_CAPACITY_EXHAUSTED.to_string(),
-                                data: None,
-                            },
+                            LspError::ServerCancelled(INBOUND_CAPACITY_EXHAUSTED.to_string()),
                         );
                         return Flow::Continue;
                     }
@@ -630,12 +626,36 @@ where
                                 return Flow::Continue;
                             }
                         };
+                        let work_done_token =
+                            match request_token::<ProgressToken>(&params, "workDoneToken") {
+                                Ok(token) => token,
+                                Err(error) => {
+                                    self.protocol.complete_inbound(
+                                        reservation,
+                                        Err(LspError::invalid_params(error)),
+                                    );
+                                    return Flow::Continue;
+                                }
+                            };
+                        let ctx = ServerContext::for_request(
+                            reservation.id.clone(),
+                            span.clone(),
+                            self.client.clone(),
+                            self.established_workspace(),
+                        )
+                        .with_cancellation(
+                            cancellation
+                                .as_ref()
+                                .expect("non-initialize requests are cancellable")
+                                .clone(),
+                        )
+                        .with_work_done_token(work_done_token);
                         self.spawn_service_request(
                             service,
-                            span,
                             reservation,
                             method.into_owned(),
                             params,
+                            ctx,
                             cancellation.expect("non-initialize requests are cancellable"),
                             self.protocol.handler_timeout(),
                         );
@@ -1117,6 +1137,7 @@ where
             file_provider,
             self.client.shared_trace(),
         );
+        let work_done_token = params.work_done_progress_params.work_done_token.clone();
         self.workspace = Some(established.clone());
 
         let position_encoding = self.documents.negotiate_position_encoding(&params);
@@ -1155,7 +1176,8 @@ where
                     span.clone(),
                     self.client.clone(),
                     established,
-                );
+                )
+                .with_work_done_token(work_done_token);
                 match hook
                     .invoke((
                         Arc::clone(&self.state),
@@ -1213,16 +1235,14 @@ where
     fn spawn_service_request(
         &mut self,
         service: UserService<S>,
-        span: Span,
         reservation: Reservation,
         method: String,
         params: serde_json::Value,
+        ctx: ServerContext,
         cancellation: CancellationToken,
         default_timeout: Duration,
     ) {
         let state = Arc::clone(&self.state);
-        let workspace = self.established_workspace();
-        let client = self.client.clone();
         let completion_gate = self.protocol.completion_gate();
         let permit = Arc::clone(&reservation._permit);
         let trace = self.trace;
@@ -1231,9 +1251,6 @@ where
                 let id = reservation.id.clone();
                 let trace_id = id.clone();
                 let trace_method = method.clone();
-                let cancellation_for_handler = cancellation.clone();
-                let ctx = ServerContext::for_request(id.clone(), span, client, workspace)
-                    .with_cancellation(cancellation_for_handler);
                 let handler_timeout = HandlerTimeout::new(
                     default_timeout,
                     trace,
