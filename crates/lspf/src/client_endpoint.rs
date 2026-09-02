@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use gen_lsp_types::{
     ClientCapabilities, ClientInfo, ExitNotification as Exit, InitializeParams,
     InitializeRequest as Initialize, InitializedNotification as Initialized, InitializedParams,
-    LspErrorCodes, ProgressNotification as Progress, ProgressParams, ShutdownRequest as Shutdown,
+    ProgressNotification as Progress, ProgressParams, ShutdownRequest as Shutdown,
     WorkDoneProgressCreateParams, WorkDoneProgressCreateRequest as WorkDoneProgressCreate,
     WorkDoneProgressParams,
 };
@@ -24,7 +24,7 @@ use tracing::{Instrument, Span, debug};
 use crate::builder::SharedHandler;
 use crate::client::ClientHandle;
 use crate::client_progress::{ClientProgressRegistry, CreateOutcome};
-use crate::codec::{decode_value, encode_body, encode_params, erase_value};
+use crate::codec::{decode_value, encode_body, encode_params, erase_value, request_token};
 use crate::error::{BuildError, LspError};
 use crate::failure::FailureReporter;
 use crate::raw::{RawMessage, RequestId};
@@ -423,7 +423,13 @@ impl ServerHandle {
     {
         self.lifecycle.ensure_running(R::METHOD)?;
         let params = encode_params(&params).map_err(ClientError::Serialize)?;
-        let token = work_done_token(&params)?;
+        let value = if params.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_slice(&params).map_err(ClientError::Serialize)?
+        };
+        let token: Option<gen_lsp_types::ProgressToken> =
+            request_token(&value, "workDoneToken").map_err(ClientError::Serialize)?;
         let _request_progress_guard = match token {
             Some(token) => {
                 if !self.progress.try_register_request(token.clone()) {
@@ -827,11 +833,7 @@ impl<R: Runtime> ClientEngine<R> {
             Err(InboundReserveError::CapacityExhausted) => {
                 self.protocol.reject_inbound(
                     id,
-                    LspError::ServerError {
-                        code: LspErrorCodes::ServerCancelled.into(),
-                        message: INBOUND_CAPACITY_EXHAUSTED.to_string(),
-                        data: None,
-                    },
+                    LspError::ServerCancelled(INBOUND_CAPACITY_EXHAUSTED.to_string()),
                 );
                 return;
             }
@@ -1004,24 +1006,6 @@ fn is_reserved_reverse_method(method: &str) -> bool {
         method,
         "initialize" | "initialized" | "shutdown" | "exit" | "$/cancelRequest"
     )
-}
-
-fn work_done_token(
-    params: &[u8],
-) -> std::result::Result<Option<gen_lsp_types::ProgressToken>, ClientError> {
-    if params.is_empty() {
-        return Ok(None);
-    }
-    let value = serde_json::from_slice::<Value>(params).map_err(ClientError::Serialize)?;
-    let Some(token) = value.get("workDoneToken") else {
-        return Ok(None);
-    };
-    if token.is_null() {
-        return Ok(None);
-    }
-    serde_json::from_value(token.clone())
-        .map(Some)
-        .map_err(ClientError::Serialize)
 }
 
 #[allow(deprecated)]

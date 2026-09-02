@@ -476,8 +476,13 @@ async fn create_remote_failure_sends_no_begin_over_a_connection() {
 
     let create = recv(&mut out_rx).await;
     let (create_id, _) = expect_request(&create, "window/workDoneProgress/create");
+    let failure = LspError::RequestFailed("Request failed".into());
     in_tx
-        .send(inbound_error_response(create_id, -32803, "Request failed"))
+        .send(inbound_error_response(
+            create_id,
+            failure.code(),
+            &failure.message(),
+        ))
         .unwrap();
 
     // The very next outbound message is the handler's response: the failed

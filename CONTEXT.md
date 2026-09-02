@@ -199,6 +199,9 @@ consumes the handle, enqueues one work-done end, and removes the token
 whether the enqueue succeeded or failed. A failed begin leaves no
 registered token behind, and dropping an active handle removes its token
 with a warning but performs no I/O and sends no implicit end.
+An inbound request's client-supplied work-done token is adopted through
+`ServerContext::begin_progress` instead: that path creates no token and sends
+no `window/workDoneProgress/create` request.
 `window/workDoneProgress/cancel` is a protocol-owned built-in against the
 same connection-local registry: a matching active and cancellable token
 fires the handle's `CancellationToken` without sending a work-done end —
@@ -241,7 +244,9 @@ view — and the [[ClientHandle]] for outgoing requests and
 notifications, plus the current request's scope (id, tracing span).
 It is the only way a handler reaches framework state — the user's own
 struct holds only user-owned state, and user code never constructs a
-`ServerContext`.
+`ServerContext`. On a request carrying a work-done token, it can begin the
+existing progress lifecycle on that token; otherwise no progress handle is
+available from the context.
 _Avoid_: Session, server-state.
 
 **Transport**:

@@ -7,9 +7,10 @@ use lspf::testing::{ClientJourney, MemoryTransport, ServerJourney, VirtualClock,
 use lspf::types::ClientCapabilities;
 use lspf::types::request::Request;
 use lspf::{
-    Client, ClientError, Outcome, RawMessage, ResourcePolicy, Server, Transport, TransportReader,
-    TransportWriter,
+    Client, ClientError, LspError, Outcome, ProgressOptions, RawMessage, RequestId, ResourcePolicy,
+    Server, ServerContext, Transport, TransportReader, TransportWriter,
 };
+use serde_json::{Value, json};
 
 enum NeverReply {}
 
@@ -17,6 +18,14 @@ impl Request for NeverReply {
     type Params = ();
     type Result = ();
     const METHOD: &'static str = "test/neverReply";
+}
+
+enum AdoptWorkDoneToken {}
+
+impl Request for AdoptWorkDoneToken {
+    type Params = Value;
+    type Result = Value;
+    const METHOD: &'static str = "test/adoptWorkDoneToken";
 }
 
 fn notification(method: &'static str) -> RawMessage {
@@ -109,6 +118,150 @@ async fn server_journey_runs_the_reusable_public_lifecycle() {
         .filter_map(|event| event.message().method().map(str::to_owned))
         .collect();
     assert_eq!(methods, ["initialize", "initialized", "shutdown", "exit"]);
+}
+
+#[tokio::test]
+async fn server_context_adopts_the_requests_work_done_token() {
+    let server = Server::builder(())
+        .request::<AdoptWorkDoneToken, _, _>(
+            |_state, ctx: ServerContext, _params, _cancellation| async move {
+                let progress = ctx
+                    .begin_progress(
+                        ProgressOptions::new("Indexing")
+                            .cancellable(true)
+                            .message("starting")
+                            .percentage(0),
+                    )
+                    .map_err(LspError::internal)?
+                    .expect("the request supplied a work-done token");
+                progress
+                    .report(Some("half".into()), Some(50))
+                    .map_err(LspError::internal)?;
+                let token = serde_json::to_value(progress.token()).map_err(LspError::internal)?;
+                progress
+                    .end(Some("done".into()))
+                    .map_err(LspError::internal)?;
+                Ok(token)
+            },
+        )
+        .build()
+        .unwrap();
+    let mut journey = ServerJourney::start(server).await.unwrap();
+
+    journey
+        .peer()
+        .send(RawMessage::Request {
+            id: RequestId::Number(9),
+            method: Cow::Borrowed(AdoptWorkDoneToken::METHOD),
+            params: Bytes::from_static(br#"{"workDoneToken":"client-token"}"#),
+        })
+        .unwrap();
+
+    let begin = journey.peer().recv().await.unwrap();
+    assert_eq!(begin.method(), Some("$/progress"));
+    let RawMessage::Notification { params, .. } = begin else {
+        panic!("the adopted token must not require a progress-create request");
+    };
+    assert_eq!(
+        serde_json::from_slice::<Value>(&params).unwrap(),
+        json!({
+            "token": "client-token",
+            "value": {
+                "kind": "begin",
+                "title": "Indexing",
+                "cancellable": true,
+                "message": "starting",
+                "percentage": 0
+            }
+        })
+    );
+
+    let report = journey.peer().recv().await.unwrap();
+    let RawMessage::Notification { params, .. } = report else {
+        panic!("expected a progress report");
+    };
+    assert_eq!(
+        serde_json::from_slice::<Value>(&params).unwrap(),
+        json!({
+            "token": "client-token",
+            "value": {
+                "kind": "report",
+                "cancellable": true,
+                "message": "half",
+                "percentage": 50
+            }
+        })
+    );
+
+    let end = journey.peer().recv().await.unwrap();
+    let RawMessage::Notification { params, .. } = end else {
+        panic!("expected a progress end");
+    };
+    assert_eq!(
+        serde_json::from_slice::<Value>(&params).unwrap(),
+        json!({
+            "token": "client-token",
+            "value": { "kind": "end", "message": "done" }
+        })
+    );
+
+    let response = journey.peer().recv().await.unwrap();
+    assert!(matches!(
+        response,
+        RawMessage::Response {
+            id: RequestId::Number(9),
+            result: Ok(ref result),
+        } if serde_json::from_slice::<Value>(result).unwrap() == json!("client-token")
+    ));
+
+    assert_eq!(journey.finish().await.unwrap(), Outcome::Exit { code: 0 });
+}
+
+#[tokio::test]
+async fn server_context_has_no_progress_handle_without_a_request_token() {
+    let server = Server::builder(())
+        .request::<AdoptWorkDoneToken, _, _>(
+            |_state, ctx: ServerContext, _params, _cancellation| async move {
+                let progress = ctx
+                    .begin_progress(ProgressOptions::new("unused"))
+                    .map_err(LspError::internal)?;
+                Ok(json!(progress.is_some()))
+            },
+        )
+        .build()
+        .unwrap();
+    let mut journey = ServerJourney::start(server).await.unwrap();
+
+    journey
+        .peer()
+        .send(RawMessage::Request {
+            id: RequestId::Number(9),
+            method: Cow::Borrowed(AdoptWorkDoneToken::METHOD),
+            params: Bytes::from_static(b"{}"),
+        })
+        .unwrap();
+
+    let response = journey.peer().recv().await.unwrap();
+    assert!(matches!(
+        response,
+        RawMessage::Response {
+            id: RequestId::Number(9),
+            result: Ok(ref result),
+        } if serde_json::from_slice::<Value>(result).unwrap() == json!(false)
+    ));
+
+    assert_eq!(journey.finish().await.unwrap(), Outcome::Exit { code: 0 });
+}
+
+#[test]
+fn reserved_lsp_errors_preserve_their_codes_and_messages() {
+    let request_failed = LspError::RequestFailed("index unavailable".into());
+    assert_eq!(request_failed.code(), -32803);
+    assert_eq!(request_failed.message(), "index unavailable");
+
+    let server_cancelled = LspError::ServerCancelled("handler deadline expired".into());
+    assert_eq!(server_cancelled.code(), -32802);
+    assert_eq!(server_cancelled.message(), "handler deadline expired");
 }
 
 #[tokio::test]

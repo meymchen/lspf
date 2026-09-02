@@ -42,6 +42,12 @@
       "target": "*",
       "features": "*",
       "findingsSha256": "1c1d2a3b33ce00aa9459253c40f7e0fd562372a50a5c874f2232ffaefd9ec915"
+    },
+    {
+      "baselineVersion": "0.11.0",
+      "target": "*",
+      "features": "*",
+      "findingsSha256": "e6902301d53e7131c8a5dc0389638bdff732d19639f5c817cfa0e4ffbbecfbe3"
     }
   ]
 }
