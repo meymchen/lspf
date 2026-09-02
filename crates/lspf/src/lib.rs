@@ -62,6 +62,7 @@ mod file_provider;
 #[cfg(all(feature = "fuzzing", not(target_arch = "wasm32")))]
 #[doc(hidden)]
 pub mod fuzzing;
+mod partial_result;
 mod progress;
 mod raw;
 mod resource_policy;
@@ -255,6 +256,7 @@ pub use file_provider::EmptyFileProvider;
 pub use file_provider::{FileProvider, MemoryFileProvider};
 #[cfg(all(not(target_arch = "wasm32"), feature = "runtime-tokio"))]
 pub use file_provider::{OsFileProvider, OsFileProviderBuilder};
+pub use partial_result::{PartialResultRequest, PartialResultSink};
 pub use progress::{ProgressHandle, ProgressOptions};
 pub use raw::{JsonRpcError, RawMessage, RequestId};
 pub use resource_policy::{ResourcePolicy, ResourcePolicyField};

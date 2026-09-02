@@ -637,6 +637,23 @@ where
                                     return Flow::Continue;
                                 }
                             };
+                        let partial_result_token =
+                            if crate::partial_result::supports_method(method.as_ref()) {
+                                match request_token::<ProgressToken>(&params, "partialResultToken")
+                                {
+                                    Ok(token) => token,
+                                    Err(error) => {
+                                        self.protocol.complete_inbound(
+                                            reservation,
+                                            Err(LspError::invalid_params(error)),
+                                        );
+                                        return Flow::Continue;
+                                    }
+                                }
+                            } else {
+                                None
+                            };
+                        let method = method.into_owned();
                         let ctx = ServerContext::for_request(
                             reservation.id.clone(),
                             span.clone(),
@@ -649,11 +666,12 @@ where
                                 .expect("non-initialize requests are cancellable")
                                 .clone(),
                         )
-                        .with_work_done_token(work_done_token);
+                        .with_work_done_token(work_done_token)
+                        .with_partial_result(method.clone(), partial_result_token);
                         self.spawn_service_request(
                             service,
                             reservation,
-                            method.into_owned(),
+                            method,
                             params,
                             ctx,
                             cancellation.expect("non-initialize requests are cancellable"),
@@ -1259,9 +1277,13 @@ where
                 );
                 let call =
                     IncomingCall::request(method, id, params, ctx, state, handler_timeout.clone());
+                let partial_result_scope = call.context().partial_result_scope();
                 let result =
                     run_handler_with_deadline(service.call(call), cancellation, handler_timeout)
                         .await;
+                if let Some(scope) = partial_result_scope {
+                    scope.finish();
+                }
                 let result = match result {
                     ServiceResult::Response(value) => encode_body(&value),
                     ServiceResult::Error(error) => Err(error),
