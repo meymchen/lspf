@@ -21,6 +21,14 @@ protect_breaking_commits = true
 # The default template, plus the indented commit body for breaking changes.
 # `upper_first` restores the sentence case of the existing entries, which
 # conventional commit subjects (lowercase by convention) would otherwise break.
+#
+# The `replace` chain rewrites the four spellings release-plz's `parse_header`
+# accepts for the unreleased heading. That regex is anchored to the start of the
+# document rather than the start of a line and takes the *last* match, so any of
+# those strings inside an indented commit body is read as the heading: release-plz
+# then strips everything above it from the entry it just generated, losing the
+# version heading and every group before the match. The rendered body is also
+# what the next release parses back out of this file, so it has to stay clean.
 body = """
 
 ## [{{ version }}]\
@@ -34,7 +42,12 @@ body = """
 {%- if commit.links %} ({% for link in commit.links %}[{{ link.text }}]({{ link.href }}){% endfor %}){% endif %}
 {%- if commit.breaking and commit.body %}
 
-{{ commit.body | trim | indent(prefix="  ", first=true) }}
+{{ commit.body | trim
+  | replace(from="## [Unreleased]", to="[Unreleased]")
+  | replace(from="## [unreleased]", to="[unreleased]")
+  | replace(from="## Unreleased", to="Unreleased")
+  | replace(from="## unreleased", to="unreleased")
+  | indent(prefix="  ", first=true) }}
 {%- endif %}
 {%- endfor %}
 {% endfor %}
