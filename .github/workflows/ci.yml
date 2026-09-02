@@ -7,10 +7,11 @@ name: CI
 # vacuously. A pull request that only edits an ADR would need an admin bypass to
 # merge. Running the pull-request jobs on those changes is what the checks cost.
 #
-# `push` keeps the list, where nothing is blocked and the saving is largest: a
-# docs-only commit on `main` skips the release-oriented matrices, coverage, soak
-# journeys, and evidence gates. These paths cannot change what the workspace
-# builds, tests, documents, or packages. `SECURITY.md` is deliberately absent:
+# `push` keeps the list, where nothing is blocked and avoiding even the planning
+# jobs is safe: these paths cannot change what the workspace builds, tests,
+# documents, packages, or releases. Other ordinary pushes run only release
+# planning and the write-capable release-plz policy gate; an authorized release
+# revision alone reruns the exact release gates. `SECURITY.md` is deliberately absent:
 # Gate A cites it as the implementation of the support-matrix and
 # compatibility-policy claims. `README.md` and `docs/guides/**` are absent too,
 # because they are compiled into rustdoc through `#[doc = include_str!]` and
@@ -39,12 +40,55 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  feature-matrix:
-    name: load native feature matrix
-    if: ${{ github.event_name == 'push' }}
+  release-context:
+    name: release context
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      pull-requests: read
+    outputs:
+      authorized: ${{ steps.release.outputs.authorized }}
+      build-checks: ${{ steps.changes.outputs.build-checks }}
+      markdown-checks: ${{ steps.changes.outputs.markdown-checks }}
+      pending: ${{ steps.release.outputs.pending }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Classify pull request changes
+        id: changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            bash ci/classify-ci-changes.sh "$BASE_SHA" "$HEAD_SHA"
+          else
+            echo 'build-checks=true' >>"$GITHUB_OUTPUT"
+            echo 'markdown-checks=true' >>"$GITHUB_OUTPUT"
+          fi
+      - name: Detect an authorized release revision
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            bash ci/detect-release-context.sh "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME"
+          else
+            echo 'pending=false' >>"$GITHUB_OUTPUT"
+            echo 'authorized=false' >>"$GITHUB_OUTPUT"
+            echo 'version=' >>"$GITHUB_OUTPUT"
+          fi
+
+  feature-matrix:
+    name: load native feature matrix
+    if: ${{ needs.release-context.outputs.build-checks == 'true' && (github.event_name != 'push' || needs.release-context.outputs.authorized == 'true') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    needs: release-context
     outputs:
       matrix: ${{ steps.matrix.outputs.value }}
     steps:
@@ -73,9 +117,11 @@ jobs:
 
   markdownlint:
     name: markdownlint
+    if: ${{ needs.release-context.outputs.markdown-checks == 'true' && (github.event_name != 'push' || needs.release-context.outputs.authorized == 'true') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    needs: release-context
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: DavidAnson/markdownlint-cli2-action@ded1f9488f68a970bc66ea5619e13e9b52e601cd # v23.2.0
@@ -91,18 +137,22 @@ jobs:
 
   fuzz-contract:
     name: fuzz contract
+    if: ${{ needs.release-context.outputs.build-checks == 'true' && (github.event_name != 'push' || needs.release-context.outputs.authorized == 'true') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    needs: release-context
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - run: bash ci/test-run-fuzz.sh
 
   fmt:
     name: fmt
+    if: ${{ needs.release-context.outputs.build-checks == 'true' && (github.event_name != 'push' || needs.release-context.outputs.authorized == 'true') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    needs: release-context
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: ./.github/actions/setup-rust
@@ -113,27 +163,35 @@ jobs:
 
   public-docs:
     name: public docs
+    if: ${{ needs.release-context.outputs.build-checks == 'true' && (github.event_name != 'push' || needs.release-context.outputs.authorized == 'true') }}
+    needs: release-context
     uses: ./.github/workflows/public-docs.yml
     permissions:
       contents: read
 
   packaged-crate:
     name: packaged crate
+    if: ${{ needs.release-context.outputs.build-checks == 'true' && (github.event_name != 'push' || needs.release-context.outputs.authorized == 'true') }}
+    needs: release-context
     uses: ./.github/workflows/packaged-crate.yml
     permissions:
       contents: read
 
   security:
     name: supply-chain security
+    if: ${{ needs.release-context.outputs.build-checks == 'true' && (github.event_name != 'push' || needs.release-context.outputs.authorized == 'true') }}
+    needs: release-context
     uses: ./.github/workflows/security.yml
     permissions:
       contents: read
 
   public-api:
     name: public API compatibility
+    if: ${{ needs.release-context.outputs.build-checks == 'true' && (github.event_name != 'push' || needs.release-context.outputs.authorized == 'true') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    needs: release-context
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: ./.github/actions/setup-rust
@@ -155,11 +213,13 @@ jobs:
 
   msrv:
     name: msrv
-    if: ${{ github.event_name == 'push' }}
+    if: ${{ needs.release-context.outputs.build-checks == 'true' && (github.event_name != 'push' || needs.release-context.outputs.authorized == 'true') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    needs: feature-matrix
+    needs:
+      - release-context
+      - feature-matrix
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.feature-matrix.outputs.matrix) }}
@@ -180,9 +240,11 @@ jobs:
 
   feature-contract:
     name: feature contract
+    if: ${{ needs.release-context.outputs.build-checks == 'true' && (github.event_name != 'push' || needs.release-context.outputs.authorized == 'true') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    needs: release-context
     env:
       RUSTUP_TOOLCHAIN: "1.98.0"
     steps:
@@ -195,11 +257,13 @@ jobs:
 
   native-matrix:
     name: native ${{ matrix.name }}
-    if: ${{ github.event_name == 'push' }}
+    if: ${{ needs.release-context.outputs.build-checks == 'true' && (github.event_name != 'push' || needs.release-context.outputs.authorized == 'true') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    needs: feature-matrix
+    needs:
+      - release-context
+      - feature-matrix
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.feature-matrix.outputs.matrix) }}
@@ -215,9 +279,11 @@ jobs:
 
   test:
     name: test
+    if: ${{ needs.release-context.outputs.build-checks == 'true' && (github.event_name != 'push' || needs.release-context.outputs.authorized == 'true') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    needs: release-context
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: ./.github/actions/setup-rust
@@ -227,9 +293,11 @@ jobs:
 
   native-lifecycle:
     name: native lifecycle (${{ matrix.name }})
+    if: ${{ needs.release-context.outputs.build-checks == 'true' && (github.event_name != 'push' || needs.release-context.outputs.authorized == 'true') }}
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
+    needs: release-context
     strategy:
       fail-fast: false
       matrix:
@@ -250,9 +318,11 @@ jobs:
 
   wasm:
     name: wasm
+    if: ${{ needs.release-context.outputs.build-checks == 'true' && (github.event_name != 'push' || needs.release-context.outputs.authorized == 'true') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    needs: release-context
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: ./.github/actions/setup-rust
@@ -273,10 +343,11 @@ jobs:
 
   test-coverage:
     name: test coverage
-    if: ${{ github.event_name == 'push' }}
+    if: ${{ needs.release-context.outputs.build-checks == 'true' && (github.event_name != 'push' || needs.release-context.outputs.authorized == 'true') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    needs: release-context
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: ./.github/actions/setup-rust
@@ -313,10 +384,11 @@ jobs:
 
   performance-baseline:
     name: Reproducible performance baseline
-    if: ${{ github.event_name == 'push' }}
+    if: ${{ github.event_name == 'push' && needs.release-context.outputs.authorized == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    needs: release-context
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: ./.github/actions/setup-rust
@@ -340,10 +412,11 @@ jobs:
 
   bounded-memory-soak:
     name: Bounded-memory soak journeys (${{ matrix.scenario }})
-    if: ${{ github.event_name == 'push' }}
+    if: ${{ github.event_name == 'push' && needs.release-context.outputs.authorized == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    needs: release-context
     strategy:
       fail-fast: false
       matrix:
@@ -388,10 +461,11 @@ jobs:
 
   gate-b-evidence:
     name: Gate B bounded-resource evidence
-    if: ${{ github.event_name == 'push' }}
+    if: ${{ github.event_name == 'push' && needs.release-context.outputs.authorized == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    needs: release-context
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: ./.github/actions/setup-rust
@@ -412,10 +486,11 @@ jobs:
 
   gate-c-evidence:
     name: Gate C endpoint evidence
-    if: ${{ github.event_name == 'push' }}
+    if: ${{ github.event_name == 'push' && needs.release-context.outputs.authorized == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    needs: release-context
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: ./.github/actions/setup-rust
@@ -434,10 +509,44 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+  merge-ready:
+    name: merge-ready
+    if: ${{ always() && github.event_name == 'pull_request' }}
+    needs:
+      - commit-messages
+      - release-context
+      - markdownlint
+      - feature-matrix
+      - fuzz-contract
+      - fmt
+      - public-docs
+      - packaged-crate
+      - security
+      - public-api
+      - msrv
+      - feature-contract
+      - native-matrix
+      - test
+      - native-lifecycle
+      - wasm
+      - test-coverage
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Require every applicable pre-merge check
+        env:
+          MERGE_READY_JOB_RESULTS: ${{ toJSON(needs) }}
+          BUILD_CHECKS: ${{ needs.release-context.outputs.build-checks }}
+          MARKDOWN_CHECKS: ${{ needs.release-context.outputs.markdown-checks }}
+        run: bash ci/check-merge-ready.sh "$GITHUB_EVENT_NAME" "$BUILD_CHECKS" "$MARKDOWN_CHECKS"
+
   gate-a-evidence:
     name: Gate A release evidence
-    if: ${{ always() && github.event_name == 'push' }}
+    if: ${{ always() && github.event_name == 'push' && needs.release-context.outputs.authorized == 'true' }}
     needs:
+      - release-context
       - markdownlint
       - public-docs
       - packaged-crate
@@ -485,9 +594,10 @@ jobs:
   # when the gates it reports on failed.
   release-plz-release:
     name: Release-plz release
-    if: ${{ github.event_name == 'push' }}
+    if: ${{ github.event_name == 'push' && needs.release-context.outputs.authorized == 'true' }}
     runs-on: ubuntu-latest
     needs:
+      - release-context
       - markdownlint
       - public-docs
       - packaged-crate
@@ -516,42 +626,8 @@ jobs:
         uses: ./.github/actions/setup-rust
         with:
           cache: "false"
-      # Most pushes to `main` release nothing, and packaging, signing, and
-      # attesting every one of them would write a Sigstore transparency-log
-      # entry per commit and retain a 90-day artifact for a release that never
-      # happened. `git_tag_name` is `v{{ version }}`, so an absent tag for the
-      # manifest version is precisely release-plz's own "this revision is still
-      # unreleased". Everything this gates stays *ahead* of `release-plz
-      # release`, so failing to produce provenance still blocks the publish.
-      - name: Detect whether this revision is still unreleased
-        id: pending
-        run: |
-          version="$(cargo metadata --no-deps --format-version 1 \
-            | jq -er '.packages[] | select(.name == "lspf") | .version')"
-          if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
-            echo "Tag v$version already exists; skipping the release pipeline"
-            echo "pending=false" >>"$GITHUB_OUTPUT"
-          else
-            echo "Tag v$version is absent; preparing release artifacts"
-            echo "pending=true" >>"$GITHUB_OUTPUT"
-            echo "version=$version" >>"$GITHUB_OUTPUT"
-          fi
-      # The merged release PR is a durable authorization record. Looking for it
-      # on every later main build lets a gate failure retry automatically while
-      # keeping ordinary version bumps from publishing on their own.
-      - name: Authorize the pending release
-        id: authorization
-        if: steps.pending.outputs.pending == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: >-
-          bash ci/authorize-release.sh
-          "${{ steps.pending.outputs.version }}"
-          "$GITHUB_REPOSITORY"
-          "$GITHUB_REF_NAME"
       - name: Prepare retry-safe release-plz config
         id: release-config
-        if: steps.pending.outputs.pending == 'true' && steps.authorization.outputs.authorized == 'true'
         run: |
           config="$RUNNER_TEMP/release-plz.toml"
           awk '
@@ -565,10 +641,8 @@ jobs:
           ' release-plz.toml >"$config"
       - name: Prepare release artifacts from the validated revision
         id: artifacts
-        if: steps.pending.outputs.pending == 'true' && steps.authorization.outputs.authorized == 'true'
         run: bash ci/prepare-release-artifacts.sh "$GITHUB_SHA" "$RUNNER_TEMP/release-artifacts"
       - name: Generate crate SBOM
-        if: steps.pending.outputs.pending == 'true' && steps.authorization.outputs.authorized == 'true'
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
           file: ${{ steps.artifacts.outputs.crate }}
@@ -578,7 +652,6 @@ jobs:
           upload-release-assets: false
       - name: Generate build provenance statement
         id: provenance
-        if: steps.pending.outputs.pending == 'true' && steps.authorization.outputs.authorized == 'true'
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: |
@@ -589,13 +662,11 @@ jobs:
             ${{ steps.artifacts.outputs.directory }}/lspf-CHANGELOG.md
       - name: Generate SBOM attestation
         id: sbom-attestation
-        if: steps.pending.outputs.pending == 'true' && steps.authorization.outputs.authorized == 'true'
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: ${{ steps.artifacts.outputs.crate }}
           sbom-path: ${{ steps.artifacts.outputs.sbom }}
       - name: Retain attestation statements and artifact hashes
-        if: steps.pending.outputs.pending == 'true' && steps.authorization.outputs.authorized == 'true'
         env:
           ARTIFACT_DIRECTORY: ${{ steps.artifacts.outputs.directory }}
           CRATE_PATH: ${{ steps.artifacts.outputs.crate }}
@@ -618,7 +689,6 @@ jobs:
             sbom-attestation.jsonl \
             > SHA256SUMS
       - name: Retain traceable release artifacts
-        if: steps.pending.outputs.pending == 'true' && steps.authorization.outputs.authorized == 'true'
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: lspf-${{ steps.artifacts.outputs.version }}-release-artifacts
@@ -627,7 +697,6 @@ jobs:
           retention-days: 90
       - name: Run release-plz
         id: release
-        if: steps.pending.outputs.pending == 'true' && steps.authorization.outputs.authorized == 'true'
         uses: release-plz/action@2eb1d8bcb770b4c48ccfaad919734b38b51958c9 # v0.5
         with:
           command: release
@@ -636,7 +705,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Attach artifacts to the GitHub release
-        if: steps.pending.outputs.pending == 'true' && steps.authorization.outputs.authorized == 'true' && steps.release.outputs.releases_created == 'true'
+        if: steps.release.outputs.releases_created == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -645,12 +714,31 @@ jobs:
             "${{ steps.artifacts.outputs.directory }}"/* \
             --clobber
 
+  # A normal main push only needs enough policy validation to protect the
+  # write-capable release-plz PR job. Full dependency, platform, and release
+  # gates already ran before merge and run again only for an authorized release.
+  release-plz-policy:
+    name: release-plz workflow policy
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Install the workflow policy YAML parser
+        uses: dcarbone/install-yq-action@4075b4dca348d74bd83f2bf82d30f25d7c54539b # v1.3.1
+        with:
+          version: v4.53.6
+          force: true
+      - name: Enforce Action pins and minimal job permissions
+        run: bash ci/check-workflow-security.sh
+
   # Open/update a release PR with version bumps and changelog.
   release-plz-pr:
     name: Release-plz PR
     if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
-    needs: security
+    needs: release-plz-policy
     permissions:
       contents: write
       pull-requests: write

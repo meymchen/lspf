@@ -9,7 +9,8 @@ job="$(jq -c '.jobs["bounded-memory-soak"]' <<<"$ci_json")"
 
 jq -e '
   .name == "Bounded-memory soak journeys (${{ matrix.scenario }})"
-  and .if == "${{ github.event_name == '\''push'\'' }}"
+  and .if == "${{ github.event_name == '\''push'\'' && needs.release-context.outputs.authorized == '\''true'\'' }}"
+  and .needs == "release-context"
   and .["runs-on"] == "ubuntu-latest"
   and .permissions == {"contents":"read"}
   and .strategy == {

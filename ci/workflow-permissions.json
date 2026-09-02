@@ -1,6 +1,7 @@
 {
   "workflows": {
     ".github/workflows/ci.yml": {
+      "release-context": { "contents": "read", "pull-requests": "read" },
       "feature-matrix": { "contents": "read" },
       "commit-messages": { "contents": "read" },
       "markdownlint": { "contents": "read" },
@@ -22,12 +23,14 @@
       "gate-a-evidence": { "contents": "read" },
       "gate-b-evidence": { "contents": "read" },
       "gate-c-evidence": { "contents": "read" },
+      "merge-ready": { "contents": "read" },
       "release-plz-release": {
         "attestations": "write",
         "contents": "write",
         "id-token": "write",
         "pull-requests": "read"
       },
+      "release-plz-policy": { "contents": "read" },
       "release-plz-pr": {
         "contents": "write",
         "pull-requests": "write"

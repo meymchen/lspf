@@ -12,7 +12,7 @@ job="$(jq -c '.jobs["gate-a-evidence"]' <<<"$ci_json")"
 
 jq -e '
   .name == "Gate A release evidence"
-  and .if == "${{ always() && github.event_name == '\''push'\'' }}"
+  and .if == "${{ always() && github.event_name == '\''push'\'' && needs.release-context.outputs.authorized == '\''true'\'' }}"
   and (.needs | sort) == [
     "feature-contract",
     "markdownlint",
@@ -23,6 +23,7 @@ jq -e '
     "performance-baseline",
     "public-api",
     "public-docs",
+    "release-context",
     "security",
     "test",
     "test-coverage",

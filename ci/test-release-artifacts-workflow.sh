@@ -10,6 +10,7 @@ yq_bin="${YQ_BIN:-yq}"
 
 workflow_json="$($yq_bin -o=json '.' "$workflow")"
 release_job="$(jq -c '.jobs["release-plz-release"]' <<<"$workflow_json")"
+release_context="$(jq -c '.jobs["release-context"]' <<<"$workflow_json")"
 
 # The release job must depend on the same checks Gate A reports on, so a
 # revision cannot reach crates.io without clearing the gates that declare it
@@ -26,11 +27,13 @@ jq -e '
         "performance-baseline",
         "public-api",
         "public-docs",
+        "release-context",
         "security",
         "test",
         "test-coverage",
         "wasm"
     ] and
+    .if == "${{ github.event_name == '\''push'\'' && needs.release-context.outputs.authorized == '\''true'\'' }}" and
     .permissions == {
         "attestations": "write",
         "contents": "write",
@@ -41,60 +44,38 @@ jq -e '
     ([.steps[] | select((.uses? // "") | startswith("actions/checkout@"))][0].with | has("ref") | not)
 ' <<<"$release_job" >/dev/null
 
-# The whole artifact pipeline stays ahead of `release-plz release`, so a
-# revision that cannot produce provenance never reaches crates.io, and the
-# unreleased-revision probe stays ahead of the pipeline it gates.
-pending_index="$(jq -r '.steps | map(.name) | index("Detect whether this revision is still unreleased")' \
-    <<<"$release_job")"
-authorization_index="$(jq -r '.steps | map(.name) | index("Authorize the pending release")' \
-    <<<"$release_job")"
-prepare_index="$(jq -r '.steps | map(.name) | index("Prepare release artifacts from the validated revision")' \
-    <<<"$release_job")"
-release_index="$(jq -r '.steps | map(.name) | index("Run release-plz")' <<<"$release_job")"
-[[ $pending_index != null && $authorization_index != null && $prepare_index != null && $release_index != null ]]
-[[ $pending_index -lt $authorization_index && $authorization_index -lt $prepare_index && $prepare_index -lt $release_index ]]
-
-# A failed release run must remain retryable without turning every manifest
-# version bump into an implicit publish. A merged release-plz PR is the durable
-# authorization signal; the release action is reached only while that signal
-# exists in HEAD's history and the matching tag is still absent.
-release_guard="steps.pending.outputs.pending == 'true' && steps.authorization.outputs.authorized == 'true'"
-jq -e --arg guard "$release_guard" '
+# Release classification happens before the expensive gate fan-out. The
+# release job itself is reachable only for a pending version authorized by a
+# merged release-plz PR, so every artifact step can remain unconditional and a
+# failed run remains retryable until the tag exists.
+jq -e '
+    .outputs.authorized == "${{ steps.release.outputs.authorized }}" and
+    .outputs.pending == "${{ steps.release.outputs.pending }}" and
     any(.steps[];
-        .name == "Authorize the pending release" and
-        .id == "authorization" and
-        .if == "steps.pending.outputs.pending == '\''true'\''" and
-        (.run | contains("bash ci/authorize-release.sh"))
-    ) and
-    any(.steps[];
-        .name == "Prepare retry-safe release-plz config" and
-        .id == "release-config" and
-        .if == $guard and
-        (.run | contains("release_always = true"))
-    ) and
-    any(.steps[];
-        .name == "Run release-plz" and
-        .if == $guard and
-        .with.config == "${{ runner.temp }}/release-plz.toml"
+        .id == "release" and
+        (.run | contains("bash ci/detect-release-context.sh"))
     )
-' <<<"$release_job" >/dev/null
+' <<<"$release_context" >/dev/null
 
-# Ordinary pushes to `main` release nothing, so packaging, signing, attesting,
-# and artifact retention must all be skipped unless this version is unreleased
-# and a merged release PR authorizes it. Without these guards every commit
-# writes a Sigstore transparency-log entry.
-jq -e --arg guard "$release_guard" '
+jq -e '
     . as $job
     | [
+        "Prepare retry-safe release-plz config",
         "Prepare release artifacts from the validated revision",
         "Generate crate SBOM",
         "Generate build provenance statement",
         "Generate SBOM attestation",
         "Retain attestation statements and artifact hashes",
-        "Retain traceable release artifacts"
+        "Retain traceable release artifacts",
+        "Run release-plz"
       ]
-    | all(. as $name | any($job.steps[]; .name == $name and .if == $guard))
+    | all(. as $name | any($job.steps[]; .name == $name and (has("if") | not)))
 ' <<<"$release_job" >/dev/null
+
+prepare_index="$(jq -r '.steps | map(.name) | index("Prepare release artifacts from the validated revision")' \
+    <<<"$release_job")"
+release_index="$(jq -r '.steps | map(.name) | index("Run release-plz")' <<<"$release_job")"
+[[ $prepare_index != null && $release_index != null && $prepare_index -lt $release_index ]]
 
 jq -e '
     any(.steps[];
@@ -129,16 +110,14 @@ jq -e '
     ) and
     any(.steps[];
         .name == "Attach artifacts to the GitHub release" and
-        .if == ("steps.pending.outputs.pending == '\''true'\'' && "
-            + "steps.authorization.outputs.authorized == '\''true'\'' && "
-            + "steps.release.outputs.releases_created == '\''true'\''") and
+        .if == "steps.release.outputs.releases_created == '\''true'\''" and
         (.run | contains("gh release upload")) and
         (.run | contains("--clobber"))
     )
 ' <<<"$release_job" >/dev/null
 
 # Publishing stays a human decision: only merging the release pull request may
-# reach crates.io. The unreleased-revision probe above spells the tag as
+# reach crates.io. `ci/detect-release-context.sh` spells the pending tag as
 # `v$version`, and `ci/prepare-release-artifacts.sh` derives its release tag the
 # same way, so both break silently if `git_tag_name` ever changes shape.
 $yq_bin -p toml -o json '.' "$release_plz_config" | jq -e '

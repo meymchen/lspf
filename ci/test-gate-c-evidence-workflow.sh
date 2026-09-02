@@ -12,7 +12,8 @@ job="$(jq -c '.jobs["gate-c-evidence"]' <<<"$ci_json")"
 
 jq -e '
   .name == "Gate C endpoint evidence"
-  and .if == "${{ github.event_name == '\''push'\'' }}"
+  and .if == "${{ github.event_name == '\''push'\'' && needs.release-context.outputs.authorized == '\''true'\'' }}"
+  and .needs == "release-context"
   and .["runs-on"] == "ubuntu-latest"
   and .permissions == {"contents": "read"}
   and any(.steps[];

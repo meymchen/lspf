@@ -51,5 +51,11 @@ jobs:
         run: bash ci/test-soak-journey-workflow.sh
       - name: Test CI pull-request fast-path contract
         run: bash ci/test-ci-fast-path.sh
+      - name: Test CI change classification
+        run: bash ci/test-classify-ci-changes.sh
+      - name: Test release context detection
+        run: bash ci/test-detect-release-context.sh
+      - name: Test merge readiness aggregation
+        run: bash ci/test-check-merge-ready.sh
       - name: Enforce Action pins and minimal job permissions
         run: bash ci/check-workflow-security.sh
