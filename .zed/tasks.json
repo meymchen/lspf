@@ -14,13 +14,7 @@
   {
     "label": "test workspace (full)",
     "command": "cargo",
-    "args": [
-      "test",
-      "--workspace",
-      "--features",
-      "stdio,tcp,websocket",
-      "--all-targets"
-    ],
+    "args": ["test-native"],
     "cwd": "$ZED_WORKTREE_ROOT"
   },
   {

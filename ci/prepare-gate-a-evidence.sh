@@ -53,7 +53,7 @@ jq -n \
           id: "support-matrix",
           statement: "Every declared Rust version, host, target, and Cargo feature selection has an automated enforcement gate.",
           classification: "automated",
-          sources: [source("SECURITY.md"), source("ci/native-feature-matrix.json"), source("ci/check-feature-contract.sh")],
+          sources: [source("SECURITY.md"), source("ci/native-feature-command.sh"), source("ci/check-feature-contract.sh")],
           checks: [
             check("msrv"; "MSRV matrix"),
             check("feature-contract"; "Feature and target contract"),

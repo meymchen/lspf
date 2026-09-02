@@ -77,16 +77,9 @@ fn vscode_has_quick_full_and_example_tasks() {
         find_by(tasks, "label", "test lspf-hello (quick)")["args"],
         json!(["test", "-p", "lspf-hello"])
     );
-    assert_eq!(
-        find_by(tasks, "label", "test workspace (full)")["args"],
-        json!([
-            "test",
-            "--workspace",
-            "--features",
-            "stdio,tcp,websocket",
-            "--all-targets"
-        ])
-    );
+    let full = find_by(tasks, "label", "test workspace (full)");
+    assert_eq!(full["command"], "cargo");
+    assert_eq!(full["args"], json!(["test-native"]));
     assert!(
         find_by(tasks, "label", "run LSP example")["args"]
             .as_array()
@@ -202,16 +195,9 @@ fn zed_has_quick_full_run_and_debug_entries() {
         find_by(tasks, "label", "test lspf-hello (quick)")["args"],
         json!(["test", "-p", "lspf-hello"])
     );
-    assert_eq!(
-        find_by(tasks, "label", "test workspace (full)")["args"],
-        json!([
-            "test",
-            "--workspace",
-            "--features",
-            "stdio,tcp,websocket",
-            "--all-targets"
-        ])
-    );
+    let full = find_by(tasks, "label", "test workspace (full)");
+    assert_eq!(full["command"], "cargo");
+    assert_eq!(full["args"], json!(["test-native"]));
     assert_eq!(
         find_by(tasks, "label", "run hover example (waits for stdio client)")["args"],
         json!(["run", "-p", "lspf", "--example", "hover"])

@@ -1,4 +1,6 @@
 [alias]
+# Run the full workspace test surface with every supported native feature.
+test-native = "test --workspace --features stdio,tcp,websocket,testing --all-targets"
 # Generate an HTML coverage report for the library and integration tests.
 # Open target/coverage/html/index.html in a browser to inspect.
 # `worker-channel` is wasm32-only (ADR 0020), so "all native features" is

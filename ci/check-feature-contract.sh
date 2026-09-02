@@ -6,6 +6,8 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 source ci/supported-feature-matrix.sh
 
+bash ci/test-native-feature-command.sh
+
 fail() {
     echo "feature-contract error: $*" >&2
     exit 1

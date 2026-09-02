@@ -50,7 +50,7 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - id: matrix
-        run: echo "value=$(jq -c . ci/native-feature-matrix.json)" >> "$GITHUB_OUTPUT"
+        run: echo "value=$(bash ci/native-feature-command.sh matrix)" >> "$GITHUB_OUTPUT"
 
   commit-messages:
     name: commit messages
@@ -222,8 +222,8 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: ./.github/actions/setup-rust
       - run: bash ci/test-check-editor-validation.sh
-      - run: cargo test --workspace --features stdio,tcp,websocket,testing --all-targets
-      - run: cargo test --workspace --features stdio,tcp,websocket,testing --doc
+      - run: bash ci/native-feature-command.sh test-workspace
+      - run: bash ci/native-feature-command.sh test-workspace-docs
 
   native-lifecycle:
     name: native lifecycle (${{ matrix.name }})
@@ -287,7 +287,7 @@ jobs:
       - name: Test the test-coverage gate behavior
         run: bash ci/test-check-test-coverage.sh
       - name: Exercise the whole workspace
-        run: cargo llvm-cov --workspace --features stdio,tcp,websocket,testing --all-targets --no-report
+        run: bash ci/native-feature-command.sh coverage-workspace
       - name: Generate human- and machine-readable reports
         run: |
           cargo llvm-cov report --html --output-dir target/test-coverage
