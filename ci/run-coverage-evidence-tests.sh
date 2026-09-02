@@ -46,9 +46,8 @@ for evidence_test in "${evidence_tests[@]}"; do
     IFS=$'\t' read -r test_target test_name <<<"$evidence_test"
     test_id="$test_target::$test_name"
     echo "Executing failure-path evidence test: $test_id"
-    if ! test_output=$(cargo test -p lspf \
-        --features stdio,tcp,websocket,proposed \
-        --test "$test_target" "$test_name" -- --exact 2>&1); then
+    if ! test_output=$(bash ci/native-feature-command.sh \
+        test-evidence "$test_target" "$test_name" 2>&1); then
         printf '%s\n' "$test_output" >&2
         test_coverage_report_fail_setup "failure-path test failed: $test_id"
     fi

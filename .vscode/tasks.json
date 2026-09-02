@@ -34,13 +34,7 @@
       "label": "test workspace (full)",
       "type": "process",
       "command": "cargo",
-      "args": [
-        "test",
-        "--workspace",
-        "--features",
-        "stdio,tcp,websocket,proposed",
-        "--all-targets"
-      ],
+      "args": ["test-native"],
       "problemMatcher": "$rustc",
       "group": "test"
     },

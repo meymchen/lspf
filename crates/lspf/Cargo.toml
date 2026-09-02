@@ -78,9 +78,6 @@ runtime-tokio = ["dep:tokio"]
 wasm = ["dep:gloo-timers", "dep:wasm-bindgen-futures"]
 # The browser/Node Worker MessagePort transport rides on the WASM runtime.
 worker-channel = ["wasm", "dep:js-sys", "dep:wasm-bindgen", "dep:web-sys"]
-# Compatibility aliases for protocol surface that was formerly proposed.
-# Enabling this feature only adds the `proposed` module and pulls in no Transport.
-proposed = []
 # Native downstream test harness: an in-memory Transport, protocol journeys,
 # and Tokio's deterministic virtual clock.
 testing = ["runtime-tokio", "tokio/test-util"]

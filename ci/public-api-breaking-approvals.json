@@ -32,28 +32,16 @@
       "findingsSha256": "6d4642b47f207ddf2120635f24f5ebca7acce446297f1688522425aeadef1665"
     },
     {
-      "baselineVersion": "0.9.2",
-      "target": "native",
-      "features": "stdio,tcp,websocket,proposed,testing",
-      "findingsSha256": "7d5a1b71862287dc7c133968d83107c5800be1e2e7f9d7322dbbf7996f069e79"
-    },
-    {
-      "baselineVersion": "0.9.2",
-      "target": "wasm32-unknown-unknown",
-      "features": "wasm,proposed",
-      "findingsSha256": "7d5a1b71862287dc7c133968d83107c5800be1e2e7f9d7322dbbf7996f069e79"
-    },
-    {
-      "baselineVersion": "0.9.2",
-      "target": "wasm32-unknown-unknown",
-      "features": "worker-channel,proposed",
-      "findingsSha256": "7d5a1b71862287dc7c133968d83107c5800be1e2e7f9d7322dbbf7996f069e79"
-    },
-    {
       "baselineVersion": "0.10.0",
       "target": "*",
       "features": "*",
       "findingsSha256": "2d8d36a669ab864aa4d052b286316c98689f022bcb0554b8c1573ff4dc15e0e6"
+    },
+    {
+      "baselineVersion": "0.11.0",
+      "target": "*",
+      "features": "*",
+      "findingsSha256": "1c1d2a3b33ce00aa9459253c40f7e0fd562372a50a5c874f2232ffaefd9ec915"
     }
   ]
 }
