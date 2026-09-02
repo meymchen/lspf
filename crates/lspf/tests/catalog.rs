@@ -60,7 +60,8 @@ use lspf::types::{
     ImplementationRegistrationOptions, ImplementationRequest as GotoImplementation, InlayHint,
     InlayHintOptions, InlayHintRequest, InlineCompletionOptions, InlineCompletionRequest,
     InlineValueOptions, InlineValueRequest, LinkedEditingRangeOptions,
-    LinkedEditingRangeRequest as LinkedEditingRange, MonikerOptions, MonikerRequest, Notification,
+    LinkedEditingRangeRequest as LinkedEditingRange, MonikerOptions, MonikerRequest,
+    NotebookDocumentFilterWithNotebook, NotebookDocumentSyncOptions, Notification,
     PrepareRenameRequest, ReferenceOptions, ReferencesRequest as References,
     RelatedFullDocumentDiagnosticReport, RenameOptions, RenameRequest as Rename, Request,
     SelectionRangeOptions, SelectionRangeRequest,
@@ -335,10 +336,18 @@ fn file_filters() -> FileOperationRegistrationOptions {
     }
 }
 
+fn notebook_sync_options() -> NotebookDocumentSyncOptions {
+    NotebookDocumentSyncOptions::new(
+        vec![NotebookDocumentFilterWithNotebook::new("jupyter-notebook".into(), None).into()],
+        Some(true),
+    )
+}
+
 /// Apply the fixed full-catalog registrations to `builder` and hand the
 /// builder back, so tests can append further registrations before `build`.
 fn catalog_registrations(builder: lspf::ServerBuilder<AppState>) -> lspf::ServerBuilder<AppState> {
     builder
+        .notebook_document_sync(notebook_sync_options())
         // Text document requests.
         .feature(lspf::features::hover(), hover)
         .feature(
@@ -766,12 +775,10 @@ const CAPABILITY_RECORDS: [CapabilityRecord; 4] = [
 /// Each entry is a commitment rather than an exemption: the work named beside
 /// it deletes its line, and until then the guardrail pins the gap so it cannot
 /// grow silently.
-const UNPRODUCIBLE_CAPABILITY_FIELDS: [&str; 2] = [
+const UNPRODUCIBLE_CAPABILITY_FIELDS: [&str; 1] = [
     // The server-defined escape hatch. It carries no protocol meaning of its
     // own, lspf exposes no way to set it, and no ticket plans one.
     "experimental",
-    // Notebook document sync, issue #252.
-    "notebookDocumentSync",
 ];
 
 fn meta_model() -> Value {
@@ -866,6 +873,26 @@ async fn the_full_catalog_advertises_a_byte_stable_capability_snapshot() {
         wire, fixture,
         "the full-catalog capability snapshot must stay byte-stable; \
          update the fixture only with a deliberate capability change"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn notebook_document_sync_advertises_its_selector_and_save_option() {
+    let (wire, _) = initialize_wire(
+        Server::builder(AppState)
+            .notebook_document_sync(notebook_sync_options())
+            .build()
+            .expect("notebook document sync options register"),
+    )
+    .await;
+    let response: Value = serde_json::from_str(&wire).unwrap();
+
+    assert_eq!(
+        response["capabilities"]["notebookDocumentSync"],
+        json!({
+            "notebookSelector": [{ "notebook": "jupyter-notebook" }],
+            "save": true,
+        })
     );
 }
 

@@ -24,10 +24,10 @@ use gen_lsp_types::{
     ExecuteCommandOptions, FileOperationOptions, FileOperationRegistrationOptions,
     FoldingRangeOptions, Full, ImplementationRegistrationOptions, InlayHintOptions,
     InlineCompletionOptions, InlineValueOptions, LinkedEditingRangeOptions, MonikerOptions,
-    ReferenceOptions, RenameOptions, SelectionRangeOptions, SemanticTokensFullDelta,
-    SemanticTokensOptions, SemanticTokensOptionsRange, ServerCapabilities, SignatureHelpOptions,
-    TextDocumentContentOptions, TypeDefinitionRegistrationOptions, TypeHierarchyOptions,
-    WorkspaceOptions, WorkspaceSymbolOptions,
+    NotebookDocumentSyncOptions, ReferenceOptions, RenameOptions, SelectionRangeOptions,
+    SemanticTokensFullDelta, SemanticTokensOptions, SemanticTokensOptionsRange, ServerCapabilities,
+    SignatureHelpOptions, TextDocumentContentOptions, TypeDefinitionRegistrationOptions,
+    TypeHierarchyOptions, WorkspaceOptions, WorkspaceSymbolOptions,
 };
 
 use crate::error::BuildError;
@@ -65,6 +65,7 @@ pub(crate) struct CapabilityBuilder {
     file_create: FileOperationFamily,
     file_rename: FileOperationFamily,
     file_delete: FileOperationFamily,
+    notebook_document_sync: Option<NotebookDocumentSyncOptions>,
     text_document_content: Option<TextDocumentContentOptions>,
     will_save_wait_until: bool,
 }
@@ -455,6 +456,17 @@ impl FileOperationFamily {
 }
 
 impl CapabilityBuilder {
+    pub(crate) fn set_notebook_document_sync(
+        &mut self,
+        options: NotebookDocumentSyncOptions,
+    ) -> Result<(), BuildError> {
+        contribute_unique(
+            &mut self.notebook_document_sync,
+            options,
+            "notebookDocumentSync",
+        )
+    }
+
     /// Record the typed `textDocument/willSaveWaitUntil` contribution. The
     /// protocol engine folds this into its protocol-owned sync options.
     pub(crate) fn set_will_save_wait_until(&mut self) {
@@ -1155,6 +1167,7 @@ impl CapabilityBuilder {
     }
 
     pub(crate) fn finish_generated(mut self) -> GeneratedCapabilities {
+        self.caps.notebook_document_sync = self.notebook_document_sync.map(Into::into);
         if let Some(options) = self.call_hierarchy.options {
             self.caps.call_hierarchy_provider = Some(options.into());
         }

@@ -29,8 +29,8 @@ use std::sync::Arc;
 #[cfg(test)]
 use gen_lsp_types::ServerCapabilities;
 use gen_lsp_types::{
-    InitializeParams, InitializedParams, Save, ServerInfo, TextDocumentSync, TextDocumentSyncKind,
-    TextDocumentSyncOptions,
+    InitializeParams, InitializedParams, NotebookDocumentSyncOptions, Save, ServerInfo,
+    TextDocumentSync, TextDocumentSyncKind, TextDocumentSyncOptions,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -751,6 +751,19 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
     /// save-related fields are inferred from typed registrations.
     pub fn text_document_sync(mut self, options: TextDocumentSyncOptions) -> Self {
         self.registrations.document_sync = Some(options);
+        self
+    }
+
+    /// Register protocol-owned notebook-document synchronization and advertise
+    /// the supplied notebook selector and save preference to the client.
+    pub fn notebook_document_sync(mut self, options: NotebookDocumentSyncOptions) -> Self {
+        if let Err(err) = self
+            .registrations
+            .capabilities
+            .set_notebook_document_sync(options)
+        {
+            self.record(err);
+        }
         self
     }
 
