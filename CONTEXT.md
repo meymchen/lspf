@@ -173,22 +173,19 @@ changes while leaving the permanently frozen [[Router]] and the computed
 initialize capabilities untouched; the framework retains no second list
 of currently registered client capabilities, and any local route must
 already exist through static or initialize-conditional registration.
-The five stable workspace refresh helpers — `refresh_code_lenses`
+The seven stable workspace refresh helpers — `refresh_code_lenses`
 (`workspace/codeLens/refresh`), `refresh_diagnostics`
 (`workspace/diagnostic/refresh`), `refresh_inlay_hints`
 (`workspace/inlayHint/refresh`), `refresh_inline_values`
 (`workspace/inlineValue/refresh`), and `refresh_semantic_tokens`
-(`workspace/semanticTokens/refresh`) — each take no parameters and
-return the client's `null` acknowledgement as `()`; they own no
-recomputation policy, and the framework keeps no lens, diagnostic, hint,
-value, or token state for them to touch. With the non-default `proposed`
-Cargo feature, `refresh_folding_ranges` (`workspace/foldingRange/refresh`)
-and `refresh_text_document_content`
+(`workspace/semanticTokens/refresh`), plus `refresh_folding_ranges`
+(`workspace/foldingRange/refresh`) and `refresh_text_document_content`
 (`workspace/textDocumentContent/refresh`, params naming only the target
-document URI) join the refresh surface, using request markers and params
-from the feature-gated `proposed` module. This is a transition until ADR 0032's
-generated metaModel type base supplies their stable LSP 3.18 definitions. The
-default refresh surface contains no proposed, draft, or notebook method.
+document URI) — return the client's `null` acknowledgement as `()`. All except
+the text-document-content helper take no parameters. They own no recomputation
+policy, and the framework keeps no lens, diagnostic, hint, value, token,
+folding-range, or text-document-content state for them to touch. The default
+refresh surface contains no proposed, draft, or notebook method.
 `begin_progress(ProgressOptions)` runs the connection-scoped work-done
 progress lifecycle as one failure-safe operation: it allocates a
 connection-local numeric token from a monotonic sequence (starting at 1,
