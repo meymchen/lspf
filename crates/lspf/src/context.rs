@@ -5,6 +5,7 @@ use tracing::Span;
 use crate::client::ClientHandle;
 use crate::documents::DocumentsView;
 use crate::error::ClientError;
+use crate::partial_result::{PartialResultRequest, PartialResultScope, PartialResultSink};
 use crate::progress::{ProgressHandle, ProgressOptions};
 use crate::raw::RequestId;
 use crate::workspace::Workspace;
@@ -26,6 +27,7 @@ pub struct ServerContext {
     pub(crate) workspace: Workspace,
     pub(crate) cancellation: Option<CancellationToken>,
     pub(crate) work_done_token: Option<ProgressToken>,
+    pub(crate) partial_result_scope: Option<PartialResultScope>,
 }
 
 impl ServerContext {
@@ -42,6 +44,7 @@ impl ServerContext {
             workspace,
             cancellation: None,
             work_done_token: None,
+            partial_result_scope: None,
         }
     }
 
@@ -53,6 +56,7 @@ impl ServerContext {
             workspace,
             cancellation: None,
             work_done_token: None,
+            partial_result_scope: None,
         }
     }
 
@@ -64,6 +68,19 @@ impl ServerContext {
     pub(crate) fn with_work_done_token(mut self, token: Option<ProgressToken>) -> Self {
         self.work_done_token = token;
         self
+    }
+
+    pub(crate) fn with_partial_result(
+        mut self,
+        method: String,
+        token: Option<ProgressToken>,
+    ) -> Self {
+        self.partial_result_scope = token.map(|token| PartialResultScope::new(method, token));
+        self
+    }
+
+    pub(crate) fn partial_result_scope(&self) -> Option<PartialResultScope> {
+        self.partial_result_scope.clone()
     }
 
     pub(crate) fn cancellation(&self) -> Option<&CancellationToken> {
@@ -111,6 +128,24 @@ impl ServerContext {
             .transpose()
     }
 
+    /// Return this request's typed partial-result sink when the client supplied
+    /// a `partialResultToken` and `R` is the request currently being handled.
+    ///
+    /// Only request markers generated from partial-result entries in the
+    /// vendored LSP metaModel implement [`PartialResultRequest`]. Notifications,
+    /// custom requests, unsupported standard methods, and requests without a
+    /// token therefore cannot obtain a sink.
+    pub fn partial_results<R>(&self) -> Option<PartialResultSink<'_, R>>
+    where
+        R: PartialResultRequest,
+    {
+        let scope = self.partial_result_scope.as_ref()?;
+        if scope.method() != <R as crate::types::request::Request>::METHOD {
+            return None;
+        }
+        Some(PartialResultSink::new(&self.client, scope))
+    }
+
     /// The connection's [`Workspace`], established from `InitializeParams`
     /// during the initialize transaction (ADR 0017, ADR 0018): the one
     /// cheap, shared, read-only view of the initialization metadata, roots,
@@ -136,11 +171,16 @@ impl ServerContext {
 mod tests {
     use std::str::FromStr;
 
-    use gen_lsp_types::{InitializeParams, TextDocumentItem, Uri};
+    use futures_channel::mpsc::UnboundedReceiver;
+    use gen_lsp_types::{
+        DocumentSymbolPartialResponse, DocumentSymbolRequest, InitializeParams, ProgressToken,
+        TextDocumentItem, Uri,
+    };
 
     use super::*;
     use crate::client::{OutboundQueue, OutboundRegistry};
     use crate::documents::Documents;
+    use crate::raw::RawMessage;
 
     fn context() -> (ServerContext, Documents) {
         let (out_tx, _out_rx) = OutboundQueue::bounded(usize::MAX, usize::MAX);
@@ -151,6 +191,21 @@ mod tests {
             ServerContext::for_notification(Span::none(), client, workspace),
             documents,
         )
+    }
+
+    fn partial_result_context(
+        max_outbound_messages: usize,
+    ) -> (ServerContext, UnboundedReceiver<RawMessage>) {
+        let (out_tx, out_rx) = OutboundQueue::bounded(max_outbound_messages, usize::MAX);
+        let documents = Documents::new();
+        let workspace = Workspace::from_params(&InitializeParams::default(), documents);
+        let client = ClientHandle::new(out_tx, OutboundRegistry::default(), None);
+        let ctx = ServerContext::for_request(RequestId::Number(7), Span::none(), client, workspace)
+            .with_partial_result(
+                <DocumentSymbolRequest as crate::types::request::Request>::METHOD.to_string(),
+                Some(ProgressToken::String("symbols".into())),
+            );
+        (ctx, out_rx)
     }
 
     #[test]
@@ -178,5 +233,51 @@ mod tests {
             ctx.workspace().roots(),
             "a cloned context shares the one workspace"
         );
+    }
+
+    #[test]
+    fn partial_result_sink_requires_the_requests_token() {
+        let (ctx, _) = context();
+        let ctx = ctx.with_partial_result(
+            <DocumentSymbolRequest as crate::types::request::Request>::METHOD.to_string(),
+            None,
+        );
+
+        assert!(ctx.partial_results::<DocumentSymbolRequest>().is_none());
+    }
+
+    #[test]
+    fn partial_result_reports_use_bounded_outbound_admission() {
+        let (ctx, mut out_rx) = partial_result_context(1);
+        let sink = ctx
+            .partial_results::<DocumentSymbolRequest>()
+            .expect("a supported request with a token has a sink");
+
+        sink.report(DocumentSymbolPartialResponse::DocumentSymbolList(Vec::new()))
+            .expect("the first chunk occupies the only outbound slot");
+        assert!(
+            out_rx.try_recv().is_ok(),
+            "the chunk enters the outbound queue"
+        );
+        assert!(matches!(
+            sink.report(DocumentSymbolPartialResponse::DocumentSymbolList(Vec::new())),
+            Err(ClientError::OutboundOverloaded)
+        ));
+    }
+
+    #[test]
+    fn partial_result_scope_rejects_reports_after_request_completion() {
+        let (ctx, mut out_rx) = partial_result_context(2);
+        let scope = ctx.partial_result_scope().unwrap();
+        let sink = ctx.partial_results::<DocumentSymbolRequest>().unwrap();
+
+        scope.finish();
+
+        assert!(matches!(
+            sink.report(DocumentSymbolPartialResponse::DocumentSymbolList(Vec::new())),
+            Err(ClientError::InvalidHelperParams(message))
+                if message == "partial-result request has completed"
+        ));
+        assert!(out_rx.try_recv().is_err(), "a late chunk is not enqueued");
     }
 }

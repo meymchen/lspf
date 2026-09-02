@@ -35,6 +35,7 @@ thiserror.workspace = true
 # `codec` (the stdio/TCP framing decoder) is enabled per feature below.
 tokio-util = { workspace = true, default-features = false }
 tracing.workspace = true
+
 # JavaScript interop behind the browser/Node Worker MessagePort adapter. All
 # three are optional so native builds keep no Worker bindings in their
 # dependency tree.
@@ -66,6 +67,9 @@ tokio = { workspace = true, optional = true, features = ["rt-multi-thread", "io-
 # The WebSocket adapter's framing library (ADR 0011): optional, pulled in only
 # through the `websocket` feature and never resolved for Worker-hosted WASM.
 tokio-tungstenite = { workspace = true, optional = true }
+
+[build-dependencies]
+serde_json.workspace = true
 
 [features]
 # Native stdio is the default experience: opting in also selects the Tokio

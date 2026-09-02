@@ -3,9 +3,13 @@
 use std::borrow::Cow;
 
 use bytes::Bytes;
+use lspf::features;
 use lspf::testing::{ClientJourney, MemoryTransport, ServerJourney, VirtualClock, WireDirection};
-use lspf::types::ClientCapabilities;
 use lspf::types::request::Request;
+use lspf::types::{
+    ClientCapabilities, DocumentSymbol, DocumentSymbolOptions, DocumentSymbolPartialResponse,
+    DocumentSymbolRequest, DocumentSymbolResponse, Position, Range, ReferencesRequest, SymbolKind,
+};
 use lspf::{
     Client, ClientError, LspError, Outcome, ProgressOptions, RawMessage, RequestId, ResourcePolicy,
     Server, ServerContext, Transport, TransportReader, TransportWriter,
@@ -249,6 +253,98 @@ async fn server_context_has_no_progress_handle_without_a_request_token() {
             result: Ok(ref result),
         } if serde_json::from_slice::<Value>(result).unwrap() == json!(false)
     ));
+
+    assert_eq!(journey.finish().await.unwrap(), Outcome::Exit { code: 0 });
+}
+
+#[allow(deprecated)]
+fn symbol(name: &str, line: u32) -> DocumentSymbol {
+    let range = Range::new(Position::new(line, 0), Position::new(line, 1));
+    DocumentSymbol::new(
+        name.into(),
+        None,
+        SymbolKind::Function,
+        None,
+        None,
+        range,
+        range,
+        None,
+    )
+}
+
+#[tokio::test]
+async fn document_symbols_stream_in_order_before_the_final_response() {
+    let expected = vec![symbol("alpha", 0), symbol("beta", 1), symbol("gamma", 2)];
+    let chunks = expected.clone();
+    let server = Server::builder(())
+        .feature(
+            features::document_symbol(DocumentSymbolOptions::default()),
+            move |_state, ctx: ServerContext, _params, _cancellation| {
+                let chunks = chunks.clone();
+                async move {
+                    assert!(
+                        ctx.partial_results::<ReferencesRequest>().is_none(),
+                        "a sink for another partial-result method is unavailable"
+                    );
+                    let sink = ctx
+                        .partial_results::<DocumentSymbolRequest>()
+                        .expect("the request supplied a supported partial-result token");
+                    for symbol in chunks {
+                        sink.report(DocumentSymbolPartialResponse::DocumentSymbolList(vec![
+                            symbol,
+                        ]))
+                        .map_err(LspError::internal)?;
+                    }
+                    Ok(None)
+                }
+            },
+        )
+        .build()
+        .unwrap();
+    let mut journey = ServerJourney::start(server).await.unwrap();
+
+    journey
+        .peer()
+        .send(RawMessage::Request {
+            id: RequestId::Number(9),
+            method: Cow::Borrowed("textDocument/documentSymbol"),
+            params: Bytes::from_static(
+                br#"{"textDocument":{"uri":"file:///symbols.rs"},"partialResultToken":"symbols"}"#,
+            ),
+        })
+        .unwrap();
+
+    let mut reconstructed = Vec::new();
+    for expected_symbol in &expected {
+        let RawMessage::Notification { method, params } = journey.peer().recv().await.unwrap()
+        else {
+            panic!("each chunk precedes the response");
+        };
+        assert_eq!(method.as_ref(), "$/progress");
+        let value: Value = serde_json::from_slice(&params).unwrap();
+        assert_eq!(value["token"], json!("symbols"));
+        let chunk: DocumentSymbolPartialResponse =
+            serde_json::from_value(value["value"].clone()).unwrap();
+        let DocumentSymbolPartialResponse::DocumentSymbolList(mut symbols) = chunk else {
+            panic!("the handler reports hierarchical document symbols");
+        };
+        assert_eq!(symbols.as_slice(), std::slice::from_ref(expected_symbol));
+        reconstructed.append(&mut symbols);
+    }
+
+    let response = journey.peer().recv().await.unwrap();
+    assert!(matches!(
+        response,
+        RawMessage::Response {
+            id: RequestId::Number(9),
+            result: Ok(ref result),
+        } if serde_json::from_slice::<Value>(result).unwrap() == Value::Null
+    ));
+    assert_eq!(
+        DocumentSymbolResponse::DocumentSymbolList(reconstructed),
+        DocumentSymbolResponse::DocumentSymbolList(expected),
+        "the client reconstructs the unchunked result"
+    );
 
     assert_eq!(journey.finish().await.unwrap(), Outcome::Exit { code: 0 });
 }

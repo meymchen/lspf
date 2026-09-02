@@ -246,8 +246,18 @@ It is the only way a handler reaches framework state — the user's own
 struct holds only user-owned state, and user code never constructs a
 `ServerContext`. On a request carrying a work-done token, it can begin the
 existing progress lifecycle on that token; otherwise no progress handle is
-available from the context.
+available from the context. On a spec-defined partial-result request carrying
+a partial-result token, it lends the handler a typed [[Partial-result sink]].
 _Avoid_: Session, server-state.
+
+**Partial-result sink**:
+A request-scoped, typed destination for incremental result chunks. It exists
+only for a method the LSP metaModel marks as supporting partial results and
+only when that request supplies a partial-result token; the final response
+ends the stream.
+_Avoid_: Progress handle (that name belongs to the work-done lifecycle), stream
+(the sink admits discrete protocol messages rather than providing an async
+iterator).
 
 **Transport**:
 The message-framed channel over which LSP JSON-RPC envelopes flow into
