@@ -260,6 +260,10 @@ name = "navigation_lookup"
 required-features = ["runtime-tokio"]
 
 [[test]]
+name = "notebook_sync"
+required-features = ["runtime-tokio"]
+
+[[test]]
 name = "outgoing_notifications"
 required-features = ["runtime-tokio"]
 

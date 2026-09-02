@@ -78,6 +78,17 @@ pub(crate) enum ProtocolNotification {
     Close,
     WillSave,
     Save,
+    /// `notebookDocument/didOpen`: the engine registers the notebook and opens
+    /// each of its cell text documents (ADR 0034).
+    NotebookOpen,
+    /// `notebookDocument/didChange`: the engine applies the structural,
+    /// metadata, and cell-text parts of the change together.
+    NotebookChange,
+    /// `notebookDocument/didSave`.
+    NotebookSave,
+    /// `notebookDocument/didClose`: the engine removes the notebook and closes
+    /// every cell text Document it listed.
+    NotebookClose,
     WorkspaceFolders,
     Configuration,
     Trace,
@@ -103,6 +114,10 @@ impl ProtocolNotification {
             Self::CLOSE_METHOD => Some(Self::Close),
             Self::WILL_SAVE_METHOD => Some(Self::WillSave),
             Self::SAVE_METHOD => Some(Self::Save),
+            "notebookDocument/didOpen" => Some(Self::NotebookOpen),
+            "notebookDocument/didChange" => Some(Self::NotebookChange),
+            "notebookDocument/didSave" => Some(Self::NotebookSave),
+            "notebookDocument/didClose" => Some(Self::NotebookClose),
             "workspace/didChangeWorkspaceFolders" => Some(Self::WorkspaceFolders),
             "workspace/didChangeConfiguration" => Some(Self::Configuration),
             "$/setTrace" => Some(Self::Trace),

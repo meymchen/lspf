@@ -30,10 +30,12 @@ use bytes::Bytes;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 use futures_channel::mpsc::UnboundedReceiver;
 use gen_lsp_types::{
-    DidChangeConfigurationParams, DidChangeTextDocumentParams, DidChangeWorkspaceFoldersParams,
-    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
-    InitializeParams, InitializedParams, ProgressToken, Save, ServerInfo, SetTraceParams,
-    TextDocumentSyncKind, TextDocumentSyncOptions, TraceValue, WillSaveTextDocumentParams,
+    DidChangeConfigurationParams, DidChangeNotebookDocumentParams, DidChangeTextDocumentParams,
+    DidChangeWorkspaceFoldersParams, DidCloseNotebookDocumentParams, DidCloseTextDocumentParams,
+    DidOpenNotebookDocumentParams, DidOpenTextDocumentParams, DidSaveNotebookDocumentParams,
+    DidSaveTextDocumentParams, InitializeParams, InitializedParams, NotebookDocumentCellChanges,
+    ProgressToken, Save, ServerInfo, SetTraceParams, TextDocumentItem, TextDocumentSyncKind,
+    TextDocumentSyncOptions, TraceValue, Uri, WillSaveTextDocumentParams,
     WorkDoneProgressCancelParams, WorkspaceFoldersServerCapabilities,
 };
 use serde::Serialize;
@@ -52,7 +54,7 @@ use crate::documents::{DocumentMutationError, Documents};
 use crate::error::Error;
 use crate::failure::{ConnectionDirection, ConnectionFailureCategory, FailureReporter};
 use crate::file_provider::SharedFileProvider;
-use crate::notebooks::Notebooks;
+use crate::notebooks::{Notebook, Notebooks};
 use crate::progress::{ProgressCancel, ProgressRegistry};
 use crate::raw::{RawMessage, RequestId};
 use crate::runtime::{Runtime, default_runtime, ensure_runtime_available};
@@ -930,9 +932,11 @@ where
 
     /// Validate and, where applicable, mutate for a protocol-owned notification.
     ///
-    /// Built-in validation is what the documents themselves can establish: a
-    /// change names a document that must already be open, and each of its
-    /// ranges must be applicable under the negotiated encoding. Returning `Err`
+    /// Built-in validation is what the stores themselves can establish: a
+    /// change names a document that must already be open, each of its ranges
+    /// must be applicable under the negotiated encoding, and a notebook cell
+    /// splice must land inside the cell array the notebook actually has.
+    /// Returning `Err`
     /// is what skips the notification's hook, so nothing partial is left for a
     /// hook to observe: a rejected `didChange` batch leaves the document at the
     /// revision the last accepted notification produced. The returned gate says
@@ -992,6 +996,64 @@ where
                     .into());
                 }
             }
+            ProtocolNotification::NotebookOpen => {
+                let params: DidOpenNotebookDocumentParams = decode_params(raw_params)?;
+                // Each cell counts against the connection's Document budgets,
+                // and cells go first: a refused cell leaves the notebook
+                // unregistered, so the skipped hook sees neither half of a
+                // half-open notebook. The separate notebook-count budget ADR
+                // 0034 describes — the one that makes an empty notebook cost
+                // something — arrives with issue #253.
+                self.open_cell_text_documents(params.cell_text_documents)?;
+                if let Some(superseded) = self.notebooks.open(params.notebook_document) {
+                    // Re-opening a notebook breaks the LSP's ordering. There is
+                    // no response to complain through, but the cells the
+                    // superseded notebook listed and the new one does not would
+                    // otherwise stay in the document store forever.
+                    debug!(
+                        uri = ?superseded.uri(),
+                        "re-opening a notebook that was already open"
+                    );
+                    self.close_departed_cells(&superseded);
+                }
+            }
+            ProtocolNotification::NotebookChange => {
+                let params: DidChangeNotebookDocumentParams = decode_params(raw_params)?;
+                self.apply_notebook_change(params)?;
+            }
+            ProtocolNotification::NotebookSave => {
+                let params: DidSaveNotebookDocumentParams = decode_params(raw_params)?;
+                // A notebook save carries no state beyond the notification
+                // itself, exactly like `textDocument/didSave`. Saving a
+                // notebook that was never opened still runs the hook: it
+                // observes the same absence the peer left behind.
+                if !self.notebooks.contains(&params.notebook_document.uri) {
+                    debug!(
+                        uri = ?params.notebook_document.uri,
+                        "saving a notebook that is not synchronized"
+                    );
+                }
+            }
+            ProtocolNotification::NotebookClose => {
+                let params: DidCloseNotebookDocumentParams = decode_params(raw_params)?;
+                // Every cell text Document the notebook listed closes with it —
+                // missing one is how those Documents leak — and so does every
+                // cell the peer names, whether or not the two agree.
+                match self.notebooks.close(&params.notebook_document.uri) {
+                    Some(removed) => {
+                        for cell in removed.cells() {
+                            self.documents.close(&cell.document);
+                        }
+                    }
+                    None => debug!(
+                        uri = ?params.notebook_document.uri,
+                        "closing a notebook that was not open"
+                    ),
+                }
+                for cell in &params.cell_text_documents {
+                    self.documents.close(&cell.uri);
+                }
+            }
             ProtocolNotification::WorkspaceFolders => {
                 let params: DidChangeWorkspaceFoldersParams = decode_params(raw_params)?;
                 self.established_workspace().apply_folder_change(params);
@@ -1021,12 +1083,139 @@ where
         Ok(BuiltInGate::RunHook)
     }
 
+    /// Apply one `notebookDocument/didChange` across the notebook layer and the
+    /// document store (ADR 0034).
+    ///
+    /// The order is what makes the whole notification all-or-nothing. Planning
+    /// the notebook validates the splice without committing it; every cell text
+    /// Document mutation that can be refused runs next, undoing its own work on
+    /// refusal; the notebook is committed only once nothing can fail; and the
+    /// cells that left the notebook — the one irreversible step — close last.
+    fn apply_notebook_change(
+        &self,
+        params: DidChangeNotebookDocumentParams,
+    ) -> std::result::Result<(), BuiltInError> {
+        let planned = self.notebooks.plan_change(&params)?;
+        let closed_cells = match params.change.cells {
+            Some(cells) => self.apply_cell_text_documents(cells)?,
+            None => Vec::new(),
+        };
+        // A cell the splice removed loses its Document here even when the peer
+        // left it out of `didClose`. Nothing afterwards can name that cell, so
+        // trusting `didClose` alone is how a cell text Document leaks.
+        if let Some(superseded) = self.notebooks.commit(planned) {
+            self.close_departed_cells(&superseded);
+        }
+        for uri in closed_cells {
+            self.documents.close(&uri);
+        }
+        Ok(())
+    }
+
+    /// Mutate the cell text Documents one cell change names — the structural
+    /// change's opens, then every cell's text content — and return the URIs the
+    /// peer asked to close, which the caller closes after the notebook commits.
+    ///
+    /// Any refusal restores what this notification already did: the cells it
+    /// opened close again and the cells it edited return to their prior text
+    /// and version, so the skipped hook has no partial state to observe.
+    fn apply_cell_text_documents(
+        &self,
+        cells: NotebookDocumentCellChanges,
+    ) -> std::result::Result<Vec<Uri>, BuiltInError> {
+        let (opened_cells, closed_cells) = match cells.structure {
+            Some(structure) => (
+                structure.did_open.unwrap_or_default(),
+                structure.did_close.unwrap_or_default(),
+            ),
+            None => (Vec::new(), Vec::new()),
+        };
+        let opened = self.open_cell_text_documents(opened_cells)?;
+
+        // Cell text reuses the document store's incremental change path, so a
+        // cell edit behaves exactly like `textDocument/didChange` on the same
+        // URI — including its all-or-nothing batch and its byte budget.
+        let mut edited = Vec::new();
+        for cell in cells.text_content.unwrap_or_default() {
+            let previous = self
+                .documents
+                .get(&cell.document.text_document_identifier.uri);
+            match self.documents.apply_changes(
+                &cell.document.text_document_identifier.uri,
+                cell.document.version,
+                cell.changes,
+            ) {
+                Ok(()) => edited.extend(previous),
+                Err(error) => {
+                    for document in edited {
+                        self.documents.restore(document);
+                    }
+                    self.close_documents(&opened);
+                    return Err(error.into());
+                }
+            }
+        }
+
+        Ok(closed_cells.into_iter().map(|cell| cell.uri).collect())
+    }
+
+    /// Open every cell text Document, returning the URIs this notification
+    /// actually added to the store.
+    ///
+    /// A refusal undoes the opens made so far, so a rejected notebook
+    /// notification leaves no orphan cell text Document behind. Only cells that
+    /// were absent beforehand are undone: a cell URI the store already held
+    /// belonged to some earlier notification, and closing it would discard
+    /// state this notification never owned.
+    fn open_cell_text_documents(
+        &self,
+        cells: Vec<TextDocumentItem>,
+    ) -> std::result::Result<Vec<Uri>, DocumentMutationError> {
+        let mut opened = Vec::new();
+        for cell in cells {
+            let uri = cell.uri.clone();
+            let was_open = self.documents.get(&uri).is_some();
+            if let Err(error) = self.documents.open(cell) {
+                self.close_documents(&opened);
+                return Err(error);
+            }
+            if !was_open {
+                opened.push(uri);
+            }
+        }
+        Ok(opened)
+    }
+
+    /// Close the cell text Documents a superseded notebook listed that no
+    /// synchronized notebook lists any more.
+    fn close_departed_cells(&self, superseded: &Notebook) {
+        for cell in superseded.cells() {
+            if self.notebooks.notebook_for_cell(&cell.document).is_none() {
+                self.documents.close(&cell.document);
+            }
+        }
+    }
+
+    fn close_documents(&self, uris: &[Uri]) {
+        for uri in uris {
+            self.documents.close(uri);
+        }
+    }
+
     fn accepts_protocol_notification(&self, built_in: ProtocolNotification) -> bool {
         match built_in {
             ProtocolNotification::WorkspaceFolders
             | ProtocolNotification::Configuration
             | ProtocolNotification::Trace
             | ProtocolNotification::ProgressCancel => true,
+            // Notebook synchronization is its own capability in LSP, not a
+            // mode of `textDocumentSync`, so the text-document switches below
+            // do not gate it. Advertising and gating that capability is
+            // issue #252.
+            ProtocolNotification::NotebookOpen
+            | ProtocolNotification::NotebookChange
+            | ProtocolNotification::NotebookSave
+            | ProtocolNotification::NotebookClose => true,
             _ if self.document_sync.change == Some(TextDocumentSyncKind::None) => false,
             ProtocolNotification::Open | ProtocolNotification::Close => {
                 self.document_sync.open_close == Some(true)
@@ -1316,9 +1505,11 @@ where
         }
         self.lifecycle = Lifecycle::Exited;
         self.protocol.close().await;
-        // Documents are Server endpoint state, so their lifecycle stays out of
-        // the shared session even though close releases retained snapshots.
+        // Documents and notebooks are Server endpoint state, so their lifecycle
+        // stays out of the shared session even though close releases retained
+        // snapshots.
         self.documents.clear();
+        self.notebooks.clear();
     }
 }
 
