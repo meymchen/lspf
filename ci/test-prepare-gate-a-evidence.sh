@@ -17,6 +17,7 @@ export GATE_A_JOB_RESULTS='{
   "packaged-crate": {"result": "success"},
   "security": {"result": "success"},
   "public-api": {"result": "success"},
+  "public-interface": {"result": "success"},
   "msrv": {"result": "success"},
   "feature-contract": {"result": "success"},
   "native-matrix": {"result": "success"},

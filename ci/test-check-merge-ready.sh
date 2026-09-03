@@ -7,8 +7,8 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 success_results="$({
     printf '%s\n' \
         commit-messages release-context markdownlint feature-matrix fuzz-contract fmt \
-        public-docs packaged-crate security public-api msrv feature-contract \
-        native-matrix test native-lifecycle wasm test-coverage
+        public-docs packaged-crate security public-api public-interface msrv \
+        feature-contract native-matrix test native-lifecycle wasm test-coverage
 } | jq -Rn '[inputs | {key: ., value: {result: "success"}}] | from_entries')"
 
 MERGE_READY_JOB_RESULTS="$success_results" \

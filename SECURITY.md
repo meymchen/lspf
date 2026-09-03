@@ -69,6 +69,7 @@ supported.
 | Native | `runtime-tokio` without a first-party adapter | Supported for a custom Transport | CI `feature-contract` |
 | Native | `testing` alone or added to another native row | Supported in-memory test Transport, protocol journeys, and virtual clock; implies `runtime-tokio` | CI `feature-contract`, `native-matrix`, and `test` |
 | Native | no runtime or Transport feature | Supported for protocol-only compilation, not serving | CI `feature-contract` |
+| Native | `fuzzing` | Unsupported; this repository's own fuzz-harness surface | CI `fuzz contract` |
 | Native | `worker-channel` | Intentionally invalid | CI `feature-contract` checks the compile-time diagnostic |
 | `wasm32-unknown-unknown` | `wasm` without a first-party adapter | Supported for a custom Transport | CI `wasm` |
 | `wasm32-unknown-unknown` | `worker-channel` | Supported MessagePort Transport; implies `wasm` | CI `wasm` and `feature-contract` |
@@ -82,11 +83,27 @@ describes the APIs enabled by each feature. CI `feature-contract` compiles
 every supported selection and checks that Transport-specific dependencies do
 not leak into the default build.
 
+`fuzzing` enables `lspf::fuzzing`, the harness the repository's own cargo-fuzz
+package drives. It is hidden from the crate documentation, carries no
+compatibility promise, and follows the fuzz targets. Downstream code should not
+enable it; the supported downstream test surface is `testing`.
+
 Pull requests use a fast feedback path: `feature-contract`, maximal workspace
 tests, public documentation, packaging, compatibility, security, WASM, and the
 cross-platform lifecycle run before merge. The release-oriented `msrv` and
 native test matrices, coverage, and Gate A/B evidence run after a push to
 `main`. A newer commit on the same pull request cancels its older CI run.
+
+## The frozen public interface
+
+[`docs/public-interface.md`](./docs/public-interface.md) enumerates the public
+interface item by item: every crate-root export and the target and feature
+selection it is available under, the `lspf::testing` surface, the type aliases
+`lspf::types` owns, the crates whose types appear in frozen signatures, what
+the crate exposes without freezing, and the capabilities this release
+deliberately defers. CI `public-interface` compares that inventory with the
+crate in both directions, so an export nobody inventoried and an inventory row
+whose export is gone both fail before merge.
 
 ## Semantic versioning
 

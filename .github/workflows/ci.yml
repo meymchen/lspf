@@ -255,6 +255,20 @@ jobs:
           targets: wasm32-unknown-unknown
       - run: bash ci/check-feature-contract.sh
 
+  public-interface:
+    name: public interface
+    if: ${{ needs.release-context.outputs.build-checks == 'true' && (github.event_name != 'push' || needs.release-context.outputs.authorized == 'true') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    needs: release-context
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Test the interface freeze gate behavior
+        run: bash ci/test-check-public-interface.sh
+      - name: Compare the frozen inventory with the crate
+        run: bash ci/check-public-interface.sh
+
   native-matrix:
     name: native ${{ matrix.name }}
     if: ${{ needs.release-context.outputs.build-checks == 'true' && (github.event_name != 'push' || needs.release-context.outputs.authorized == 'true') }}
@@ -535,6 +549,7 @@ jobs:
       - public-api
       - msrv
       - feature-contract
+      - public-interface
       - native-matrix
       - test
       - native-lifecycle
@@ -564,6 +579,7 @@ jobs:
       - public-api
       - msrv
       - feature-contract
+      - public-interface
       - native-matrix
       - test
       - native-lifecycle
@@ -615,6 +631,7 @@ jobs:
       - public-api
       - msrv
       - feature-contract
+      - public-interface
       - native-matrix
       - test
       - native-lifecycle

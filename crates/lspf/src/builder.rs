@@ -1133,17 +1133,6 @@ impl<S: Send + Sync + 'static> ServerBuilder<S> {
         self
     }
 
-    /// Set the outbound-message budget in the connection's resource policy.
-    ///
-    /// This compatibility shorthand updates
-    /// [`ResourcePolicy::max_outbound_messages`](crate::ResourcePolicy::max_outbound_messages).
-    /// The historical method name is retained for source compatibility; the
-    /// value is now a hard queue budget. Zero is rejected by [`build`](Self::build).
-    pub fn outbound_warning_threshold(mut self, threshold: usize) -> Self {
-        self.resource_policy.max_outbound_messages = threshold;
-        self
-    }
-
     /// Replace all finite budgets and deadlines owned by this connection.
     ///
     /// Invalid zero budgets or enabled zero deadlines are reported by
@@ -2137,29 +2126,35 @@ mod tests {
     }
 
     #[test]
-    fn the_outbound_warning_threshold_defaults_to_1024() {
+    fn the_outbound_message_budget_defaults_to_1024() {
         let server = Server::builder(DummyState)
             .build()
-            .expect("the default threshold builds");
+            .expect("the default budget builds");
         assert_eq!(server.resource_policy.max_outbound_messages, 1024);
     }
 
     #[test]
-    fn the_outbound_warning_threshold_accepts_positive_values() {
+    fn the_outbound_message_budget_accepts_positive_values() {
         let server = Server::builder(DummyState)
-            .outbound_warning_threshold(7)
+            .resource_policy(crate::ResourcePolicy {
+                max_outbound_messages: 7,
+                ..crate::ResourcePolicy::default()
+            })
             .build()
-            .expect("a positive threshold builds");
+            .expect("a positive budget builds");
         assert_eq!(server.resource_policy.max_outbound_messages, 7);
     }
 
     #[test]
-    fn a_zero_outbound_warning_threshold_is_a_resource_policy_build_error() {
+    fn a_zero_outbound_message_budget_is_a_resource_policy_build_error() {
         let err = Server::builder(DummyState)
-            .outbound_warning_threshold(0)
+            .resource_policy(crate::ResourcePolicy {
+                max_outbound_messages: 0,
+                ..crate::ResourcePolicy::default()
+            })
             .build()
             .err()
-            .expect("a zero threshold must fail the build");
+            .expect("a zero budget must fail the build");
         assert_eq!(
             err,
             BuildError::InvalidResourcePolicy {

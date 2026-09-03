@@ -248,6 +248,11 @@ The full design lives next to the code:
   ordered wire capture, deterministic deadlines, and reusable Server and
   Client lifecycle journeys for external tests, plus the repository's
   deterministic protocol-session concurrency model.
+- [`docs/public-interface.md`](./docs/public-interface.md) — the frozen public
+  interface, item by item: what each export is for, the target and feature
+  selection it is available under, the crates whose types appear in frozen
+  signatures, what the crate exposes without freezing, and the capabilities
+  this release deliberately defers.
 - [`SECURITY.md`](./SECURITY.md) — supported Rust versions, hosts, targets,
   Cargo feature combinations, release compatibility, deprecation, and private
   vulnerability reporting.
