@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "workloadVersion": 2,
+  "workloads": {
+    "startup": {
+      "iterations": 50
+    },
+    "requestLatency": {
+      "warmupOperations": 100,
+      "measuredOperations": 1000
+    },
+    "throughput": {
+      "operations": 10000
+    },
+    "largeDocumentEditing": {
+      "documentBytes": 1048576,
+      "edits": 100,
+      "replacementBytes": 16
+    },
+    "notebookEditing": {
+      "cells": 128,
+      "edits": 100,
+      "replacementBytes": 16
+    },
+    "partialResultThroughput": {
+      "chunks": 10000
+    },
+    "slowPeer": {
+      "attempts": 128,
+      "outboundMessageLimit": 8,
+      "outboundByteLimit": 1048576,
+      "writeDelayMs": 5
+    }
+  }
+}

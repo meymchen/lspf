@@ -21,6 +21,12 @@ cat >"$workloads" <<'EOF'
       "edits": 4,
       "replacementBytes": 8
     },
+    "notebookEditing": {
+      "cells": 4,
+      "edits": 4,
+      "replacementBytes": 8
+    },
+    "partialResultThroughput": { "chunks": 32 },
     "slowPeer": {
       "attempts": 8,
       "outboundMessageLimit": 2,
@@ -51,7 +57,10 @@ jq -e '
   and (.latencyMs.requestP99 >= .latencyMs.requestP95)
   and (.latencyMs.largeDocumentEditP95 >= 0)
   and (.latencyMs.largeDocumentEditP99 >= .latencyMs.largeDocumentEditP95)
+  and (.latencyMs.notebookEditP95 >= 0)
+  and (.latencyMs.notebookEditP99 >= .latencyMs.notebookEditP95)
   and (.throughputOperationsPerSecond > 0)
+  and (.partialResultChunksPerSecond > 0)
   and (.peakRssMiB > 0)
   and (.limitBehavior.slowPeer.outboundMessageLimit == 2)
   and (.limitBehavior.slowPeer.attempted == 8)
