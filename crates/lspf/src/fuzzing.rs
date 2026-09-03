@@ -35,6 +35,114 @@ const NOTEBOOK_CELL_LIMIT: usize = 64;
 /// `delete_count`. Anything shorter is zero-padded, so every input is a splice.
 const NOTEBOOK_CONTROL_BYTES: usize = 11;
 
+/// The splice one [`notebook_cell_sync`] input describes.
+///
+/// Decoding and encoding sit together so the byte layout has one definition:
+/// the target decodes what the peer sent, and tests encode the shapes they mean
+/// to drive. Without that pairing the layout would live in two places and the
+/// tests would drift off the target they exist to guard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NotebookSplice {
+    /// Cells the notebook holds before the change.
+    pub initial_count: usize,
+    /// Cells the splice inserts in place of the range it deletes.
+    pub replacement_count: usize,
+    /// The peer's first index into the cell array.
+    pub start: u32,
+    /// How many cells the peer deletes from `start`.
+    pub delete_count: u32,
+}
+
+impl NotebookSplice {
+    /// Whether the notebook layer accepts this splice.
+    ///
+    /// This is the property the seed corpus names with its `valid-` and
+    /// `malformed-` prefixes, and it mirrors the bound `Notebooks::plan_change`
+    /// applies: the end of the deleted range decides, because `start` cannot
+    /// exceed it.
+    pub fn is_in_range(&self) -> bool {
+        (self.start as usize)
+            .checked_add(self.delete_count as usize)
+            .is_some_and(|end| end <= self.initial_count)
+    }
+
+    /// Decode one target input into the splice it describes and the cell name
+    /// bytes that follow it.
+    ///
+    /// Every byte string decodes. Input shorter than the controls is
+    /// zero-padded, so there is no shape that declines to be a splice.
+    pub fn decode(data: &[u8]) -> (Self, &[u8]) {
+        let mut controls = [0; NOTEBOOK_CONTROL_BYTES];
+        let supplied = data.get(..NOTEBOOK_CONTROL_BYTES).unwrap_or(data);
+        controls[..supplied.len()].copy_from_slice(supplied);
+        let names = data.get(NOTEBOOK_CONTROL_BYTES..).unwrap_or_default();
+
+        let initial_count = controls[0] as usize % (NOTEBOOK_CELL_LIMIT + 1);
+        let replacement_count = controls[1] as usize % (NOTEBOOK_CELL_LIMIT + 1);
+
+        // A cell array holds at most 64 cells, so peer bytes taken whole would
+        // put `start + delete_count` inside it about once in every 2^52 inputs
+        // and the accepted branch would never be explored. The shape selector
+        // splits the difference: an even byte draws both indices from a span
+        // that straddles the end of the array, which makes the last accepted
+        // splice and the first refused one adjacent, and an odd byte takes the
+        // bytes whole, which is what still reaches `u32::MAX` and the addition
+        // that would overflow.
+        let (start, delete_count) = if controls[2] % 2 == 0 {
+            let span = initial_count as u32 + 2;
+            (
+                read_u32(&controls[3..7]) % span,
+                read_u32(&controls[7..11]) % span,
+            )
+        } else {
+            (read_u32(&controls[3..7]), read_u32(&controls[7..11]))
+        };
+
+        let splice = Self {
+            initial_count,
+            replacement_count,
+            start,
+            delete_count,
+        };
+        (splice, names)
+    }
+
+    /// Encode `self` as target input, with `names` supplying the cell URIs.
+    ///
+    /// The result decodes back to `self`, because this writes the shape byte
+    /// that leaves the two indices alone. Reach the narrowing path with
+    /// [`encode_narrowed`](Self::encode_narrowed) instead.
+    pub fn encode(&self, names: &[u8]) -> Vec<u8> {
+        self.encode_with_shape(1, names)
+    }
+
+    /// Encode `self` as target input that asks the decoder to fold both indices
+    /// into the cell array, which is how a boundary splice stays reachable.
+    ///
+    /// Narrowing is a remainder, so the decoded splice matches `self` only when
+    /// both indices already sit within a cell of the array's end.
+    pub fn encode_narrowed(&self, names: &[u8]) -> Vec<u8> {
+        self.encode_with_shape(0, names)
+    }
+
+    fn encode_with_shape(&self, shape: u8, names: &[u8]) -> Vec<u8> {
+        debug_assert!(
+            self.initial_count <= NOTEBOOK_CELL_LIMIT
+                && self.replacement_count <= NOTEBOOK_CELL_LIMIT,
+            "a cell count above the target's limit has no encoding"
+        );
+        let mut bytes = vec![
+            self.initial_count as u8,
+            self.replacement_count as u8,
+            shape,
+        ];
+        bytes.extend_from_slice(&self.start.to_le_bytes());
+        bytes.extend_from_slice(&self.delete_count.to_le_bytes());
+        bytes.extend_from_slice(names);
+        bytes
+    }
+}
+
 /// Exercise JSON-RPC envelope parsing and canonical serialization.
 pub fn envelope(data: &[u8]) {
     if data.len() > LARGE_INPUT_LIMIT {
@@ -228,34 +336,12 @@ pub fn notebook_cell_sync(data: &[u8]) {
         return;
     }
 
-    let mut controls = [0; NOTEBOOK_CONTROL_BYTES];
-    let supplied = data.get(..NOTEBOOK_CONTROL_BYTES).unwrap_or(data);
-    controls[..supplied.len()].copy_from_slice(supplied);
-    let names = data.get(NOTEBOOK_CONTROL_BYTES..).unwrap_or_default();
-
-    let initial_count = controls[0] as usize % (NOTEBOOK_CELL_LIMIT + 1);
-    let replacement_count = controls[1] as usize % (NOTEBOOK_CELL_LIMIT + 1);
-
-    // A cell array holds at most 64 cells, so peer bytes taken whole would put
-    // `start + delete_count` inside it about once in every 2^52 inputs and the
-    // accepted branch would never be explored. The shape selector splits the
-    // difference: half the inputs draw both indices from a span that straddles
-    // the end of the array, which makes the last accepted splice and the first
-    // refused one adjacent, and half take the bytes whole, which is what still
-    // reaches `u32::MAX` and the addition that would overflow.
-    let (start, delete_count) = if controls[2] % 2 == 0 {
-        let span = initial_count as u32 + 2;
-        (
-            read_u32(&controls[3..7]) % span,
-            read_u32(&controls[7..11]) % span,
-        )
-    } else {
-        (read_u32(&controls[3..7]), read_u32(&controls[7..11]))
-    };
-
-    let initial: Vec<NotebookCell> = (0..initial_count).map(|slot| cell(names, slot)).collect();
-    let replacement: Vec<NotebookCell> = (0..replacement_count)
-        .map(|slot| cell(names, initial_count + slot))
+    let (splice, names) = NotebookSplice::decode(data);
+    let initial: Vec<NotebookCell> = (0..splice.initial_count)
+        .map(|slot| cell(names, slot))
+        .collect();
+    let replacement: Vec<NotebookCell> = (0..splice.replacement_count)
+        .map(|slot| cell(names, splice.initial_count + slot))
         .collect();
 
     let notebook_uri = Uri::from_str("file:///fuzz.ipynb").expect("static URI parses");
@@ -276,8 +362,8 @@ pub fn notebook_cell_sync(data: &[u8]) {
             Some(NotebookDocumentCellChanges {
                 structure: Some(NotebookDocumentCellChangeStructure {
                     array: NotebookCellArrayChange::new(
-                        start,
-                        delete_count,
+                        splice.start,
+                        splice.delete_count,
                         Some(replacement.clone()),
                     ),
                     did_open: None,
@@ -289,7 +375,14 @@ pub fn notebook_cell_sync(data: &[u8]) {
         ),
     );
 
-    let Ok(planned) = notebooks.plan_change(&params) else {
+    let outcome = notebooks.plan_change(&params);
+    assert_eq!(
+        outcome.is_ok(),
+        splice.is_in_range(),
+        "the notebook layer disagreed with NotebookSplice::is_in_range"
+    );
+
+    let Ok(planned) = outcome else {
         let unchanged = notebooks
             .view()
             .get(&notebook_uri)
@@ -304,8 +397,8 @@ pub fn notebook_cell_sync(data: &[u8]) {
 
     // The splice was accepted, so both ends are inside the cell array and the
     // arithmetic below cannot itself overflow or invert.
-    let start = start as usize;
-    let end = start + delete_count as usize;
+    let start = splice.start as usize;
+    let end = start + splice.delete_count as usize;
     let expected: Vec<NotebookCell> = initial[..start]
         .iter()
         .chain(replacement.iter())
