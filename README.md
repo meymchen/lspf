@@ -134,7 +134,10 @@ with an end-to-end stdio test beside it. The
 guide walks through each piece. To choose a Transport adapter, enable only
 its Cargo dependencies, or implement another message-framed channel, see
 [Choosing and implementing a Transport](./docs/guides/transports.md).
-To embed the Client endpoint or own a stdio language-server child, follow the
+To build the same server one step at a time, start with the
+[Server tutorial](./docs/tutorials/server.md), then use the
+[Client tutorial](./docs/tutorials/client.md) to drive it as a supervised
+stdio child. For custom Client Transports and reverse handlers, follow the
 [Client adoption guide](./docs/guides/client-adoption.md).
 Runnable servers for individual LSP features are indexed in
 [`crates/lspf/examples/README.md`](./crates/lspf/examples/README.md).
@@ -248,6 +251,16 @@ The full design lives next to the code:
   ordered wire capture, deterministic deadlines, and reusable Server and
   Client lifecycle journeys for external tests, plus the repository's
   deterministic protocol-session concurrency model.
+- [`docs/guides/errors-and-cancellation.md`](./docs/guides/errors-and-cancellation.md)
+  — which error type owns each failure, how handler errors map to LSP, and how
+  to cancel async, blocking, outbound, and stale document work.
+- [`docs/guides/operations.md`](./docs/guides/operations.md) — resource-policy
+  defaults and tuning, observability, deployment ownership, orderly shutdown,
+  known limitations, and production troubleshooting.
+- [`docs/tutorials/server.md`](./docs/tutorials/server.md) and
+  [`docs/tutorials/client.md`](./docs/tutorials/client.md) — two clean-consumer
+  Cargo projects that CI builds and runs together across a real stdio process
+  boundary.
 - [`docs/public-interface.md`](./docs/public-interface.md) — the frozen public
   interface, item by item: what each export is for, the target and feature
   selection it is available under, the crates whose types appear in frozen
@@ -258,6 +271,12 @@ The full design lives next to the code:
   vulnerability reporting.
 
 ## Current scope
+
+The [support contract](./SECURITY.md) is authoritative for maintained Rust
+versions, hosts, targets, and Cargo feature combinations. The
+[operations guide](./docs/guides/operations.md#known-limitations) records the
+deployment and application responsibilities that lspf deliberately leaves to
+its host.
 
 Available today:
 

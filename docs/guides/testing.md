@@ -5,7 +5,7 @@ real lspf endpoint without sockets or child processes:
 
 ```toml
 [dev-dependencies]
-lspf = { version = "0.9.1", default-features = false, features = ["testing"] }
+lspf = { version = "0.11.0", default-features = false, features = ["testing"] }
 tokio = { version = "1", features = ["macros", "rt", "time"] }
 ```
 
@@ -55,6 +55,13 @@ failures under the test's control.
 and handler deadlines. It must be created inside a current-thread Tokio
 runtime. Call `advance` after the message that arms the deadline has appeared
 at the scripted peer; the clock jump then makes the timeout deterministic.
+
+For process-boundary coverage, `ci/check-tutorials.sh` extracts the complete
+[Server](../tutorials/server.md) and [Client](../tutorials/client.md) tutorial
+programs into separate Cargo projects, builds them against the packaged lspf
+crate, and runs the Client against the Server. Use an in-memory journey for
+precise protocol assertions and virtual time; keep at least one supervised
+stdio journey when process launch, framing, stderr, or reap behavior matters.
 
 ## Repository concurrency model
 

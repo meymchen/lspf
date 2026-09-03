@@ -26,7 +26,7 @@ different Transport should not carry the stdio dependency graph.
 
 ```toml
 [dependencies]
-lspf = { version = "0.5.2", default-features = false, features = ["tcp"] }
+lspf = { version = "0.11.0", default-features = false, features = ["tcp"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
