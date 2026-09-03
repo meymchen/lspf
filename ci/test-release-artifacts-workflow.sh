@@ -14,7 +14,7 @@ candidate_job="$(jq -c '.jobs["release-candidate"]' <<<"$workflow_json")"
 
 jq -e '
   .name == "Gate D candidate evidence"
-  and .if == "${{ github.event_name == '\''push'\'' && needs.release-context.outputs.authorized == '\''true'\'' }}"
+  and .if == "${{ github.event_name == '\''push'\'' && needs.release-context.outputs.authorized == '\''true'\'' && needs.release-context.outputs.version == '\''1.0.0'\'' }}"
   and .needs == "release-context"
   and .["runs-on"] == "ubuntu-latest"
   and .["timeout-minutes"] == 60
@@ -39,7 +39,7 @@ jq -e '
 
 jq -e '
   .name == "Verified release candidate"
-  and .if == "${{ github.event_name == '\''push'\'' && needs.release-context.outputs.authorized == '\''true'\'' }}"
+  and .if == "${{ github.event_name == '\''push'\'' && needs.release-context.outputs.authorized == '\''true'\'' && needs.release-context.outputs.version == '\''1.0.0'\'' }}"
   and (.needs | sort) == [
     "gate-a-evidence",
     "gate-b-evidence",

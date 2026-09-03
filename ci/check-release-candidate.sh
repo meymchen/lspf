@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source "$(dirname "${BASH_SOURCE[0]}")/release-candidate-helpers.sh"
+
 revision="${1:?usage: check-release-candidate.sh REVISION CANDIDATE_DIRECTORY}"
 candidate_dir="${2:?usage: check-release-candidate.sh REVISION CANDIDATE_DIRECTORY}"
 cargo_bin="${CARGO_BIN:-cargo}"
@@ -54,24 +56,7 @@ done < <(jq -r '
     ][]
   ' "$candidate_metadata")
 
-for gate in A B C D; do
-    gate_file="$candidate_dir/evidence/gate-${gate,,}/evidence.json"
-    if ! jq -e --arg gate "$gate" --arg revision "$revision" '
-        .gate == $gate
-        and .revision == $revision
-        and .overallResult == "success"
-        and if $gate == "D" then
-          (.failedComponents | type == "array" and length == 0)
-        else
-          (.failedChecks | type == "array" and length == 0)
-        end
-      ' "$gate_file" >/dev/null 2>&1
-    then
-        printf 'retained Gate %s evidence does not establish this candidate\n' \
-            "$gate" >&2
-        exit 1
-    fi
-done
+validate_release_gate_evidence "$revision" "$candidate_dir/evidence"
 
 if ! diff -u \
     <(find "$candidate_dir" -type f ! -name SHA256SUMS \

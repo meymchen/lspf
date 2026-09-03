@@ -613,7 +613,7 @@ jobs:
   # runs the same bounded verification once more in this workflow.
   gate-d-candidate-evidence:
     name: Gate D candidate evidence
-    if: ${{ github.event_name == 'push' && needs.release-context.outputs.authorized == 'true' }}
+    if: ${{ github.event_name == 'push' && needs.release-context.outputs.authorized == 'true' && needs.release-context.outputs.version == '1.0.0' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     needs: release-context
@@ -648,7 +648,7 @@ jobs:
   # permission.
   release-candidate:
     name: Verified release candidate
-    if: ${{ github.event_name == 'push' && needs.release-context.outputs.authorized == 'true' }}
+    if: ${{ github.event_name == 'push' && needs.release-context.outputs.authorized == 'true' && needs.release-context.outputs.version == '1.0.0' }}
     runs-on: ubuntu-latest
     needs:
       - release-context

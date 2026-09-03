@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source "$(dirname "${BASH_SOURCE[0]}")/release-candidate-helpers.sh"
+
 revision="${1:?usage: prepare-release-candidate.sh REVISION RELEASE_ARTIFACT_DIRECTORY EVIDENCE_DIRECTORY}"
 artifact_dir="${2:?usage: prepare-release-candidate.sh REVISION RELEASE_ARTIFACT_DIRECTORY EVIDENCE_DIRECTORY}"
 evidence_dir="${3:?usage: prepare-release-candidate.sh REVISION RELEASE_ARTIFACT_DIRECTORY EVIDENCE_DIRECTORY}"
@@ -21,6 +23,10 @@ if ! jq -e --arg revision "$revision" '
   ' "$release_metadata" >/dev/null 2>&1
 then
     echo 'release metadata is missing, malformed, or names another revision' >&2
+    exit 1
+fi
+if ! jq -e '.version == "1.0.0"' "$release_metadata" >/dev/null; then
+    echo 'release candidate version must be 1.0.0' >&2
     exit 1
 fi
 
@@ -49,33 +55,19 @@ if ! docs_metadata="$(
     || tar -xOzf "$artifact_dir/$docs_artifact" ./release-docs-metadata.json \
         2>/dev/null
 )" \
-    || ! jq -e --arg revision "$revision" \
-        '.schemaVersion == 1 and .revision == $revision' \
+    || ! jq -e --arg revision "$revision" '
+        .schemaVersion == 1
+        and .crate == "lspf"
+        and .version == "1.0.0"
+        and .revision == $revision
+      ' \
         <<<"$docs_metadata" >/dev/null 2>&1
 then
     echo 'documentation archive is missing revision-matching metadata' >&2
     exit 1
 fi
 
-for gate in A B C D; do
-    gate_file="$evidence_dir/gate-${gate,,}/evidence.json"
-    if ! jq -e --arg gate "$gate" --arg revision "$revision" '
-        .schemaVersion == 1
-        and .gate == $gate
-        and .revision == $revision
-        and .overallResult == "success"
-        and if $gate == "D" then
-          (.failedComponents | type == "array" and length == 0)
-        else
-          (.failedChecks | type == "array" and length == 0)
-        end
-      ' "$gate_file" >/dev/null 2>&1
-    then
-        printf 'Gate %s evidence is missing, malformed, failing, or names another revision\n' \
-            "$gate" >&2
-        exit 1
-    fi
-done
+validate_release_gate_evidence "$revision" "$evidence_dir"
 
 if [[ -e $artifact_dir/evidence || -e $artifact_dir/candidate-metadata.json ]]; then
     echo 'release candidate output already exists' >&2

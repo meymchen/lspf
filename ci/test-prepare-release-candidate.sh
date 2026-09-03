@@ -2,6 +2,7 @@
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
+source ci/release-candidate-test-helpers.sh
 
 test_root="$(mktemp -d)"
 trap 'rm -rf "$test_root"' EXIT
@@ -9,70 +10,7 @@ trap 'rm -rf "$test_root"' EXIT
 revision="$(git rev-parse HEAD)"
 artifacts="$test_root/release-artifacts"
 evidence="$test_root/evidence"
-mkdir -p "$artifacts" "$evidence"
-
-for file in \
-    lspf-1.0.0.crate \
-    CHANGELOG.md \
-    lspf-CHANGELOG.md \
-    lspf-1.0.0.spdx.json
-do
-    printf 'fixture for %s\n' "$file" >"$artifacts/$file"
-done
-
-docs_root="$test_root/docs"
-mkdir "$docs_root"
-jq -n --arg revision "$revision" '{schemaVersion: 1, revision: $revision}' \
-    >"$docs_root/release-docs-metadata.json"
-tar -czf "$artifacts/lspf-1.0.0-docs.tar.gz" \
-    -C "$docs_root" release-docs-metadata.json
-
-jq -n \
-    --arg revision "$revision" '
-    {
-      schemaVersion: 1,
-      crate: "lspf",
-      version: "1.0.0",
-      revision: $revision,
-      tag: "v1.0.0",
-      sourceRepository: "https://github.com/meymchen/lspf",
-      workflowRun: "https://github.com/meymchen/lspf/actions/runs/123",
-      artifacts: {
-        crate: "lspf-1.0.0.crate",
-        docs: "lspf-1.0.0-docs.tar.gz",
-        changelogs: ["CHANGELOG.md", "lspf-CHANGELOG.md"],
-        sbom: "lspf-1.0.0.spdx.json",
-        hashes: "SHA256SUMS",
-        provenance: "provenance.jsonl",
-        sbomAttestation: "sbom-attestation.jsonl"
-      }
-    }
-  ' >"$artifacts/release-metadata.json"
-
-for gate in A B C D; do
-    gate_dir="$evidence/gate-${gate,,}"
-    mkdir -p "$gate_dir"
-    jq -n \
-        --arg gate "$gate" \
-        --arg revision "$revision" '
-        {
-          schemaVersion: 1,
-          gate: $gate,
-          revision: $revision,
-          workflowRun: "https://github.com/meymchen/lspf/actions/runs/123",
-          overallResult: "success",
-          failedChecks: (if $gate == "D" then null else [] end),
-          failedComponents: (if $gate == "D" then [] else null end),
-          humanJudgments: (
-            if $gate == "A" then [{
-              classification: "human",
-              statement: "Maintainers decide whether the support promise is acceptable."
-            }] else [] end
-          )
-        }
-      ' >"$gate_dir/evidence.json"
-    printf '# Gate %s evidence\n' "$gate" >"$gate_dir/evidence.md"
-done
+create_release_candidate_fixture "$revision" "$artifacts" "$evidence"
 
 bash ci/prepare-release-candidate.sh "$revision" "$artifacts" "$evidence"
 
@@ -146,6 +84,8 @@ cp \
     "$artifacts/release-metadata.json" \
     "$wrong_docs_artifacts"
 cp -R "$evidence" "$wrong_docs_evidence"
+docs_root="$test_root/wrong-docs"
+mkdir "$docs_root"
 jq -n '{schemaVersion: 1, revision: "0000000000000000000000000000000000000000"}' \
     >"$docs_root/release-docs-metadata.json"
 tar -czf "$wrong_docs_artifacts/lspf-1.0.0-docs.tar.gz" \
@@ -161,3 +101,31 @@ fi
 grep -F 'documentation archive' "$test_root/wrong-docs.output" >/dev/null
 
 echo 'Mismatched documentation revision rejection verified'
+
+wrong_version_artifacts="$test_root/wrong-version-artifacts"
+wrong_version_evidence="$test_root/wrong-version-evidence"
+mkdir "$wrong_version_artifacts"
+cp \
+    "$artifacts/lspf-1.0.0.crate" \
+    "$artifacts/lspf-1.0.0-docs.tar.gz" \
+    "$artifacts/CHANGELOG.md" \
+    "$artifacts/lspf-CHANGELOG.md" \
+    "$artifacts/lspf-1.0.0.spdx.json" \
+    "$artifacts/release-metadata.json" \
+    "$wrong_version_artifacts"
+cp -R "$evidence" "$wrong_version_evidence"
+jq '.version = "0.11.0"' "$wrong_version_artifacts/release-metadata.json" \
+    >"$wrong_version_artifacts/release-metadata.next"
+mv "$wrong_version_artifacts/release-metadata.next" \
+    "$wrong_version_artifacts/release-metadata.json"
+
+if bash ci/prepare-release-candidate.sh \
+    "$revision" "$wrong_version_artifacts" "$wrong_version_evidence" \
+    >"$test_root/wrong-version.output" 2>&1
+then
+    echo 'test failure: a non-1.0 release produced the 1.0 candidate' >&2
+    exit 1
+fi
+grep -F 'version must be 1.0.0' "$test_root/wrong-version.output" >/dev/null
+
+echo 'Non-1.0 candidate rejection verified'
