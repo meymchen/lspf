@@ -744,6 +744,156 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+  # Gates A through D establish properties of a revision. Gate E establishes
+  # them for the artifact: it grafts the candidate crate over `crates/lspf` in
+  # a worktree reconstructed from this revision, so the compatibility,
+  # overload, timeout, disconnect, child-cleanup, reference-server, and editor
+  # journeys all compile the packaged bytes that will be published.
+  gate-e-evidence:
+    name: Gate E candidate validation evidence
+    if: ${{ github.event_name == 'push' && needs.release-context.outputs.authorized == 'true' && needs.release-context.outputs.version == '1.0.0' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs:
+      - release-context
+      - release-candidate
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install Rust toolchain
+        uses: ./.github/actions/setup-rust
+        with:
+          cache: "false"
+      - name: Download the verified release candidate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CANDIDATE_ARTIFACT: lspf-${{ needs.release-context.outputs.version }}-release-candidate
+        run: >-
+          gh run download "$GITHUB_RUN_ID"
+          --name "$CANDIDATE_ARTIFACT"
+          --dir "$RUNNER_TEMP/candidate"
+      - name: Validate the packaged candidate
+        run: >-
+          bash ci/run-gate-e-evidence.sh
+          "$GITHUB_SHA"
+          "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          "$RUNNER_TEMP/candidate"
+          "$RUNNER_TEMP/gate-e-evidence"
+      - name: Retain Gate E candidate validation evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: gate-e-candidate-validation-evidence
+          path: ${{ runner.temp }}/gate-e-evidence
+          if-no-files-found: error
+          retention-days: 90
+
+  # Publishing is the only irreversible step in this pipeline, so it is the
+  # only job behind a protected environment: a maintainer approves it after
+  # reading the candidate report and the Gate E evidence. The job then proves
+  # the crate the registry serves is byte-identical to the validated candidate
+  # before it archives the release record.
+  release-publish:
+    name: Publish the verified candidate
+    if: ${{ github.event_name == 'push' && needs.release-context.outputs.authorized == 'true' && needs.release-context.outputs.version == '1.0.0' }}
+    runs-on: ubuntu-latest
+    needs:
+      - release-context
+      - release-candidate
+      - gate-e-evidence
+    environment: crates-io
+    permissions:
+      actions: read
+      contents: write
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install Rust toolchain
+        uses: ./.github/actions/setup-rust
+        with:
+          cache: "false"
+      - name: Download the verified candidate and its Gate E evidence
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CANDIDATE_ARTIFACT: lspf-${{ needs.release-context.outputs.version }}-release-candidate
+        run: |
+          gh run download "$GITHUB_RUN_ID" --name "$CANDIDATE_ARTIFACT" \
+            --dir "$RUNNER_TEMP/candidate"
+          gh run download "$GITHUB_RUN_ID" \
+            --name gate-e-candidate-validation-evidence \
+            --dir "$RUNNER_TEMP/gate-e-evidence"
+      # `cargo publish` packages from source rather than uploading the verified
+      # artifact, so prove the package this revision produces is still the
+      # candidate before anything irreversible happens.
+      - name: Prove this revision repackages to the validated candidate
+        env:
+          RELEASE_VERSION: ${{ needs.release-context.outputs.version }}
+        run: >-
+          bash ci/check-repackaged-candidate.sh
+          "$GITHUB_SHA"
+          "$RUNNER_TEMP/candidate/lspf-$RELEASE_VERSION.crate"
+      # Trusted publishing mints a short-lived registry token from this run's
+      # OIDC identity, so no long-lived crates.io token exists to leak.
+      - name: Mint a short-lived crates.io token
+        id: registry
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+      - name: Publish the validated revision
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.registry.outputs.token }}
+        run: cargo publish -p lspf --locked
+      - name: Download the crate the registry now serves
+        env:
+          RELEASE_VERSION: ${{ needs.release-context.outputs.version }}
+        run: >-
+          curl --fail --silent --show-error --location
+          --retry 10 --retry-delay 15 --retry-all-errors
+          --output "$RUNNER_TEMP/published.crate"
+          "https://static.crates.io/crates/lspf/lspf-$RELEASE_VERSION.crate"
+      - name: Archive the release record
+        run: >-
+          bash ci/prepare-release-record.sh
+          "$GITHUB_SHA"
+          "$RUNNER_TEMP/candidate"
+          "$RUNNER_TEMP/gate-e-evidence"
+          "$RUNNER_TEMP/published.crate"
+          "$RUNNER_TEMP/release-record"
+      - name: Verify the archived release record
+        run: >-
+          bash ci/check-release-record.sh
+          "$GITHUB_SHA"
+          "$RUNNER_TEMP/release-record"
+      - name: Retain the release record
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: lspf-${{ needs.release-context.outputs.version }}-release-record
+          path: ${{ runner.temp }}/release-record
+          if-no-files-found: error
+          retention-days: 90
+      - name: Tag the release and attach the record
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: v${{ needs.release-context.outputs.version }}
+          RELEASE_VERSION: ${{ needs.release-context.outputs.version }}
+        run: |
+          record="$RUNNER_TEMP/release-record"
+          archive="$RUNNER_TEMP/lspf-$RELEASE_VERSION-release-record.tar.gz"
+          tar -czf "$archive" -C "$record" .
+          gh release create "$RELEASE_TAG" \
+            --target "$GITHUB_SHA" \
+            --title "lspf $RELEASE_VERSION" \
+            --notes-file "$record/release-record.md" \
+            "$archive"
+
   # A normal main push only needs enough policy validation to protect the
   # write-capable release-plz PR job. Full dependency, platform, and release
   # gates already ran before merge and run again only for an authorized release.

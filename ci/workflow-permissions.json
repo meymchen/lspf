@@ -32,6 +32,15 @@
         "contents": "read",
         "id-token": "write"
       },
+      "gate-e-evidence": {
+        "actions": "read",
+        "contents": "read"
+      },
+      "release-publish": {
+        "actions": "read",
+        "contents": "write",
+        "id-token": "write"
+      },
       "release-plz-policy": { "contents": "read" },
       "release-plz-pr": {
         "contents": "write",

@@ -67,7 +67,8 @@
     "assertions": [
       "one external stdio process exercises initialize, open, incremental edit, diagnostics, hover, definition, shutdown, and exit",
       "a second external stdio process repeats initialization and clean shutdown as restart evidence",
-      "all three editor integrations select the same installed lspf-markdown command"
+      "all three editor integrations select the same installed lspf-markdown command",
+      "LSPF_MARKDOWN_SERVER redirects the journey at an installed server, so Gate E replays it against a binary built from the release candidate crate"
     ]
   },
   "humanUxObservations": {

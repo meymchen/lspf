@@ -31,6 +31,7 @@ jq -e '
 ' "$manifest" >/dev/null
 
 while IFS= read -r relative_path; do
+    relative_path="${relative_path%$'\r'}"
     [[ -f "$repo_root/$relative_path" ]] || {
         echo "missing editor validation file: $relative_path" >&2
         exit 1
@@ -39,6 +40,10 @@ done < <(jq -r '.editors[].configurationFiles[]' "$manifest")
 
 grep -q 'LSPF_MARKDOWN_SERVER' \
     "$repo_root/tools/vscode-test-client/src/serverPath.ts"
+# Gate E points the automated journey at a server built from the release
+# candidate through the same variable the editors read.
+grep -q 'LSPF_MARKDOWN_SERVER' \
+    "$repo_root/crates/lspf-markdown/tests/packaged_editor_journey.rs"
 grep -q "vim.lsp.config('lspf_markdown'" \
     "$repo_root/editor-validation/neovim/init.lua"
 grep -q 'worktree.which("lspf-markdown")' \

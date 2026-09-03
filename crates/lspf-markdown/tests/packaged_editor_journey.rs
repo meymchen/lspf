@@ -1,5 +1,6 @@
 //! Editor-facing journey through the packaged `lspf-markdown` stdio binary.
 
+use std::ffi::OsString;
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
@@ -7,6 +8,17 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout, Command};
+
+/// Pick the `lspf-markdown` binary this journey drives.
+///
+/// `LSPF_MARKDOWN_SERVER` is the same variable the three editor integrations
+/// read, so a release candidate can point every journey at a server built from
+/// the packaged crate instead of the workspace build.
+fn resolve_server(selected: Option<OsString>) -> OsString {
+    selected
+        .filter(|path| !path.is_empty())
+        .unwrap_or_else(|| OsString::from(env!("CARGO_BIN_EXE_lspf-markdown")))
+}
 
 fn file_uri(path: &Path) -> String {
     let path = std::path::absolute(path)
@@ -61,7 +73,7 @@ async fn response(stdout: &mut BufReader<ChildStdout>, id: i32) -> Value {
 }
 
 async fn run_session(workspace: &Path, exercise_features: bool) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_lspf-markdown"))
+    let mut child = Command::new(resolve_server(std::env::var_os("LSPF_MARKDOWN_SERVER")))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -167,6 +179,16 @@ async fn run_session(workspace: &Path, exercise_features: bool) {
         .expect("clean shutdown timeout")
         .expect("wait for server");
     assert_eq!(status.code(), Some(0));
+}
+
+#[test]
+fn a_selected_server_path_replaces_the_workspace_binary() {
+    let workspace = OsString::from(env!("CARGO_BIN_EXE_lspf-markdown"));
+    let candidate = OsString::from("/candidate/bin/lspf-markdown");
+
+    assert_eq!(resolve_server(Some(candidate.clone())), candidate);
+    assert_eq!(resolve_server(None), workspace);
+    assert_eq!(resolve_server(Some(OsString::new())), workspace);
 }
 
 #[tokio::test]
