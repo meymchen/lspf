@@ -11,6 +11,7 @@ content_length 65536 5 300
 uri_identity 4096 5 300
 position_conversion 65536 5 300
 incremental_edits 65536 5 300
+notebook_cell_sync 4096 5 300
 lifecycle_sequences 16384 10 300
 EOF
 )
@@ -62,7 +63,7 @@ then
 fi
 
 run_count=$(grep -c ' fuzz run ' "$invocations")
-if [[ $run_count != 6 ]]; then
+if [[ $run_count != 7 ]]; then
     echo "fuzz runner stopped before executing every target" >&2
     exit 1
 fi

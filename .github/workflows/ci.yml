@@ -290,6 +290,14 @@ jobs:
       - run: bash ci/test-check-editor-validation.sh
       - run: bash ci/native-feature-command.sh test-workspace
       - run: bash ci/native-feature-command.sh test-workspace-docs
+      # The fuzz drivers' fast regressions. `fuzzing` is deliberately outside
+      # the feature matrix, so without this step these tests compile to nothing
+      # and a broken driver would surface only in the twice-weekly fuzz sweep.
+      - name: Fuzz driver regressions
+        run: >-
+          cargo test -p lspf --features fuzzing --locked
+          --test notebook_cell_sync_fuzz
+          --test envelope_fuzz_regressions
 
   native-lifecycle:
     name: native lifecycle (${{ matrix.name }})
