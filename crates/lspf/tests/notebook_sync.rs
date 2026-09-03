@@ -954,6 +954,79 @@ async fn notebook_and_document_count_exhaustion_follow_the_same_overload_path() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn notebook_and_document_byte_exhaustion_follow_the_same_overload_path() {
+    let failures = Arc::new(Mutex::new(Vec::<ConnectionFailure>::new()));
+    let recorded = Arc::clone(&failures);
+    let server = Server::builder(AppState {
+        seen: Arc::default(),
+    })
+    .request::<Probe, _, _>(probe)
+    .resource_policy(ResourcePolicy {
+        max_document_bytes: 4,
+        ..ResourcePolicy::default()
+    })
+    .on_error(move |failure| recorded.lock().unwrap().push(failure))
+    .build()
+    .expect("a finite document byte budget builds");
+
+    let outbox = drive(
+        server,
+        vec![
+            initialize_request(1),
+            notification(
+                "textDocument/didOpen",
+                json!({
+                    "textDocument": {
+                        "uri": "file:///too-large.txt",
+                        "languageId": "text",
+                        "version": 1,
+                        "text": "12345"
+                    }
+                }),
+            ),
+            notebook_did_open_at(
+                "file:///too-large.ipynb",
+                1,
+                vec!["file:///too-large.ipynb#cell"],
+                vec![("file:///too-large.ipynb#cell", "12345")],
+            ),
+            probe_request_at(
+                2,
+                "file:///too-large.ipynb",
+                vec!["file:///too-large.ipynb#cell"],
+            ),
+        ],
+    )
+    .await;
+
+    let failures = failures.lock().unwrap();
+    assert_eq!(failures.len(), 2, "{failures:?}");
+    assert!(
+        failures
+            .iter()
+            .all(|failure| failure.category == ConnectionFailureCategory::Overload),
+        "both byte-budget rejections use the connection overload path"
+    );
+    assert_eq!(
+        failures
+            .iter()
+            .map(|failure| failure.context.method.as_deref())
+            .collect::<Vec<_>>(),
+        [
+            Some("textDocument/didOpen"),
+            Some("notebookDocument/didOpen")
+        ]
+    );
+    let refused = probed(&outbox, 2);
+    assert_eq!(refused.notebook, None, "the notebook is not retained");
+    assert_eq!(
+        texts(&refused),
+        [None],
+        "the over-budget cell Document is not retained"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_built_in_mutation_runs_without_any_registered_hook() {
     let server = Server::builder(AppState {
         seen: Arc::default(),
