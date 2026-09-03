@@ -6,6 +6,8 @@
 
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
+
 use lspf::types::notification::DidOpenTextDocument;
 use lspf::types::{
     CompletionItem, CompletionOptions, CompletionParams, CompletionResponse,
@@ -58,23 +60,43 @@ async fn completion(
     ])))
 }
 
+/// The parameters of the custom `shared/ping` request.
+///
+/// JSON-RPC 2.0 only carries `params` as an object or an array, so a custom
+/// method takes an interface like every LSP method does. A bare `String` here
+/// would make the request unsendable by a conforming client.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SharedPingParams {
+    pub(crate) message: String,
+}
+
+/// The result of the custom `shared/ping` request.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SharedPingResult {
+    pub(crate) reply: String,
+}
+
 /// A typed custom request marker: same method, params, and result on every
 /// target.
 enum SharedPing {}
 
 impl lspf::types::request::Request for SharedPing {
-    type Params = String;
-    type Result = String;
+    type Params = SharedPingParams;
+    type Result = SharedPingResult;
     const METHOD: &'static str = "shared/ping";
 }
 
 async fn ping(
     state: Arc<State>,
     _ctx: ServerContext,
-    params: String,
+    params: SharedPingParams,
     _ct: CancellationToken,
-) -> Result<String, LspError> {
-    Ok(format!("{}:{params}", state.label))
+) -> Result<SharedPingResult, LspError> {
+    Ok(SharedPingResult {
+        reply: format!("{}:{}", state.label, params.message),
+    })
 }
 
 /// The post-mutation hook for the built-in `textDocument/didOpen`.

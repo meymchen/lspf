@@ -35,6 +35,13 @@ opens, run `Attach to running LSP server/example` in the repository window and
 pick the example process. Zed's `.zed/debug.json` provides the same attach
 entry, so Zed can debug a process already started by an LSP client.
 
+Every example logs to stderr, because stdout carries the LSP wire protocol.
+`RUST_LOG` selects the events — `RUST_LOG=lspf=trace` for the full framework
+trace — and `LSPF_LOG_FORMAT` selects their shape: `json` writes one
+machine-readable event per line, anything else writes plain text. Both are
+handled by [`example_logging/mod.rs`](./example_logging/mod.rs), which every
+example installs, the transport ones included.
+
 The `blocking_work` example uses `tokio::task::spawn_blocking` because lspf
 handlers are async-only. The `server_features` example installs its completion
 route before initialization, then uses `client/registerCapability` and
@@ -50,6 +57,23 @@ adapter with only its required feature:
 ```console
 cargo check -p lspf --example native_tcp --no-default-features --features tcp
 cargo check -p lspf --example native_websocket --no-default-features --features websocket
+```
+
+To drive one from a real editor, open the repository in VS Code and run
+`Run LSP example client over a socket (select transport)`. The client starts the
+chosen example and connects to its port, so VS Code's own language client
+exercises the adapter. See the
+[test client README](../../../tools/vscode-test-client/README.md).
+
+Zed launches every language server as a command over stdio and offers no socket
+option, so its lspf journeys stay on the stdio examples above.
+
+For an unattended check of both adapters, the
+[transport probe](../../../tools/lsp-transport-probe/README.md) builds, serves,
+and asserts one full session per transport:
+
+```console
+node tools/lsp-transport-probe/main.mjs both
 ```
 
 `shared_server` serves the same handlers over stdio on native targets and also

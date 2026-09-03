@@ -21,6 +21,8 @@
 //!
 //! Fork it as the starting point for a real server.
 
+mod log_format;
+
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -426,31 +428,10 @@ fn completion_options() -> CompletionOptions {
     }
 }
 
-fn init_tracing() {
-    let filter = tracing_subscriber::EnvFilter::from_default_env();
-    if std::env::var("LSPF_LOG_FORMAT").as_deref() == Ok("json") {
-        tracing_subscriber::fmt()
-            .with_writer(std::io::stderr)
-            .with_env_filter(filter)
-            .json()
-            .flatten_event(true)
-            .with_current_span(true)
-            .with_span_list(false)
-            .init();
-    } else {
-        tracing_subscriber::fmt()
-            .with_writer(std::io::stderr)
-            // Editor output channels display ANSI bytes as visible symbols.
-            .with_ansi(false)
-            .with_env_filter(filter)
-            .init();
-    }
-}
-
 #[tokio::main]
 async fn main() -> lspf::Result<()> {
     // Logs go to stderr: stdout carries the LSP wire protocol and nothing else.
-    init_tracing();
+    log_format::init();
 
     let server = Server::builder(State::new())
         // Unopened `file:` URIs resolve from the local filesystem.

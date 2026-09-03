@@ -52,6 +52,47 @@
       "problemMatcher": "$rustc"
     },
     {
+      "label": "build LSP transport examples",
+      "type": "process",
+      "command": "cargo",
+      "args": [
+        "build",
+        "-p",
+        "lspf",
+        "--example",
+        "native_tcp",
+        "--no-default-features",
+        "--features",
+        "tcp"
+      ],
+      "problemMatcher": "$rustc"
+    },
+    {
+      "label": "build LSP WebSocket example",
+      "type": "process",
+      "command": "cargo",
+      "args": [
+        "build",
+        "-p",
+        "lspf",
+        "--example",
+        "native_websocket",
+        "--no-default-features",
+        "--features",
+        "websocket"
+      ],
+      "problemMatcher": "$rustc"
+    },
+    {
+      "label": "probe lspf transports (TCP + WebSocket)",
+      "type": "process",
+      "command": "node",
+      "args": ["tools/lsp-transport-probe/main.mjs", "both"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": [],
+      "group": "test"
+    },
+    {
       "label": "ensure VS Code test client dependencies",
       "type": "npm",
       "script": "prepare:debug",
@@ -85,6 +126,17 @@
       "dependsOn": [
         "ensure VS Code test client dependencies",
         "build LSP examples",
+        "watch VS Code test client"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "prepare VS Code LSP socket example",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "ensure VS Code test client dependencies",
+        "build LSP transport examples",
+        "build LSP WebSocket example",
         "watch VS Code test client"
       ],
       "problemMatcher": []

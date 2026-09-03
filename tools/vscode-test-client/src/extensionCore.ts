@@ -10,6 +10,12 @@ import { serverCommandArguments } from './serverCommands.js';
 import { serverEnvironment } from './serverEnvironment.js';
 import { resolveServerBinary } from './serverPath.js';
 import { serverProfile } from './serverProfile.js';
+import { createSocketSession } from './socketServerOptions.js';
+import {
+    resolveTransport,
+    resolveTransportBinary,
+    socketTransport,
+} from './serverTransport.js';
 
 export interface ExtensionClient {
     onRequest(method: string, handler: () => unknown): { dispose(): unknown };
@@ -37,16 +43,40 @@ export async function activateClient(
 ): Promise<ExtensionClient> {
     // tools/vscode-test-client/out/extensionCore.js  →  repo root is two levels up.
     const repoRoot = path.resolve(context.extensionPath, '..', '..');
-    const serverBinary = resolveServerBinary(repoRoot);
+    const transport = resolveTransport();
+    const serverBinary =
+        transport === 'stdio'
+            ? resolveServerBinary(repoRoot)
+            : resolveTransportBinary(repoRoot, socketTransport(transport));
     const profile = serverProfile(serverBinary);
 
-    const serverOptions: ServerOptions = {
-        command: serverBinary,
-        transport: host.stdioTransport,
-        options: {
-            env: serverEnvironment(),
-        },
-    };
+    let serverOptions: ServerOptions;
+    // Over stdio the client owns the server process and pipes its stderr into
+    // the output channel itself. A socket transport gives the client no process
+    // to read, so the extension owns that forwarding — into the same channel,
+    // so both transports produce one channel with the same name and contents.
+    let serverOutput: OutputChannel | undefined;
+    if (transport === 'stdio') {
+        serverOptions = {
+            command: serverBinary,
+            transport: host.stdioTransport,
+            options: {
+                env: serverEnvironment(),
+            },
+        };
+    } else {
+        serverOutput = host.createOutputChannel(profile.outputChannel);
+        context.subscriptions.push(serverOutput);
+        const channel = serverOutput;
+        const session = createSocketSession(
+            serverBinary,
+            socketTransport(transport),
+            serverEnvironment(),
+            (line) => channel.append(line),
+        );
+        context.subscriptions.push(session);
+        serverOptions = session.serverOptions;
+    }
 
     const commandOutput = profile.commandOutput
         ? host.createOutputChannel(profile.commandOutput)
@@ -56,7 +86,11 @@ export async function activateClient(
     }
     const clientOptions: LanguageClientOptions = {
         documentSelector: [{ scheme: 'file', language: profile.language }],
-        outputChannelName: profile.outputChannel,
+        // Hand the client the channel the server's own output already goes to,
+        // rather than letting it create a second one under the same name.
+        ...(serverOutput
+            ? { outputChannel: serverOutput }
+            : { outputChannelName: profile.outputChannel }),
         synchronize: {
             fileEvents: host.createFileSystemWatcher('**/*'),
         },

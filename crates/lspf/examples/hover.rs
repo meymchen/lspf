@@ -47,7 +47,7 @@ fn valid(value: DateTime) -> Option<DateTime> {
 
 fn parse(value: &str) -> Option<DateTime> {
     let value = value.trim();
-    if let Some((date, time)) = value.split_once(" T") {
+    if let Some((date, time)) = value.split_once("T") {
         let [year, month, day] = numbers(date, '-')?;
         let [hour, minute, second] = numbers(time, ':')?;
         return valid(DateTime {
@@ -103,7 +103,7 @@ fn markdown(value: &DateTime) -> String {
          | `%H:%M:%S` | {:02}:{:02}:{:02} |\n\
          | `%d/%m/%y` | {:02}/{:02}/{:02} |\n\
          | `%Y-%m-%d` | {:04}-{:02}-{:02} |\n\
-         | `%Y-%m-%d T%H:%M:%S` | {:04}-{:02}-{:02} T{:02}:{:02}:{:02} |",
+         | `%Y-%m-%dT%H:%M:%S` | {:04}-{:02}-{:02}T{:02}:{:02}:{:02} |",
         value.day,
         value.month,
         value.year,

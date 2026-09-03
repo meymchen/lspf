@@ -31,6 +31,22 @@
       "preLaunchTask": "prepare VS Code LSP example"
     },
     {
+      "name": "Run LSP example client over a socket (select transport)",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--disable-extensions",
+        "--extensionDevelopmentPath=${workspaceFolder}/tools/vscode-test-client"
+      ],
+      "env": {
+        "LSPF_TEST_TRANSPORT": "${input:socketTransport}"
+      },
+      "outFiles": [
+        "${workspaceFolder}/tools/vscode-test-client/out/**/*.js"
+      ],
+      "preLaunchTask": "prepare VS Code LSP socket example"
+    },
+    {
       "name": "Attach to running LSP server/example",
       "type": "lldb",
       "request": "attach",
@@ -38,6 +54,13 @@
     }
   ],
   "inputs": [
+    {
+      "id": "socketTransport",
+      "type": "pickString",
+      "description": "Transport the language client connects over: tcp dials 127.0.0.1:9257, websocket dials 127.0.0.1:9258",
+      "default": "tcp",
+      "options": ["tcp", "websocket"]
+    },
     {
       "id": "exampleName",
       "type": "pickString",

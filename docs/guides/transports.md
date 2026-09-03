@@ -103,6 +103,22 @@ cargo check -p lspf --example native_websocket \
   --no-default-features --features websocket
 ```
 
+To drive either socket example from a real editor, run the VS Code launch
+configuration `Run LSP example client over a socket (select transport)`. The
+[test client](../../tools/vscode-test-client/README.md) starts the example and
+connects its language client to the bound port, so the adapter is exercised by
+the editor rather than by a script. Zed launches every language server as a
+command over stdio and offers no socket option, so it cannot connect to these
+two examples.
+
+For an unattended check, the
+[transport probe](../../tools/lsp-transport-probe/README.md) builds, serves, and
+asserts one full LSP session per transport:
+
+```bash
+node tools/lsp-transport-probe/main.mjs both
+```
+
 Build both WASM examples for their real target:
 
 ```bash

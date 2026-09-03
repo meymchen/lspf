@@ -417,11 +417,14 @@ Development Host. Back in the repository window, run
 example, and set breakpoints in `crates/lspf/examples/<name>.rs`. Editor actions
 now travel through the real stdio connection and stop in the Rust handler.
 
-The Extension Host debug configuration defaults to `RUST_LOG=lspf=trace` and
-`LSPF_LOG_FORMAT=json` unless the environment already has a value. Each stderr
-line is one JSON event with its event fields and current span. Set
-`LSPF_LOG_FORMAT=text` before launching VS Code to use compact plain text.
-Run and test tasks leave both variables unchanged.
+Every Extension Host debug configuration defaults to `RUST_LOG=lspf=trace` and
+`LSPF_LOG_FORMAT=json` unless the environment already has a value, and
+`lspf-hello` and the examples read that variable the same way: each stderr line
+is one JSON event with its event fields and current span. Set
+`LSPF_LOG_FORMAT=text` before launching VS Code for the plain-text format
+instead, one line of `elapsed level span_names: message fields`. The text
+format prints span names without their fields, because the events below repeat
+every span field they need. Run and test tasks leave both variables unchanged.
 
 At `lspf=trace`, the framework emits five stable event shapes. Field names do
 not change between inbound and outbound traffic:
