@@ -17,6 +17,7 @@ libFuzzer per-input hang threshold; budget is the total run time per target.
 | `uri_identity` | 4096 | 5 s | 300 s |
 | `position_conversion` | 65536 | 5 s | 300 s |
 | `incremental_edits` | 65536 | 5 s | 300 s |
+| `notebook_cell_sync` | 4096 | 5 s | 300 s |
 | `lifecycle_sequences` | 16384 | 10 s | 300 s |
 
 Each `corpus/<target>/` directory contains at least one valid and one malformed
@@ -32,7 +33,7 @@ cargo +nightly fuzz run envelope fuzz/corpus/envelope -- \
 
 `ci/run-fuzz.sh` leaves libFuzzer's original artifact in
 `fuzz/artifacts/<target>/` and asks libFuzzer to create an exact `.minimized`
-sibling when the failure is reproducible. The runner continues through all six
+sibling when the failure is reproducible. The runner continues through all seven
 targets, then reports an aggregate failure. The scheduled workflow uploads the
 artifact directory when the run fails. Reproduce a retained input with:
 

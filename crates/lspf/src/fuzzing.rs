@@ -1,4 +1,4 @@
-//! Internal fuzz drivers for protocol and document boundaries.
+//! Internal fuzz drivers for the protocol, document, and notebook boundaries.
 //!
 //! This module is intentionally hidden from generated documentation and is
 //! available only through the repository's `fuzzing` feature.
@@ -8,10 +8,15 @@ use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 
 use bytes::{Bytes, BytesMut};
-use gen_lsp_types::{Position, Range, Uri};
+use gen_lsp_types::{
+    DidChangeNotebookDocumentParams, NotebookCell, NotebookCellArrayChange, NotebookCellKind,
+    NotebookDocument, NotebookDocumentCellChangeStructure, NotebookDocumentCellChanges,
+    NotebookDocumentChangeEvent, Position, Range, Uri, VersionedNotebookDocumentIdentifier,
+};
 use tokio_util::codec::{Decoder, Encoder};
 
 use crate::documents::{Document, PositionEncoding};
+use crate::notebooks::Notebook;
 use crate::transport::envelope;
 use crate::transport::framing::ContentLengthCodec;
 use crate::uri_key::{UriKey, percent_decode};
@@ -19,6 +24,124 @@ use crate::uri_key::{UriKey, percent_decode};
 const LARGE_INPUT_LIMIT: usize = 65_536;
 const URI_INPUT_LIMIT: usize = 4_096;
 const LIFECYCLE_INPUT_LIMIT: usize = 16_384;
+const NOTEBOOK_INPUT_LIMIT: usize = 4_096;
+
+/// The widest cell array the notebook target builds, so one execution stays
+/// short enough for the splice arithmetic to be what the budget explores.
+const NOTEBOOK_CELL_LIMIT: usize = 64;
+
+/// How much of a notebook target input is read as controls rather than as cell
+/// names: the two cell counts, the shape selector, then `start` and
+/// `delete_count`. Anything shorter is zero-padded, so every input is a splice.
+const NOTEBOOK_CONTROL_BYTES: usize = 11;
+
+/// The splice one [`notebook_cell_sync`] input describes.
+///
+/// Decoding and encoding sit together so the byte layout has one definition:
+/// the target decodes what the peer sent, and tests encode the shapes they mean
+/// to drive. Without that pairing the layout would live in two places and the
+/// tests would drift off the target they exist to guard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NotebookSplice {
+    /// Cells the notebook holds before the change.
+    pub initial_count: usize,
+    /// Cells the splice inserts in place of the range it deletes.
+    pub replacement_count: usize,
+    /// The peer's first index into the cell array.
+    pub start: u32,
+    /// How many cells the peer deletes from `start`.
+    pub delete_count: u32,
+}
+
+impl NotebookSplice {
+    /// Whether the notebook layer accepts this splice.
+    ///
+    /// This is the property the seed corpus names with its `valid-` and
+    /// `malformed-` prefixes, and it mirrors the bound `Notebooks::plan_change`
+    /// applies: the end of the deleted range decides, because `start` cannot
+    /// exceed it.
+    pub fn is_in_range(&self) -> bool {
+        (self.start as usize)
+            .checked_add(self.delete_count as usize)
+            .is_some_and(|end| end <= self.initial_count)
+    }
+
+    /// Decode one target input into the splice it describes and the cell name
+    /// bytes that follow it.
+    ///
+    /// Every byte string decodes. Input shorter than the controls is
+    /// zero-padded, so there is no shape that declines to be a splice.
+    pub fn decode(data: &[u8]) -> (Self, &[u8]) {
+        let mut controls = [0; NOTEBOOK_CONTROL_BYTES];
+        let supplied = data.get(..NOTEBOOK_CONTROL_BYTES).unwrap_or(data);
+        controls[..supplied.len()].copy_from_slice(supplied);
+        let names = data.get(NOTEBOOK_CONTROL_BYTES..).unwrap_or_default();
+
+        let initial_count = controls[0] as usize % (NOTEBOOK_CELL_LIMIT + 1);
+        let replacement_count = controls[1] as usize % (NOTEBOOK_CELL_LIMIT + 1);
+
+        // A cell array holds at most 64 cells, so peer bytes taken whole would
+        // put `start + delete_count` inside it about once in every 2^52 inputs
+        // and the accepted branch would never be explored. The shape selector
+        // splits the difference: an even byte draws both indices from a span
+        // that straddles the end of the array, which makes the last accepted
+        // splice and the first refused one adjacent, and an odd byte takes the
+        // bytes whole, which is what still reaches `u32::MAX` and the addition
+        // that would overflow.
+        let (start, delete_count) = if controls[2] % 2 == 0 {
+            let span = initial_count as u32 + 2;
+            (
+                read_u32(&controls[3..7]) % span,
+                read_u32(&controls[7..11]) % span,
+            )
+        } else {
+            (read_u32(&controls[3..7]), read_u32(&controls[7..11]))
+        };
+
+        let splice = Self {
+            initial_count,
+            replacement_count,
+            start,
+            delete_count,
+        };
+        (splice, names)
+    }
+
+    /// Encode `self` as target input, with `names` supplying the cell URIs.
+    ///
+    /// The result decodes back to `self`, because this writes the shape byte
+    /// that leaves the two indices alone. Reach the narrowing path with
+    /// [`encode_narrowed`](Self::encode_narrowed) instead.
+    pub fn encode(&self, names: &[u8]) -> Vec<u8> {
+        self.encode_with_shape(1, names)
+    }
+
+    /// Encode `self` as target input that asks the decoder to fold both indices
+    /// into the cell array, which is how a boundary splice stays reachable.
+    ///
+    /// Narrowing is a remainder, so the decoded splice matches `self` only when
+    /// both indices already sit within a cell of the array's end.
+    pub fn encode_narrowed(&self, names: &[u8]) -> Vec<u8> {
+        self.encode_with_shape(0, names)
+    }
+
+    fn encode_with_shape(&self, shape: u8, names: &[u8]) -> Vec<u8> {
+        debug_assert!(
+            self.initial_count <= NOTEBOOK_CELL_LIMIT
+                && self.replacement_count <= NOTEBOOK_CELL_LIMIT,
+            "a cell count above the target's limit has no encoding"
+        );
+        let mut bytes = vec![
+            self.initial_count as u8,
+            self.replacement_count as u8,
+            shape,
+        ];
+        bytes.extend_from_slice(&self.start.to_le_bytes());
+        bytes.extend_from_slice(&self.delete_count.to_le_bytes());
+        bytes.extend_from_slice(names);
+        bytes
+    }
+}
 
 /// Exercise JSON-RPC envelope parsing and canonical serialization.
 pub fn envelope(data: &[u8]) {
@@ -193,6 +316,143 @@ pub fn incremental_edits(data: &[u8]) {
     } else {
         assert!(document.text().len() <= LARGE_INPUT_LIMIT);
     }
+}
+
+/// Exercise peer-controlled notebook cell structural splices.
+///
+/// A structural change is the one notification that hands the notebook layer an
+/// array index, a delete count, and a replacement run in a single message, so
+/// the input is decoded as those fields directly rather than as JSON: every byte
+/// string is a splice, and libFuzzer's byte mutations walk `start` and
+/// `delete_count` across the cell-array boundary instead of spending the budget
+/// rediscovering a parseable envelope.
+///
+/// Cell names come from the bytes after the controls, which lets a replacement
+/// cell reuse a URI the notebook already lists. That aliasing is what makes the
+/// cell index worth asserting on: a splice can drop a cell whose URI another
+/// cell still carries.
+pub fn notebook_cell_sync(data: &[u8]) {
+    if data.len() > NOTEBOOK_INPUT_LIMIT {
+        return;
+    }
+
+    let (splice, names) = NotebookSplice::decode(data);
+    let initial: Vec<NotebookCell> = (0..splice.initial_count)
+        .map(|slot| cell(names, slot))
+        .collect();
+    let replacement: Vec<NotebookCell> = (0..splice.replacement_count)
+        .map(|slot| cell(names, splice.initial_count + slot))
+        .collect();
+
+    let notebook_uri = Uri::from_str("file:///fuzz.ipynb").expect("static URI parses");
+    let notebooks = crate::notebooks::Notebooks::default();
+    notebooks
+        .try_open(NotebookDocument::new(
+            notebook_uri.clone(),
+            "fuzz-notebook".into(),
+            1,
+            None,
+            initial.clone(),
+        ))
+        .expect("one notebook fits the default notebook budget");
+    let params = DidChangeNotebookDocumentParams::new(
+        VersionedNotebookDocumentIdentifier::new(2, notebook_uri.clone()),
+        NotebookDocumentChangeEvent::new(
+            None,
+            Some(NotebookDocumentCellChanges {
+                structure: Some(NotebookDocumentCellChangeStructure {
+                    array: NotebookCellArrayChange::new(
+                        splice.start,
+                        splice.delete_count,
+                        Some(replacement.clone()),
+                    ),
+                    did_open: None,
+                    did_close: None,
+                }),
+                data: None,
+                text_content: None,
+            }),
+        ),
+    );
+
+    let outcome = notebooks.plan_change(&params);
+    assert_eq!(
+        outcome.is_ok(),
+        splice.is_in_range(),
+        "the notebook layer disagreed with NotebookSplice::is_in_range"
+    );
+
+    let Ok(planned) = outcome else {
+        let unchanged = notebooks
+            .view()
+            .get(&notebook_uri)
+            .expect("the fuzz notebook stays open");
+        assert_eq!(
+            unchanged.cells(),
+            initial,
+            "a refused structural change mutated the notebook"
+        );
+        return;
+    };
+
+    // The splice was accepted, so both ends are inside the cell array and the
+    // arithmetic below cannot itself overflow or invert.
+    let start = splice.start as usize;
+    let end = start + splice.delete_count as usize;
+    let expected: Vec<NotebookCell> = initial[..start]
+        .iter()
+        .chain(replacement.iter())
+        .chain(initial[end..].iter())
+        .cloned()
+        .collect();
+    assert_eq!(
+        planned.cells(),
+        expected,
+        "the accepted splice did not replace exactly the deleted range"
+    );
+
+    notebooks.commit(planned.clone());
+    assert_eq!(
+        notebooks.view().get(&notebook_uri).as_ref(),
+        Some(&planned),
+        "the committed notebook differs from the accepted plan"
+    );
+    let view = notebooks.view();
+    for committed in planned.cells() {
+        assert_eq!(
+            view.notebook_for_cell(&committed.document)
+                .as_ref()
+                .map(Notebook::uri),
+            Some(&notebook_uri),
+            "a committed cell does not resolve to its notebook"
+        );
+    }
+    // The store keys cells by `UriKey`, but every URI here is built from one
+    // byte of the same ASCII template, so no two spellings can normalize
+    // together and comparing the `Uri`s decides membership the same way.
+    for dropped in &initial {
+        let survives = planned
+            .cells()
+            .iter()
+            .any(|kept| kept.document == dropped.document);
+        assert!(
+            survives || view.notebook_for_cell(&dropped.document).is_none(),
+            "a spliced-out cell still resolves to its notebook"
+        );
+    }
+}
+
+/// The cell occupying `slot`, named by the peer so distinct slots can alias.
+fn cell(names: &[u8], slot: usize) -> NotebookCell {
+    let name = names.get(slot).copied().unwrap_or(slot as u8);
+    let kind = if name % 2 == 0 {
+        NotebookCellKind::Code
+    } else {
+        NotebookCellKind::Markup
+    };
+    let uri = Uri::from_str(&format!("file:///fuzz.ipynb#c{name}"))
+        .expect("a cell URI built from one byte parses");
+    NotebookCell::new(kind, uri, None, None)
 }
 
 /// Exercise arbitrary operations against the production Client lifecycle.

@@ -8,6 +8,7 @@ readonly TARGETS=(
     "uri_identity 4096 5 300"
     "position_conversion 65536 5 300"
     "incremental_edits 65536 5 300"
+    "notebook_cell_sync 4096 5 300"
     "lifecycle_sequences 16384 10 300"
 )
 

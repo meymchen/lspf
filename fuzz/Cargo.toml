@@ -50,6 +50,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "notebook_cell_sync"
+path = "fuzz_targets/notebook_cell_sync.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "lifecycle_sequences"
 path = "fuzz_targets/lifecycle_sequences.rs"
 test = false
