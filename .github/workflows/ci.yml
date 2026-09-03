@@ -197,7 +197,7 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           targets: wasm32-unknown-unknown
-      - run: cargo install cargo-semver-checks --version 0.50.0 --locked
+          tools: cargo-semver-checks@0.50.0
       - name: Test compatibility gate behavior
         run: bash ci/test-check-public-api.sh
       - name: Compare supported public API surfaces
@@ -336,7 +336,7 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           targets: wasm32-unknown-unknown
-      - run: cargo install wasm-bindgen-cli --version 0.2.126 --locked
+          tools: wasm-bindgen-cli@0.2.126
       # The pre-0.5 compile spike (ADR 0020): the protocol kernel must compile
       # for wasm32 without enabling the Tokio runtime.
       - run: cargo check -p lspf --target wasm32-unknown-unknown --no-default-features --features wasm --locked
@@ -362,7 +362,7 @@ jobs:
         with:
           toolchain: 1.98.0
           components: llvm-tools-preview
-      - run: cargo install cargo-llvm-cov --version 0.6.21 --locked
+          tools: cargo-llvm-cov@0.6.21
       - name: Test the test-coverage gate behavior
         run: bash ci/test-check-test-coverage.sh
       - name: Exercise the whole workspace
@@ -759,17 +759,16 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      # Cached, unlike the other release job: this one compiles
-      # `cargo-semver-checks` from source on every push to `main`.
-      - name: Install Rust toolchain
+      # Cached, unlike the other release job: this runs on every push to `main`.
+      - name: Install Rust toolchain and cargo-semver-checks
         uses: ./.github/actions/setup-rust
+        with:
+          tools: cargo-semver-checks@0.50.0
       # release-plz's `semver_check` defaults to on but shells out to
       # `cargo-semver-checks`, so without this install it silently does nothing
       # and every breaking change is proposed as a minor bump. Keep the version
       # pinned to the one the `public-api` job uses, so the bump release-plz
       # picks and the compatibility gate agree on what counts as breaking.
-      - name: Install cargo-semver-checks
-        run: cargo install cargo-semver-checks --version 0.50.0 --locked
       # A branch pushed with the default `GITHUB_TOKEN` starts no workflow run,
       # by design, so release pull requests arrive with CI never having run on
       # them. Mint an App token instead, whose pushes are ordinary events.

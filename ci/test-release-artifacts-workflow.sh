@@ -157,12 +157,28 @@ grep -Fx 'authorized=false' "$fixture_dir/unauthorized.output" >/dev/null
 
 # release-plz's `semver_check` shells out to `cargo-semver-checks` and silently
 # does nothing when the binary is absent, which would let a breaking change ship
-# as a minor bump. Pin the install, and pin it to the version the `public-api`
-# gate uses so both agree on what counts as breaking.
-semver_checks_install='cargo install cargo-semver-checks --version 0.50.0 --locked'
-jq -e --arg install "$semver_checks_install" '
-    any(.jobs["release-plz-pr"].steps[]; (.run // "") == $install) and
-    any(.jobs["public-api"].steps[]; (.run // "") == $install)
+# as a minor bump. Pin the release binaries in the shared setup action instead of
+# compiling them from source, and keep both semver consumers on the same version.
+semver_checks_tool='cargo-semver-checks@0.50.0'
+jq -e \
+    --arg semver "$semver_checks_tool" \
+    --arg wasm_bindgen 'wasm-bindgen-cli@0.2.126' \
+    --arg llvm_cov 'cargo-llvm-cov@0.6.21' '
+    any(.jobs["release-plz-pr"].steps[];
+        .uses == "./.github/actions/setup-rust" and .with.tools == $semver
+    ) and
+    any(.jobs["public-api"].steps[];
+        .uses == "./.github/actions/setup-rust" and .with.tools == $semver
+    ) and
+    any(.jobs.wasm.steps[];
+        .uses == "./.github/actions/setup-rust" and .with.tools == $wasm_bindgen
+    ) and
+    any(.jobs["test-coverage"].steps[];
+        .uses == "./.github/actions/setup-rust" and .with.tools == $llvm_cov
+    ) and
+    all(.jobs[].steps[]?;
+        ((.run // "") | test("^cargo install (cargo-semver-checks|wasm-bindgen-cli|cargo-llvm-cov)")) | not
+    )
 ' <<<"$workflow_json" >/dev/null
 
 $yq_bin -e '

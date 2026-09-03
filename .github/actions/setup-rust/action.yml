@@ -1,5 +1,5 @@
 name: Set up Rust
-description: Install the requested Rust toolchain and optionally restore the Cargo cache.
+description: Install the requested Rust toolchain and CLI tools, and optionally restore the Cargo cache.
 
 inputs:
   toolchain:
@@ -10,6 +10,9 @@ inputs:
     default: ""
   targets:
     description: Comma-separated Rust targets to install.
+    default: ""
+  tools:
+    description: Comma- or whitespace-separated Rust CLI tools and versions to install.
     default: ""
   cache:
     description: Whether to restore and save the Cargo cache.
@@ -27,3 +30,9 @@ runs:
     - name: Restore Cargo cache
       if: inputs.cache == 'true'
       uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+    - name: Install Rust CLI tools
+      if: inputs.tools != ''
+      uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
+      with:
+        tool: ${{ inputs.tools }}
+        fallback: none
