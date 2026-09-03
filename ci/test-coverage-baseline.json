@@ -6,12 +6,12 @@
   },
   "thresholds": {
     "workspaceLines": {
-      "count": 10218,
-      "covered": 9734
+      "count": 15125,
+      "covered": 13957
     },
     "protocolEngineLines": {
-      "count": 1021,
-      "covered": 891
+      "count": 1296,
+      "covered": 1105
     }
   },
   "protocolEngineFiles": [
