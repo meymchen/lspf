@@ -391,7 +391,8 @@ not change between inbound and outbound traffic:
 | `connection closed` | `connection_id`, `close_cause` |
 
 `direction` is `inbound` or `outbound`. Resource names are
-`inbound_requests`, `outbound_queue`, `documents`, and `pending_requests`.
+`inbound_requests`, `outbound_queue`, `documents`, `notebooks`, and
+`pending_requests`.
 Resource actions are `admit`, `release`, `update`, `reject`, and `rollback`.
 Deadline names are `handler` and `outbound_request`; deadline actions are
 `armed`, `completed`, `cancelled`, and `expired`. Completion values are

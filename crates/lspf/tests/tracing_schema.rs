@@ -552,6 +552,11 @@ fn record_gate_b_observations(events: &[Value], policy: ResourcePolicy, handler_
                 "limit": policy.max_document_bytes,
                 "observedPeak": resource_peak(events, "documents", "resource_bytes"),
             },
+            {
+                "name": "notebooks",
+                "limit": policy.max_notebooks,
+                "observedPeak": resource_peak(events, "notebooks", "resource_current"),
+            },
         ],
     });
     std::fs::write(
@@ -1043,6 +1048,7 @@ async fn fixed_budget_floods_and_a_slow_reader_never_exceed_connection_limits() 
         max_outbound_bytes: OUTBOUND_BYTES,
         max_documents: 2,
         max_document_bytes: 8,
+        max_notebooks: 1,
         handler_timeout: Duration::from_secs(120),
         ..ResourcePolicy::default()
     };
@@ -1069,6 +1075,27 @@ async fn fixed_budget_floods_and_a_slow_reader_never_exceed_connection_limits() 
     }
     wait_for_event(&logs, |event| {
         event["resource"] == "documents" && event["resource_action"] == "reject"
+    })
+    .await;
+
+    let open_notebook = |uri: &str| {
+        notification(
+            "notebookDocument/didOpen",
+            json!({
+                "notebookDocument": {
+                    "uri": uri,
+                    "notebookType": "jupyter-notebook",
+                    "version": 1,
+                    "cells": []
+                },
+                "cellTextDocuments": []
+            }),
+        )
+    };
+    connection.send(open_notebook("file:///first.ipynb"));
+    connection.send(open_notebook("file:///excess.ipynb"));
+    wait_for_event(&logs, |event| {
+        event["resource"] == "notebooks" && event["resource_action"] == "reject"
     })
     .await;
 
@@ -1120,6 +1147,12 @@ async fn fixed_budget_floods_and_a_slow_reader_never_exceed_connection_limits() 
             && event["resource_current"] == 2
             && event["resource_bytes"] == 8
     }));
+    assert!(events_during_load.iter().any(|event| {
+        event["resource"] == "notebooks"
+            && event["resource_action"] == "reject"
+            && event["resource_current"] == 1
+            && event["resource_limit"] == 1
+    }));
     record_gate_b_observations(&events_during_load, policy, handler_task_peak);
 
     connection.outbound_control.resume();
@@ -1140,7 +1173,12 @@ async fn fixed_budget_floods_and_a_slow_reader_never_exceed_connection_limits() 
 
     let events = logs.events();
     assert_resource_events_stay_within_limits(&events);
-    for resource in ["inbound_requests", "outbound_queue", "documents"] {
+    for resource in [
+        "inbound_requests",
+        "outbound_queue",
+        "documents",
+        "notebooks",
+    ] {
         assert_resource_finished_at_zero(&events, resource);
     }
     assert_eq!(completion_count(&events, "inbound", Stalls::METHOD, "2"), 1);

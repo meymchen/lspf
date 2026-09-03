@@ -50,7 +50,7 @@ use crate::capability::GeneratedCapabilities;
 use crate::client::ClientHandle;
 use crate::codec::{decode_params, decode_value, encode_body, request_token};
 use crate::context::ServerContext;
-use crate::documents::{DocumentMutationError, Documents};
+use crate::documents::{Document, DocumentMutationError, Documents};
 use crate::error::Error;
 use crate::failure::{ConnectionDirection, ConnectionFailureCategory, FailureReporter};
 use crate::file_provider::SharedFileProvider;
@@ -265,6 +265,11 @@ enum BuiltInError {
     Overload(LspError),
 }
 
+struct CellOpenRollback {
+    uri: Uri,
+    previous: Option<Document>,
+}
+
 impl From<LspError> for BuiltInError {
     fn from(error: LspError) -> Self {
         Self::Protocol(error)
@@ -394,7 +399,7 @@ where
         Self {
             state: server.state,
             documents: Documents::with_resource_policy(server.resource_policy, trace),
-            notebooks: Notebooks::default(),
+            notebooks: Notebooks::with_resource_policy(server.resource_policy, trace),
             workspace: None,
             // Document notifications are processed only after initialize has
             // replaced this with the validated effective configuration.
@@ -1001,11 +1006,17 @@ where
                 // Each cell counts against the connection's Document budgets,
                 // and cells go first: a refused cell leaves the notebook
                 // unregistered, so the skipped hook sees neither half of a
-                // half-open notebook. The separate notebook-count budget ADR
-                // 0034 describes — the one that makes an empty notebook cost
-                // something — arrives with issue #253.
-                self.open_cell_text_documents(params.cell_text_documents)?;
-                if let Some(superseded) = self.notebooks.open(params.notebook_document) {
+                // half-open notebook. The separate notebook-count budget makes
+                // an empty notebook consume finite connection capacity too.
+                let opened = self.open_cell_text_documents(params.cell_text_documents)?;
+                let superseded = match self.notebooks.try_open(params.notebook_document) {
+                    Ok(superseded) => superseded,
+                    Err(error) => {
+                        self.rollback_cell_opens(opened);
+                        return Err(BuiltInError::Overload(error));
+                    }
+                };
+                if let Some(superseded) = superseded {
                     // Re-opening a notebook breaks the LSP's ordering. There is
                     // no response to complain through, but the cells the
                     // superseded notebook listed and the new one does not would
@@ -1150,7 +1161,7 @@ where
                     for document in edited {
                         self.documents.restore(document);
                     }
-                    self.close_documents(&opened);
+                    self.rollback_cell_opens(opened);
                     return Err(error.into());
                 }
             }
@@ -1159,31 +1170,37 @@ where
         Ok(closed_cells.into_iter().map(|cell| cell.uri).collect())
     }
 
-    /// Open every cell text Document, returning the URIs this notification
-    /// actually added to the store.
+    /// Open every cell text Document, retaining the prior snapshot needed to
+    /// roll back this notification.
     ///
     /// A refusal undoes the opens made so far, so a rejected notebook
-    /// notification leaves no orphan cell text Document behind. Only cells that
-    /// were absent beforehand are undone: a cell URI the store already held
-    /// belonged to some earlier notification, and closing it would discard
-    /// state this notification never owned.
+    /// notification leaves no orphan or overwritten cell text Document behind.
     fn open_cell_text_documents(
         &self,
         cells: Vec<TextDocumentItem>,
-    ) -> std::result::Result<Vec<Uri>, DocumentMutationError> {
+    ) -> std::result::Result<Vec<CellOpenRollback>, DocumentMutationError> {
         let mut opened = Vec::new();
         for cell in cells {
             let uri = cell.uri.clone();
-            let was_open = self.documents.get(&uri).is_some();
+            let previous = self.documents.get(&uri);
             if let Err(error) = self.documents.open(cell) {
-                self.close_documents(&opened);
+                self.rollback_cell_opens(opened);
                 return Err(error);
             }
-            if !was_open {
-                opened.push(uri);
-            }
+            opened.push(CellOpenRollback { uri, previous });
         }
         Ok(opened)
+    }
+
+    fn rollback_cell_opens(&self, opened: Vec<CellOpenRollback>) {
+        for opened in opened.into_iter().rev() {
+            match opened.previous {
+                Some(document) => self.documents.restore(document),
+                None => {
+                    self.documents.close(&opened.uri);
+                }
+            }
+        }
     }
 
     /// Close the cell text Documents a superseded notebook listed that no
@@ -1193,12 +1210,6 @@ where
             if self.notebooks.notebook_for_cell(&cell.document).is_none() {
                 self.documents.close(&cell.document);
             }
-        }
-    }
-
-    fn close_documents(&self, uris: &[Uri]) {
-        for uri in uris {
-            self.documents.close(uri);
         }
     }
 

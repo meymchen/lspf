@@ -142,6 +142,7 @@ impl Limits {
             max_outbound_bytes: self.outbound_bytes,
             max_documents: self.documents,
             max_document_bytes: self.document_bytes,
+            max_notebooks: ResourcePolicy::default().max_notebooks,
             handler_timeout: Duration::from_millis(self.handler_timeout_milliseconds),
             outbound_request_timeout: Some(Duration::from_millis(
                 self.outbound_request_timeout_milliseconds,
