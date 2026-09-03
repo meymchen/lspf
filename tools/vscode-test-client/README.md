@@ -107,6 +107,19 @@ editor's URI when a command needs one. Results are written to the
 `lspf-hello commands` output channel. The outgoing journey inserts a comment
 at the start of the active document while exercising `workspace/applyEdit`.
 
+## Tests
+
+`npm test` compiles the client and runs `test/**/*.test.ts`; `npm run
+test:coverage` adds the lcov report SonarCloud reads.
+
+The coverage run excludes `out/!(extensionCore).js`. Every test imports its
+subject from `src/`, except `extension.test.ts`, which loads the compiled
+`out/extensionCore.js` because `src/extensionCore.ts` uses the `.js` import
+specifiers TypeScript requires and Node cannot resolve to `.ts`. That compiled
+module pulls in the compiled copy of every other module, and `--enable-source-maps`
+maps those copies back onto the same `src/*.ts` paths — a second, mostly unhit
+record that would otherwise report tested code as uncovered.
+
 ## What this validates
 
 The wire-level claims a real editor makes on the server: VSCode's own

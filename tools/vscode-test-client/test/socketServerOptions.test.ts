@@ -2,8 +2,35 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 
-import { createSocketSession, type SocketHost } from '../src/socketServerOptions.ts';
-import { socketTransport } from '../src/serverTransport.ts';
+import * as net from 'node:net';
+
+import { WebSocketServer } from 'ws';
+
+import {
+    createSocketSession,
+    defaultSocketHost,
+    type SocketHost,
+} from '../src/socketServerOptions.ts';
+import { socketTransport, type SocketTransport } from '../src/serverTransport.ts';
+
+/**
+ * Bind a port the way a transport example does, and hand back the address to
+ * dial plus a close function. Port 0 lets the OS pick, so a test never fights
+ * the ports the real examples bind.
+ */
+async function boundPort(): Promise<{ port: number; close: () => Promise<void> }> {
+    const server = net.createServer();
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as net.AddressInfo;
+    return {
+        port,
+        close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    };
+}
+
+function dialable(name: 'tcp' | 'websocket', port: number): SocketTransport {
+    return { ...socketTransport(name), port };
+}
 
 /** A child process stand-in with the two streams the session subscribes to. */
 function fakeServer(): any {
@@ -201,6 +228,122 @@ test('forwards the server output that would otherwise be invisible', async () =>
     server.stderr.emit('data', Buffer.from('tracing span\n'));
 
     assert.deepEqual(lines, ['tracing span\n']);
+});
+
+// The default host is what a real debug session uses; the tests above replace
+// it, so these dial actual sockets to keep it from going unexercised.
+test('the default host dials a listening TCP port and sets no delay', async () => {
+    const listener = await boundPort();
+
+    const socket = await defaultSocketHost.connectTcp(dialable('tcp', listener.port));
+
+    assert.equal(socket.readyState, 'open');
+    assert.equal(socket.remotePort, listener.port);
+    socket.destroy();
+    await listener.close();
+});
+
+test('the default host reports a TCP port nothing is listening on', async () => {
+    const listener = await boundPort();
+    await listener.close();
+
+    await assert.rejects(
+        defaultSocketHost.connectTcp(dialable('tcp', listener.port)),
+        (error: NodeJS.ErrnoException) => error.code === 'ECONNREFUSED',
+    );
+});
+
+test('the default host completes a WebSocket handshake', async () => {
+    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    await new Promise((resolve) => server.once('listening', resolve));
+    const { port } = server.address() as net.AddressInfo;
+
+    const socket = await defaultSocketHost.connectWebSocket(dialable('websocket', port));
+
+    assert.equal(socket.readyState, socket.OPEN);
+    socket.close();
+    await new Promise((resolve) => server.close(resolve));
+});
+
+test('the default host reports a WebSocket port nothing is listening on', async () => {
+    const listener = await boundPort();
+    await listener.close();
+
+    await assert.rejects(defaultSocketHost.connectWebSocket(dialable('websocket', listener.port)));
+});
+
+test('the default host waits and reads the clock the retry loop needs', async () => {
+    const before = defaultSocketHost.now();
+    await defaultSocketHost.delay(1);
+
+    assert.ok(defaultSocketHost.now() >= before);
+});
+
+test('the WebSocket reader reports a message that is not an envelope', async () => {
+    const socket = new EventEmitter() as any;
+    socket.send = () => {};
+    socket.off = socket.removeListener.bind(socket);
+    const session = createSocketSession(
+        '/x/native_websocket',
+        socketTransport('websocket'),
+        {},
+        () => {},
+        hostWith({ connectWebSocket: async () => socket }),
+    );
+    const transports = (await session.serverOptions()) as any;
+
+    const errors: unknown[] = [];
+    transports.reader.onError((error: unknown) => errors.push(error));
+    transports.reader.listen(() => {});
+    socket.emit('message', Buffer.from('not json'), false);
+
+    assert.equal(errors.length, 1);
+});
+
+test('disposing the reader stops it listening to the socket', async () => {
+    const socket = new EventEmitter() as any;
+    socket.send = () => {};
+    socket.off = socket.removeListener.bind(socket);
+    const session = createSocketSession(
+        '/x/native_websocket',
+        socketTransport('websocket'),
+        {},
+        () => {},
+        hostWith({ connectWebSocket: async () => socket }),
+    );
+    const transports = (await session.serverOptions()) as any;
+
+    const seen: unknown[] = [];
+    transports.reader.listen((message: unknown) => seen.push(message)).dispose();
+    socket.emit('message', Buffer.from('{"jsonrpc":"2.0","id":1,"result":null}'), false);
+
+    assert.deepEqual(seen, []);
+    assert.equal(socket.listenerCount('message'), 0);
+});
+
+// A failed send is the writer's only error path, and `vscode-jsonrpc` counts
+// consecutive failures, so the count has to reach the error handler.
+test('the WebSocket writer reports and rethrows a failed send', async () => {
+    const socket = new EventEmitter() as any;
+    socket.send = () => {
+        throw new Error('socket is closing');
+    };
+    const session = createSocketSession(
+        '/x/native_websocket',
+        socketTransport('websocket'),
+        {},
+        () => {},
+        hostWith({ connectWebSocket: async () => socket }),
+    );
+    const transports = (await session.serverOptions()) as any;
+
+    const counts: number[] = [];
+    transports.writer.onError(([, , count]: [Error, unknown, number]) => counts.push(count));
+
+    await assert.rejects(transports.writer.write({ jsonrpc: '2.0', method: 'exit' }), /closing/);
+    await assert.rejects(transports.writer.write({ jsonrpc: '2.0', method: 'exit' }), /closing/);
+    assert.deepEqual(counts, [1, 2]);
+    assert.doesNotThrow(() => transports.writer.end());
 });
 
 test('stops the server it started when the client is disposed', async () => {
