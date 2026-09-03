@@ -91,9 +91,10 @@ class WebSocketMessageReader extends AbstractMessageReader implements MessageRea
     }
 
     listen(callback: DataCallback): Disposable {
-        const onMessage = (data: WebSocket.RawData, isBinary: boolean): void => {
-            // The adapter accepts text and binary alike; both carry UTF-8 JSON.
-            const text = isBinary ? data.toString() : data.toString();
+        const onMessage = (data: WebSocket.RawData): void => {
+            // The adapter accepts text and binary alike; both carry UTF-8 JSON,
+            // so the frame's own opcode changes nothing here.
+            const text = utf8(data);
             try {
                 callback(JSON.parse(text) as Message);
             } catch (error) {
@@ -114,6 +115,25 @@ class WebSocketMessageReader extends AbstractMessageReader implements MessageRea
             },
         };
     }
+}
+
+/**
+ * Decode one WebSocket message as UTF-8.
+ *
+ * `RawData` is a `Buffer`, an `ArrayBuffer`, or the fragments of a message that
+ * arrived split. Only the first decodes correctly through `toString()` alone:
+ * the array would join its fragments with a comma and the `ArrayBuffer` would
+ * stringify as its own type name, both of them producing JSON no parser
+ * accepts.
+ */
+function utf8(data: WebSocket.RawData): string {
+    if (Array.isArray(data)) {
+        return Buffer.concat(data).toString('utf8');
+    }
+    if (Buffer.isBuffer(data)) {
+        return data.toString('utf8');
+    }
+    return Buffer.from(data).toString('utf8');
 }
 
 /** Write one JSON-RPC envelope per WebSocket message, with no framing header. */

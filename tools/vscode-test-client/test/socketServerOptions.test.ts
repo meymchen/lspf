@@ -87,6 +87,38 @@ test('the WebSocket reader decodes one envelope per message', async () => {
     assert.deepEqual(seen, [{ jsonrpc: '2.0', id: 1, result: null }]);
 });
 
+// `ws` types a message as a Buffer, an ArrayBuffer, or the fragments of a
+// message that arrived split. Each one has to decode to the same envelope.
+test('the WebSocket reader decodes every shape a message arrives in', async () => {
+    const socket = new EventEmitter() as any;
+    socket.send = () => {};
+    socket.off = socket.removeListener.bind(socket);
+    const session = createSocketSession(
+        '/x/native_websocket',
+        socketTransport('websocket'),
+        {},
+        () => {},
+        hostWith({ connectWebSocket: async () => socket }),
+    );
+    const transports = (await session.serverOptions()) as any;
+
+    const seen: unknown[] = [];
+    transports.reader.listen((message: unknown) => seen.push(message));
+    const envelope = '{"jsonrpc":"2.0","id":1,"result":null}';
+    const bytes = Buffer.from(envelope);
+    socket.emit('message', [bytes.subarray(0, 10), bytes.subarray(10)], false);
+    socket.emit(
+        'message',
+        bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+        true,
+    );
+
+    assert.deepEqual(seen, [
+        { jsonrpc: '2.0', id: 1, result: null },
+        { jsonrpc: '2.0', id: 1, result: null },
+    ]);
+});
+
 test('the WebSocket writer sends bare JSON with no framing header', async () => {
     const sent: string[] = [];
     const socket = new EventEmitter() as any;
