@@ -122,6 +122,135 @@ Custom methods add nothing to `ServerCapabilities` — that is the price of
 escaping the sealed catalog — so a custom method and a standard feature are
 both valid for the same server.
 
+## The LSP 3.18 additions
+
+Three inbound request methods arrived with LSP 3.18. They register through the
+same `feature` call as everything else; only their capability contributions are
+worth calling out.
+
+[`inline_completion(options)`](lspf::features::inline_completion) dispatches
+`textDocument/inlineCompletion` and advertises `inlineCompletionProvider`:
+
+```rust
+# use std::sync::Arc;
+use lspf::types::{
+    InlineCompletionItem, InlineCompletionOptions, InlineCompletionParams,
+    InlineCompletionResponse, InsertText,
+};
+# use lspf::{CancellationToken, ServerContext, LspError, Server};
+# struct State;
+async fn inline_completion(
+    _state: Arc<State>,
+    _ctx: ServerContext,
+    _params: InlineCompletionParams,
+    _ct: CancellationToken,
+) -> Result<Option<InlineCompletionResponse>, LspError> {
+    Ok(Some(
+        vec![InlineCompletionItem::new(
+            InsertText::String("println!()".to_string()),
+            None,
+            None,
+            None,
+        )]
+        .into(),
+    ))
+}
+# fn main() {
+let server = Server::builder(State)
+    .feature(
+        lspf::features::inline_completion(InlineCompletionOptions::default()),
+        inline_completion,
+    )
+    .build()
+    .expect("the static registrations are valid");
+# }
+```
+
+[`text_document_content(options)`](lspf::features::text_document_content)
+dispatches `workspace/textDocumentContent`, which serves virtual documents the
+client cannot read from disk. The options name the URI schemes the server
+answers for, and land under `workspace.textDocumentContent` in the advertised
+capabilities:
+
+```rust
+# use std::sync::Arc;
+use lspf::types::{TextDocumentContentOptions, TextDocumentContentParams, TextDocumentContentResult};
+# use lspf::{CancellationToken, ServerContext, LspError, Server};
+# struct State;
+async fn text_document_content(
+    _state: Arc<State>,
+    _ctx: ServerContext,
+    params: TextDocumentContentParams,
+    _ct: CancellationToken,
+) -> Result<TextDocumentContentResult, LspError> {
+    Ok(TextDocumentContentResult::new(format!("// generated for {}", params.uri)))
+}
+# fn main() {
+let server = Server::builder(State)
+    .feature(
+        // Only `lspf:` URIs route here; the client reads every other scheme
+        // the way it normally would.
+        lspf::features::text_document_content(TextDocumentContentOptions::new(vec![
+            "lspf".to_string(),
+        ])),
+        text_document_content,
+    )
+    .build()
+    .expect("the static registrations are valid");
+# }
+```
+
+[`ranges_formatting(options)`](lspf::features::ranges_formatting) dispatches
+`textDocument/rangesFormatting`. It has no capability field of its own: it
+merges into the same `documentRangeFormattingProvider`
+[`range_formatting`](lspf::features::range_formatting) contributes to, and
+registering it is what sets `rangesSupport: true` there. Register the two
+together so a client that only knows single-range formatting still has a route:
+
+```rust
+# use std::sync::Arc;
+use lspf::types::{
+    DocumentRangeFormattingOptions, DocumentRangeFormattingParams,
+    DocumentRangesFormattingParams, TextEdit,
+};
+# use lspf::{CancellationToken, ServerContext, LspError, Server};
+# struct State;
+# async fn range_formatting(
+#     _state: Arc<State>,
+#     _ctx: ServerContext,
+#     _params: DocumentRangeFormattingParams,
+#     _ct: CancellationToken,
+# ) -> Result<Option<Vec<TextEdit>>, LspError> {
+#     Ok(None)
+# }
+async fn ranges_formatting(
+    _state: Arc<State>,
+    _ctx: ServerContext,
+    _params: DocumentRangesFormattingParams,
+    _ct: CancellationToken,
+) -> Result<Option<Vec<TextEdit>>, LspError> {
+    Ok(None)
+}
+# fn main() {
+let server = Server::builder(State)
+    .feature(
+        lspf::features::range_formatting(DocumentRangeFormattingOptions::default()),
+        range_formatting,
+    )
+    .feature(
+        lspf::features::ranges_formatting(DocumentRangeFormattingOptions::default()),
+        ranges_formatting,
+    )
+    .build()
+    .expect("range and ranges formatting build as one family");
+# }
+```
+
+The corresponding outgoing 3.18 additions — `workspace/foldingRange/refresh`
+and `workspace/textDocumentContent/refresh` — live on `ClientHandle` and are
+covered by the
+[outgoing client guide](./outgoing-client.md#workspace-refresh).
+
 ## Automatic capability derivation and conflicts
 
 `ServerCapabilities` are generated from the same registrations that dispatch:
@@ -252,6 +381,101 @@ registration for a built-in document notification — `textDocument/didOpen`,
 one post-validation hook: the engine decodes and mutates first, and the hook
 observes the result through `ctx.documents()`.
 
+## Notebook synchronization
+
+All four `notebookDocument/*` notifications are protocol built-ins: the engine
+decodes each one and mutates the connection's notebook and document state
+itself, and that behaviour cannot be replaced. Registering one of these methods
+records a post-mutation hook, exactly as a text-document registration does, so
+there is no notebook *handler* to write (ADR 0034). What a server does have to
+do is *ask* for the notifications —
+[`notebook_document_sync(options)`](lspf::ServerBuilder::notebook_document_sync)
+advertises `notebookDocumentSync`, which is what makes a client send notebook
+notifications at all. Notebook sync is its own LSP capability rather than a
+mode of `textDocumentSync`, so the text-document sync switches do not affect
+it.
+
+```rust
+# use lspf::types::{NotebookDocumentFilterWithNotebook, NotebookDocumentSyncOptions};
+# use lspf::Server;
+# struct State;
+# fn main() {
+let server = Server::builder(State)
+    .notebook_document_sync(NotebookDocumentSyncOptions::new(
+        // Sync Jupyter notebooks whatever their cells contain.
+        vec![NotebookDocumentFilterWithNotebook::new("jupyter-notebook".into(), None).into()],
+        // Ask the client to forward `notebookDocument/didSave`.
+        Some(true),
+    ))
+    .build()
+    .expect("the static registrations are valid");
+# }
+```
+
+The framework splits a notebook across two stores. [`NotebooksView`] — reached
+through `ctx.notebooks()` — holds notebook type, version, metadata, and ordered
+cell membership. Cell *text* is not there: every cell is an ordinary
+[`Document`] under its own cell URI, so it reads through the same
+`ctx.documents()` view, with the same rope, incremental change path, and
+position encoding as any other document.
+
+```rust
+# use std::sync::Arc;
+# use lspf::types::Uri;
+# use lspf::{CancellationToken, ServerContext, LspError, Server};
+# struct State;
+/// Concatenate a notebook's cells in document order.
+async fn notebook_source(
+    _state: Arc<State>,
+    ctx: ServerContext,
+    args: Vec<String>,
+    _ct: CancellationToken,
+) -> Result<String, LspError> {
+    let uri: Uri = args
+        .first()
+        .ok_or_else(|| LspError::invalid_params("expected a notebook URI"))?
+        .parse()
+        .map_err(LspError::invalid_params)?;
+    let Some(notebook) = ctx.notebooks().get(&uri) else {
+        return Ok(String::new());
+    };
+    let documents = ctx.documents();
+    Ok(notebook
+        .cells()
+        .iter()
+        // Membership and order come from the notebook view; text comes from
+        // the document store.
+        .filter_map(|cell| documents.get(&cell.document))
+        .map(|document| document.text())
+        .collect::<Vec<_>>()
+        .join("\n"))
+}
+# fn main() {
+#     let server = Server::builder(State)
+#         .command("example.notebookSource", notebook_source)
+#         .build()
+#         .expect("the static registrations are valid");
+# }
+```
+
+[`NotebooksView::notebook_for_cell`](lspf::NotebooksView::notebook_for_cell)
+walks the other way, from a cell URI to the notebook holding it — the lookup a
+`textDocument/*` handler needs when the client sends it a cell URI.
+
+Two consequences are worth stating outright:
+
+- **Notebook notifications never synthesize text-document ones.** The notebook
+  hook is the *only* hook a notebook notification runs. A cell edit inside
+  `notebookDocument/didChange` does not
+  invoke the `textDocument/didChange` hook, and opening or closing a notebook
+  does not invoke the open or close hooks for its cell Documents.
+- **Cells are metered as documents.** Every cell counts toward
+  `ResourcePolicy::max_documents` and its text toward `max_document_bytes`;
+  the separate `max_notebooks` budget bounds notebook-level state so an empty
+  notebook still costs something finite. An open that would exceed any of the
+  three is refused before mutation, leaving neither the notebook nor any of
+  its cell Documents behind.
+
 ## Commands
 
 A Command is a typed closure dispatched by name beneath
@@ -349,6 +573,8 @@ limit, and `Io` for the underlying read error.
 [`Workspace`]: https://docs.rs/lspf/latest/lspf/struct.Workspace.html
 [`Documents`]: https://docs.rs/lspf/latest/lspf/struct.DocumentsView.html
 [`DocumentsView`]: https://docs.rs/lspf/latest/lspf/struct.DocumentsView.html
+[`Document`]: https://docs.rs/lspf/latest/lspf/struct.Document.html
+[`NotebooksView`]: https://docs.rs/lspf/latest/lspf/struct.NotebooksView.html
 [`ServerContext`]: https://docs.rs/lspf/latest/lspf/struct.ServerContext.html
 [`FileProvider`]: https://docs.rs/lspf/latest/lspf/trait.FileProvider.html
 [`MemoryFileProvider`]: https://docs.rs/lspf/latest/lspf/struct.MemoryFileProvider.html

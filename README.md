@@ -12,10 +12,16 @@ language server in very little code. You register typed handlers on a
 lifecycle, document synchronization, cancellation, bounded concurrency,
 `tracing` spans, and typed server-to-client traffic through `ClientHandle`.
 
-> **Status:** early-stage. The current published release is **0.5.2**. It
-> includes the complete stable LSP 3.18 feature catalog, typed Commands, the
-> multi-root `Workspace`, outgoing `ClientHandle` helpers, and stdio, TCP, WebSocket,
-> and WASM worker-channel transports. See the
+> **Status:** early-stage. The current published release is **0.11.0**. It
+> includes the complete stable LSP 3.18 inbound feature catalog — inline
+> completion, workspace text-document content, and multiple-ranges formatting
+> among them — typed Commands, the multi-root `Workspace`, outgoing
+> `ClientHandle` helpers, and stdio, TCP, WebSocket, and WASM worker-channel
+> transports.
+>
+> Notebook document synchronization, partial-result reporting, and the two
+> LSP 3.18 workspace refresh requests are on `main` and ship in the next
+> release; they are marked below. See the
 > [package changelog](./crates/lspf/CHANGELOG.md) for release history.
 
 ## Quick start
@@ -137,7 +143,7 @@ Runnable servers for individual LSP features are indexed in
 
 ```toml
 [dependencies]
-lspf = "0.5.2"
+lspf = "0.11.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -195,10 +201,12 @@ the docs.
 | `Command`           | A user closure dispatched by name on `workspace/executeCommand`.                                         |
 | `Document`          | A text resource tracked by the framework: URI, language id, version, and rope-backed contents.           |
 | `DocumentsView`     | The read-only document handle a handler reaches through `ctx.documents()`.                               |
+| `NotebooksView`     | The read-only notebook handle a handler reaches through `ctx.notebooks()`: structure, not cell text.     |
 | `Workspace`         | The cloneable handle to the connection's workspace state: folders, configuration, and documents.         |
 | `FileProvider`      | The configurable resolver for resources that are not open in the editor.                                 |
 | `ServerContext`     | The cheap-to-clone framework-state handle every handler receives: documents, workspace, client, scope.   |
 | `ClientHandle`      | The typed handle for server-to-client notifications and requests (`ctx.client()`).                       |
+| `PartialResultSink` | The request-scoped typed sink for result chunks, lent by `ctx.partial_results()`.                        |
 | `Client`            | Configures one outbound LSP connection over a caller-provided Transport or supervised stdio child.       |
 | `ClientConnection`  | Owns one initialized generic Client connection and its inbound protocol driver.                          |
 | `ClientContext`     | The protocol-only context passed to reverse handlers; editor state remains caller-owned.                 |
@@ -221,13 +229,14 @@ The full design lives next to the code:
   accepted ADR does not by itself mean the feature has been implemented.
 - [`docs/guides/features-and-workspace.md`](./docs/guides/features-and-workspace.md)
   — how to register features, where capabilities come from, who owns the
-  workspace and documents, how Commands dispatch, and how `FileProvider`
-  configuration works. Every example in it compiles as a doctest.
+  workspace, documents, and notebooks, how Commands dispatch, and how
+  `FileProvider` configuration works. Every example in it compiles as a
+  doctest.
 - [`docs/guides/outgoing-client.md`](./docs/guides/outgoing-client.md)
   — the server-to-client helper surface: notifications, window and workspace
-  requests, dynamic registration, workspace refreshes, and work-done
-  progress, with a full helper reference. Every example compiles as a
-  doctest.
+  requests, dynamic registration, workspace refreshes, work-done progress,
+  and partial-result reporting, with a full helper reference. Every example
+  compiles as a doctest.
 - [`docs/guides/client-adoption.md`](./docs/guides/client-adoption.md) — how
   to connect the Client over a custom Transport or supervised stdio child,
   register reverse handlers, set deadlines, handle failures, and shut down
@@ -253,13 +262,24 @@ Available today:
   with reverse handlers, bounded resources, deadlines, and lifecycle control.
 - The built `Server`: typed requests, notifications, commands, the sealed
   feature catalog covering the complete stable LSP 3.18 surface, user `Layer`s, and
-  the one `configure_initialize` transaction.
+  the one `configure_initialize` transaction. The 3.18 additions are
+  `textDocument/inlineCompletion`, `workspace/textDocumentContent`, and
+  `textDocument/rangesFormatting`.
 - Lifecycle hooks through shutdown and exit, incremental or full text-document
   synchronization, and post-mutation document hooks.
+- *(unreleased)* Notebook document synchronization across
+  `notebookDocument/didOpen`, `didChange`, `didSave`, and `didClose`, with
+  notebook structure read through `ctx.notebooks()` and cell text through the
+  same `ctx.documents()` view as any other document.
 - The multi-root `Workspace`, latest configuration settings, and
   `FileProvider`-backed unopened-file lookup.
 - Typed server-to-client notifications and correlated requests through
-  `ClientHandle`.
+  `ClientHandle`. The seven workspace refresh requests are all stable
+  *(unreleased: `workspace/foldingRange/refresh` and
+  `workspace/textDocumentContent/refresh`)*.
+- *(unreleased)* Partial-result reporting: a handler for a request that carries
+  a `partialResultToken` reports typed chunks through `ctx.partial_results()`
+  under the connection's outbound budget.
 - Concurrent dispatch, bounded concurrency, request cancellation, and
   `tracing` spans.
 - Rope-backed documents with UTF-8/UTF-16 position negotiation.
@@ -303,7 +323,7 @@ journeys live in
 This repository is a Cargo workspace with three members:
 
 - [`crates/lspf`](./crates/lspf) — the framework library you depend on
-  (`lspf = "0.5.2"`).
+  (`lspf = "0.11.0"`).
 - [`crates/lspf-hello`](./crates/lspf-hello) — an installable **template
   server**. It builds a `lspf-hello` binary that speaks LSP over stdio: it
   answers hover and completion (with resolve), dispatches four Commands for

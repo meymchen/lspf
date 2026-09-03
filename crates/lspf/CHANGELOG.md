@@ -77,9 +77,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - *(fuzzing)* assert well-formed JSON rather than Value representability ([#265](https://github.com/meymchen/lspf/pull/265))
 
+### Changed
+
+- [**breaking**] Migrate protocol type base to metaModel-generated types ([#275](https://github.com/meymchen/lspf/pull/275))
+
+  The protocol types re-exported under `lspf::types` now come from
+  `gen-lsp-types` 0.11.0, generated from the official LSP metaModel, instead
+  of `lsp-types` 0.97. ADR 0032 records why: `lsp-types` had no release in
+  nearly 27 months and still lacked the 3.18 surface this crate needed.
+
+  Migration: applications that named `lsp_types` directly should depend on
+  `gen-lsp-types = "=0.11.0"` with the `fluent-uri` feature, or reach the
+  types through `lspf::types` and stop naming the base crate at all. The two
+  crates are not interchangeable — type identity differs, so a value built
+  from `lsp_types` will not satisfy an lspf signature. Most items keep their
+  names and shapes; the ones that do not are chiefly `Uri`, which is now a
+  `fluent-uri` type, and the enum variants the metaModel names differently.
+  Public URI values still retain their original spelling and compare by that
+  spelling (ADR 0021).
+
+  The exact `=0.11.0` pin is deliberate: `gen-lsp-types` uses 0.x versioning,
+  where a protocol-compatible metaModel change can still break its Rust API,
+  so every upgrade stays a reviewable change rather than something
+  `cargo update` performs silently.
+
+- [**breaking**] Remove historical outbound warning threshold alias ([#240](https://github.com/meymchen/lspf/pull/240)) ([#277](https://github.com/meymchen/lspf/pull/277))
+
+  `DEFAULT_OUTBOUND_WARNING_THRESHOLD` and
+  `BuildError::InvalidOutboundWarningThreshold` are gone.
+
+  Migration: configure the outbound message budget through
+  `ResourcePolicy::max_outbound_messages`, passed to
+  `ServerBuilder::resource_policy`. The retained builder shorthand now reports
+  a zero budget through `BuildError::InvalidResourcePolicy` instead of the
+  removed variant, so an exhaustive `match` on `BuildError` should drop the old
+  arm rather than rename it.
+
 ### Other
 
-- Migrate protocol type base to metaModel-generated types ([#275](https://github.com/meymchen/lspf/pull/275))
 - Record generated protocol types decision and fix Runtime boundary ([#274](https://github.com/meymchen/lspf/pull/274))
 - fix SonarCloud analysis warnings
 

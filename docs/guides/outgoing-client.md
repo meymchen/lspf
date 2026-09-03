@@ -3,10 +3,11 @@
 This guide covers the server-to-client half of a connection: the typed
 [`ClientHandle`] a handler reaches through [`ServerContext`], the named helpers
 it offers for every standard outgoing notification and request, dynamic
-capability registration, work-done progress, and the escape hatches for
-custom methods. Nothing here is handwritten JSON — every helper takes native
-`lsp-types` parameters and returns native results, and every wire shape is
-pinned by a fixture under `crates/lspf/tests/fixtures`. Every example here
+capability registration, work-done progress, partial-result reporting, and the
+escape hatches for custom methods. Nothing here is handwritten JSON — every
+helper takes native [`lspf::types`] parameters and returns native results, and
+every wire shape is pinned by a fixture under
+`crates/lspf/tests/fixtures`. Every example here
 compiles as a doctest against the shipped crate, and the complete journey —
 configuration lookup, workspace edit, a custom outgoing request, dynamic
 registration, every stable refresh, and cancellable progress — runs as a real
@@ -154,11 +155,15 @@ Seven helpers ask the client to re-pull a stable workspace feature —
 [`refresh_inline_values`](lspf::ClientHandle::refresh_inline_values),
 [`refresh_semantic_tokens`](lspf::ClientHandle::refresh_semantic_tokens),
 [`refresh_folding_ranges`](lspf::ClientHandle::refresh_folding_ranges), and
-[`refresh_text_document_content`](lspf::ClientHandle::refresh_text_document_content)
-from LSP 3.18. All except `refresh_text_document_content` take no parameters;
-that helper names the target document URI. Each returns the client's `null`
+[`refresh_text_document_content`](lspf::ClientHandle::refresh_text_document_content).
+All except `refresh_text_document_content` take no parameters; that helper
+names the target document URI. Each returns the client's `null`
 acknowledgement as `()`. The helpers trigger no recomputation, and the
 framework stores no feature state for them.
+
+The last two are the LSP 3.18 additions. Both are stable now; they were briefly
+gated behind a `proposed` Cargo feature, which has since been removed along
+with the `lspf::proposed` aliases.
 
 ## Work-done progress
 
@@ -201,6 +206,74 @@ A failed begin leaves no registered token behind. Report percentages outside
 0 through 100 fail before anything is sent. Dropping an active handle removes
 its token with a warning but performs no I/O — there is no implicit end, so
 always call `end` deliberately.
+
+## Partial results
+
+Work-done progress reports *how far along* a request is; a partial result
+sends *the answer itself*, chunk by chunk, so the editor can render early
+matches while the handler is still working. Both travel as `$/progress`, but
+the partial-result path is typed to the request being handled rather than to a
+progress lifecycle, so it is a separate surface (ADR 0033). The sink admits
+discrete protocol messages; it is not an async iterator, and abandoning it
+needs no cleanup.
+
+[`ServerContext::partial_results`](lspf::ServerContext::partial_results) lends
+the handler a [`PartialResultSink`] for the request it is currently serving. It
+returns `Some` only when all three hold:
+
+- the marker `R` is the method being handled — asking for another method's sink
+  yields `None`, never a mis-routed chunk;
+- the LSP metaModel defines a partial result for that method, which is what the
+  sealed [`PartialResultRequest`] trait encodes. Notifications, custom
+  requests, and standard methods without a partial result cannot implement it;
+- the client supplied a `partialResultToken` on this request.
+
+So a handler always needs the single-response path too — a client that sends no
+token still expects a complete result:
+
+```rust
+# use std::sync::Arc;
+use lspf::types::request::DocumentSymbolRequest;
+use lspf::types::{
+    DocumentSymbol, DocumentSymbolParams, DocumentSymbolPartialResponse, DocumentSymbolResponse,
+};
+# use lspf::{CancellationToken, ServerContext, LspError};
+# struct State;
+async fn document_symbols(
+    _state: Arc<State>,
+    ctx: ServerContext,
+    _params: DocumentSymbolParams,
+    _ct: CancellationToken,
+) -> Result<Option<DocumentSymbolResponse>, LspError> {
+    let symbols: Vec<DocumentSymbol> = find_symbols();
+    let Some(sink) = ctx.partial_results::<DocumentSymbolRequest>() else {
+        // No token: answer the ordinary way, in one response.
+        return Ok(Some(DocumentSymbolResponse::DocumentSymbolList(symbols)));
+    };
+    for symbol in symbols {
+        sink.report(DocumentSymbolPartialResponse::DocumentSymbolList(vec![symbol]))
+            .map_err(LspError::internal)?;
+    }
+    // Every chunk already went out; the response completes the request.
+    Ok(None)
+}
+# fn find_symbols() -> Vec<DocumentSymbol> { Vec::new() }
+```
+
+`report` is synchronous for the same reason every notification helper is: it
+admits one `$/progress` message to the connection's bounded outbound queue,
+under the same message-count and exact-byte budgets, and a full queue returns
+`ClientError::OutboundOverloaded` while retaining no part of the rejected
+chunk. Chunks enter the same FIFO as the response, so they keep call order and
+always precede it.
+
+There is no finish message and no `end` to call: the request's normal response
+is what concludes the reporting, and dropping the sink performs no I/O. The
+sink is gated on
+the request's lifetime rather than on your holding it — a report attempted
+after the handler has completed, including one from a cloned `ServerContext`,
+fails with `ClientError::InvalidHelperParams` instead of racing past the
+response.
 
 ## Custom requests and notifications
 
@@ -274,6 +347,9 @@ return `Result<(), ClientError>`; request helpers return
 | `ClientHandle::begin_progress` | `window/workDoneProgress/create`, then `$/progress` begin | `ProgressOptions` | `ProgressHandle` | stable |
 | `ProgressHandle::report` | `$/progress` report | `Option<String>` message, `Option<u32>` percentage | `()` | stable |
 | `ProgressHandle::end` | `$/progress` end | `Option<String>` message | `()` | stable |
+| `ServerContext::begin_progress` | `$/progress` begin on the request's `workDoneToken` | `ProgressOptions` | `Option<ProgressHandle>` | stable |
+| `ServerContext::partial_results` | none; lends a borrowed sink | request marker `R` | `Option<PartialResultSink<'_, R>>` | stable |
+| `PartialResultSink::report` | `$/progress` on the request's `partialResultToken` | `R`'s metaModel partial-result type | `()` | stable |
 
 ## What the helpers deliberately leave to you
 
@@ -292,10 +368,16 @@ implicit behavior:
   count and encoded bytes. When either budget is full, ordinary sends return
   `ClientError::OutboundOverloaded`; the application decides whether to retry
   or skip optional output.
-- **No notebook support.** The helper surface contains no notebook method.
+- **No outgoing notebook method.** LSP defines notebook synchronization as
+  client-to-server only, so the helper surface has nothing for it. Inbound
+  notebook sync is a separate, supported surface — see
+  [Notebook synchronization](./features-and-workspace.md#notebook-synchronization).
 - **No implicit progress end.** Dropping a [`ProgressHandle`] removes its
   token with a warning but sends nothing; only `end` ends a progress.
 
 [`ClientHandle`]: https://docs.rs/lspf/latest/lspf/struct.ClientHandle.html
 [`ServerContext`]: https://docs.rs/lspf/latest/lspf/struct.ServerContext.html
 [`ProgressHandle`]: https://docs.rs/lspf/latest/lspf/struct.ProgressHandle.html
+[`PartialResultSink`]: https://docs.rs/lspf/latest/lspf/struct.PartialResultSink.html
+[`PartialResultRequest`]: https://docs.rs/lspf/latest/lspf/trait.PartialResultRequest.html
+[`lspf::types`]: https://docs.rs/lspf/latest/lspf/types/
