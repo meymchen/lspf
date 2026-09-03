@@ -238,6 +238,18 @@ mod markdown {
 
     #[doc = include_str!("../../../docs/guides/testing.md")]
     pub struct TestingGuide;
+
+    #[doc = include_str!("../../../docs/guides/errors-and-cancellation.md")]
+    pub struct ErrorsAndCancellationGuide;
+
+    #[doc = include_str!("../../../docs/guides/operations.md")]
+    pub struct OperationsGuide;
+
+    #[doc = include_str!("../../../docs/tutorials/server.md")]
+    pub struct ServerTutorial;
+
+    #[doc = include_str!("../../../docs/tutorials/client.md")]
+    pub struct ClientTutorial;
 }
 
 pub use builder::SharedHandler;

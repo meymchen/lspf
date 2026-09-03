@@ -12,7 +12,9 @@ package_list="$test_root/package-list.txt"
 archive_list="$test_root/archive-list.txt"
 
 echo "Checking the files Cargo will include in the package"
-cargo package -p "$crate_name" --list --locked --allow-dirty | sort >"$package_list"
+cargo package -p "$crate_name" --list --locked --allow-dirty \
+    | tr '\\' '/' \
+    | sort >"$package_list"
 bash ci/check-package-file-policy.sh "$package_list"
 
 echo "Building and verifying the package"
@@ -23,6 +25,10 @@ crate_version=$(cargo metadata --no-deps --format-version 1 \
         '.packages[] | select(.name == $name) | .version')
 archive="target/package/$crate_name-$crate_version.crate"
 package_dir="$test_root/$crate_name-$crate_version"
+dependency_package_dir="$package_dir"
+if command -v cygpath >/dev/null 2>&1; then
+    dependency_package_dir="$(cygpath -m "$package_dir")"
+fi
 
 tar -xzf "$archive" -C "$test_root"
 tar -tzf "$archive" \
@@ -49,7 +55,7 @@ version = "0.0.0"
 edition = "2024"
 
 [dependencies]
-lspf = { path = "$package_dir", default-features = false, features = ["stdio"] }
+lspf = { path = "$dependency_package_dir", default-features = false, features = ["stdio"] }
 tokio = { version = "1", features = ["rt-multi-thread"] }
 EOF
 
@@ -99,5 +105,8 @@ if [[ $lifecycle_output != *'"id":1'* || $lifecycle_output != *'"id":2'* ]]; the
     echo "the packaged consumer did not return both lifecycle responses" >&2
     exit 1
 fi
+
+echo "Compiling and running the tutorials against the packaged crate"
+bash ci/check-tutorials.sh "$package_dir"
 
 echo "Packaged crate contract verified"

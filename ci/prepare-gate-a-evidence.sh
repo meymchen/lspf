@@ -79,9 +79,9 @@ jq -n \
         },
         {
           id: "packaged-consumer",
-          statement: "The publishable crate contents, external consumer lifecycle, and package-only documentation are verified.",
+          statement: "The publishable crate contents, external consumer lifecycle, package-only documentation, and Server and Client tutorials are verified.",
           classification: "automated",
-          sources: [source("crates/lspf/Cargo.toml"), source("ci/check-package-file-policy.sh"), source("ci/check-packaged-crate.sh"), source(".github/workflows/packaged-crate.yml")],
+          sources: [source("crates/lspf/Cargo.toml"), source("docs/tutorials/server.md"), source("docs/tutorials/client.md"), source("ci/check-package-file-policy.sh"), source("ci/check-packaged-crate.sh"), source("ci/check-tutorials.sh"), source(".github/workflows/packaged-crate.yml")],
           checks: [check("packaged-crate"; "Packaged crate consumer")]
         },
         {
