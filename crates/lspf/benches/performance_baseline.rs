@@ -83,6 +83,11 @@ struct PartialResultThroughputWorkload {
     chunks: usize,
 }
 
+struct NotebookEditingMeasurement {
+    open: Duration,
+    edits: Vec<Duration>,
+}
+
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SlowPeerWorkload {
@@ -305,8 +310,9 @@ async fn main() -> BenchmarkResult<()> {
             "requestP99": percentile_ms(&request_latency, 0.99),
             "largeDocumentEditP95": percentile_ms(&large_document, 0.95),
             "largeDocumentEditP99": percentile_ms(&large_document, 0.99),
-            "notebookEditP95": percentile_ms(&notebook_editing, 0.95),
-            "notebookEditP99": percentile_ms(&notebook_editing, 0.99)
+            "notebookOpen": notebook_editing.open.as_secs_f64() * 1000.0,
+            "notebookEditP95": percentile_ms(&notebook_editing.edits, 0.95),
+            "notebookEditP99": percentile_ms(&notebook_editing.edits, 0.99)
         },
         "throughputOperationsPerSecond": throughput,
         "partialResultChunksPerSecond": partial_result_throughput,
@@ -380,7 +386,7 @@ fn validate_manifest(manifest: &WorkloadManifest) -> BenchmarkResult<()> {
 
 async fn measure_notebook_editing(
     workload: &NotebookEditingWorkload,
-) -> BenchmarkResult<Vec<Duration>> {
+) -> BenchmarkResult<NotebookEditingMeasurement> {
     let server = Server::builder(())
         .request::<DocumentProbe, _, _>(document_probe)
         .build()?;
@@ -404,6 +410,7 @@ async fn measure_notebook_editing(
             })
         })
         .collect();
+    let open_started = Instant::now();
     journey.peer().send(notification(
         "notebookDocument/didOpen",
         &json!({
@@ -418,6 +425,7 @@ async fn measure_notebook_editing(
     )?)?;
     let first_cell = Uri::from_str(&cell_uris[0])?;
     probe_document(journey.peer(), 30_000, &first_cell, 1).await?;
+    let open = open_started.elapsed();
 
     let replacement = "b".repeat(workload.replacement_bytes);
     let mut samples = Vec::with_capacity(workload.edits);
@@ -451,7 +459,10 @@ async fn measure_notebook_editing(
         }),
     )?)?;
     journey.finish().await?;
-    Ok(samples)
+    Ok(NotebookEditingMeasurement {
+        open,
+        edits: samples,
+    })
 }
 
 async fn measure_partial_result_throughput(

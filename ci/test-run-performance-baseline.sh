@@ -42,6 +42,7 @@ cat >"$budget" <<'EOF'
     "requestP99Ms": 10,
     "largeDocumentEditP95Ms": 20,
     "largeDocumentEditP99Ms": 30,
+    "notebookOpenMs": 20,
     "notebookEditP95Ms": 20,
     "notebookEditP99Ms": 30,
     "peakRssMiB": 128
@@ -91,6 +92,7 @@ cat >"$output" <<JSON
     "requestP99": 2.5,
     "largeDocumentEditP95": 8.0,
     "largeDocumentEditP99": 9.0,
+    "notebookOpen": 6.0,
     "notebookEditP95": 7.0,
     "notebookEditP99": 8.0
   },
@@ -130,7 +132,7 @@ jq -e --arg revision "$revision" '
   and (.partialResultChunksPerSecond == 3000)
   and (.peakRssMiB == 64)
   and (.limitBehavior.slowPeer.overloaded == 11)
-  and (.budgetChecks | length == 11)
+  and (.budgetChecks | length == 12)
   and all(.budgetChecks[]; .result == "success")
   and (.failedChecks | length == 0)
 ' "$output_dir/results.json" >/dev/null
@@ -140,6 +142,8 @@ cmp "$budget" "$output_dir/regression-budget.json"
 grep -F 'Overall result: **success**' "$output_dir/results.md" >/dev/null
 grep -F '| Request p99 latency | 2.5 ms | 10 ms | success |' \
     "$output_dir/results.md" >/dev/null
+grep -F '| Notebook open latency | 6 ms | 20 ms | success |' \
+    "$output_dir/results.md" >/dev/null
 grep -F '| Notebook edit p99 latency | 8 ms | 30 ms | success |' \
     "$output_dir/results.md" >/dev/null
 grep -F '| Partial-result chunk throughput | 3000 chunks/s | at least 1000 | success |' \
@@ -148,7 +152,7 @@ grep -F '| Slow-peer overloads | 11 | at least 1 | success |' \
     "$output_dir/results.md" >/dev/null
 
 failing_budget="$test_root/failing-budget.json"
-jq '.maximums.notebookEditP99Ms = 7 | .minimums.partialResultChunksPerSecond = 3001' \
+jq '.maximums.notebookOpenMs = 5 | .maximums.notebookEditP99Ms = 7 | .minimums.partialResultChunksPerSecond = 3001' \
     "$budget" >"$failing_budget"
 failure_dir="$test_root/failure"
 if CARGO_BIN="$fake_cargo" \
@@ -162,6 +166,8 @@ fi
 
 jq -e '
   .overallResult == "failure"
+  and any(.failedChecks[];
+    .id == "notebook-open-latency" and .result == "failure")
   and any(.failedChecks[];
     .id == "notebook-edit-p99-latency" and .result == "failure")
   and any(.failedChecks[];

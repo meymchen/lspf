@@ -7,6 +7,7 @@
     "requestP99Ms": 25,
     "largeDocumentEditP95Ms": 50,
     "largeDocumentEditP99Ms": 100,
+    "notebookOpenMs": 100,
     "notebookEditP95Ms": 50,
     "notebookEditP99Ms": 100,
     "peakRssMiB": 256

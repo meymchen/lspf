@@ -57,6 +57,7 @@ jq -e '
   and (.latencyMs.requestP99 >= .latencyMs.requestP95)
   and (.latencyMs.largeDocumentEditP95 >= 0)
   and (.latencyMs.largeDocumentEditP99 >= .latencyMs.largeDocumentEditP95)
+  and (.latencyMs.notebookOpen >= 0)
   and (.latencyMs.notebookEditP95 >= 0)
   and (.latencyMs.notebookEditP99 >= .latencyMs.notebookEditP95)
   and (.throughputOperationsPerSecond > 0)

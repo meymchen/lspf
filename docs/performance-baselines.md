@@ -59,7 +59,8 @@ new versioned filenames, and update the runner defaults and this document in
 the same change. A budget-only relaxation needs measured evidence in the pull
 request because it changes what the release gate accepts.
 
-The notebook-edit baseline allows 50 ms at p95 and 100 ms at p99. The
-partial-result baseline requires at least 1,000 chunks per second. These use
-the same runner failure path and regression budget as the existing startup,
-request, Document-edit, memory, throughput, and slow-peer measurements.
+The Notebook baseline allows 100 ms to open all 128 cells, then 50 ms at p95
+and 100 ms at p99 for incremental cell-text edits. The partial-result baseline
+requires at least 1,000 chunks per second. These use the same runner failure
+path and regression budget as the existing startup, request, Document-edit,
+memory, throughput, and slow-peer measurements.

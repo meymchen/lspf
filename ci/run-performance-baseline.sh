@@ -49,6 +49,9 @@ jq -e \
       and .revision == $revision
       and (.environment | type == "object")
       and (.latencyMs | type == "object")
+      and (.latencyMs.notebookOpen | numbers)
+      and (.latencyMs.notebookEditP95 | numbers)
+      and (.latencyMs.notebookEditP99 | numbers)
       and (.throughputOperationsPerSecond | numbers)
       and (.partialResultChunksPerSecond | numbers)
       and (.peakRssMiB | numbers)
@@ -91,6 +94,9 @@ jq --slurpfile budget "$budget" '
       maximum("large-document-edit-p99-latency"; "Large-document edit p99 latency";
         $results.latencyMs.largeDocumentEditP99;
         $limits.maximums.largeDocumentEditP99Ms; "ms"),
+      maximum("notebook-open-latency"; "Notebook open latency";
+        $results.latencyMs.notebookOpen;
+        $limits.maximums.notebookOpenMs; "ms"),
       maximum("notebook-edit-p95-latency"; "Notebook edit p95 latency";
         $results.latencyMs.notebookEditP95;
         $limits.maximums.notebookEditP95Ms; "ms"),
