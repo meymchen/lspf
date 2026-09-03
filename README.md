@@ -13,7 +13,7 @@ lifecycle, document synchronization, cancellation, bounded concurrency,
 `tracing` spans, and typed server-to-client traffic through `ClientHandle`.
 
 > **Status:** early-stage. The current published release is **0.5.2**. It
-> includes the stable LSP 3.17 feature catalog, typed Commands, the
+> includes the complete stable LSP 3.18 feature catalog, typed Commands, the
 > multi-root `Workspace`, outgoing `ClientHandle` helpers, and stdio, TCP, WebSocket,
 > and WASM worker-channel transports. See the
 > [package changelog](./crates/lspf/CHANGELOG.md) for release history.
@@ -252,7 +252,7 @@ Available today:
 - A typed Client endpoint over custom Transport and supervised stdio child,
   with reverse handlers, bounded resources, deadlines, and lifecycle control.
 - The built `Server`: typed requests, notifications, commands, the sealed
-  feature catalog covering the stable LSP 3.17 features, user `Layer`s, and
+  feature catalog covering the complete stable LSP 3.18 surface, user `Layer`s, and
   the one `configure_initialize` transaction.
 - Lifecycle hooks through shutdown and exit, incremental or full text-document
   synchronization, and post-mutation document hooks.

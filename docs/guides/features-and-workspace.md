@@ -1,6 +1,6 @@
 # Features, capabilities, and the workspace
 
-This guide covers how a lspf server gains standard LSP 3.17 features, where
+This guide covers how a lspf server gains stable LSP 3.18 features, where
 its `ServerCapabilities` come from, who owns the workspace and the documents,
 how Commands dispatch, and how unopened files resolve through a
 `FileProvider`. Every example here compiles as a doctest against the shipped
