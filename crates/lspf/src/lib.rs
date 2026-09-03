@@ -3,7 +3,7 @@
 //! See `CONTEXT.md` and `docs/adr/` at the repository root for the domain
 //! language and the architectural decisions that shape this crate.
 //!
-//! The public protocol surface follows the stable LSP specification.
+//! The public protocol surface follows the stable LSP 3.18 specification.
 
 #![deny(missing_docs)]
 // A protocol-only feature row intentionally has no serving engine. The
@@ -240,7 +240,6 @@ mod markdown {
     pub struct TestingGuide;
 }
 
-#[doc(hidden)]
 pub use builder::SharedHandler;
 pub use builder::{InitializeRegistrar, Server, ServerBuilder};
 pub use client::{ClientHandle, TelemetryEventParams};
@@ -266,7 +265,6 @@ pub use partial_result::{PartialResultRequest, PartialResultSink};
 pub use progress::{ProgressHandle, ProgressOptions};
 pub use raw::{JsonRpcError, RawMessage, RequestId};
 pub use resource_policy::{ResourcePolicy, ResourcePolicyField};
-#[doc(hidden)]
 pub use runtime::{TaskFuture, TaskSend};
 pub use service::{CallKind, IncomingCall, Layer, Next, ServiceFuture, ServiceResult};
 #[cfg(all(feature = "stdio", not(target_arch = "wasm32")))]

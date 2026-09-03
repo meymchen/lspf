@@ -149,14 +149,19 @@ type NotificationFuture = Pin<Box<dyn TaskFuture<()>>>;
 /// all invocations stay on one thread. Futures retain their separate mobility
 /// requirement through [`TaskFuture`].
 #[cfg(not(target_arch = "wasm32"))]
-#[doc(hidden)]
 pub trait SharedHandler<Args, Output>: TaskSend + Sync {
+    /// Invokes the handler with its erased argument tuple.
     fn invoke(&self, args: Args) -> Output;
 }
 
+/// One target-aware erasure boundary for handlers shared by runtime tasks.
+///
+/// In a Web Worker all invocations stay on one thread, so the handler does
+/// not need the native `Sync` bound. Futures retain their separate mobility
+/// requirement through [`TaskFuture`].
 #[cfg(target_arch = "wasm32")]
-#[doc(hidden)]
 pub trait SharedHandler<Args, Output>: TaskSend {
+    /// Invokes the handler with its erased argument tuple.
     fn invoke(&self, args: Args) -> Output;
 }
 

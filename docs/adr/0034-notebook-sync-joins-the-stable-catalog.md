@@ -1,12 +1,13 @@
 # Notebook sync joins the stable catalog
 
-Status: Accepted. Supersedes the notebook exclusions in ADRs 0008 and 0017,
-and partially supersedes ADR 0024's stable catalog boundary.
+Status: Accepted. Supersedes the notebook exclusions in ADRs 0008 and 0017.
+Its LSP 3.17 catalog boundary was later superseded by the complete stable LSP
+3.18 boundary recorded in ADR 0024.
 
-Notebook document synchronization is a stable LSP 3.17 feature. Excluding it
-from a catalog described as the stable LSP 3.17 catalog left that catalog
-incomplete. Adding notebook synchronization closes that consistency gap; it
-does not widen the boundary to LSP 3.18, draft, or proposed features.
+Notebook document synchronization was already stable in LSP 3.17. Excluding it
+from the catalog left that catalog incomplete. Adding notebook synchronization
+closed that consistency gap; the catalog now covers the complete stable LSP
+3.18 surface, including notebook synchronization.
 
 This record supersedes only ADR 0024's exclusion of notebook methods. ADR
 0024's `on_initialized`, `on_exit`, and `on_shutdown` decisions remain in

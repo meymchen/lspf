@@ -45,10 +45,11 @@ hook contributes no capability.
 
 ## Stable catalog boundary
 
-The default catalog is stable LSP 3.17 only. This record originally excluded
-notebook methods; ADR 0034 supersedes that exclusion because notebook document
-synchronization is part of LSP 3.17. No proposed or 3.18-draft method appears
-in the default catalog or the default capabilities. Custom requests and
+The default catalog is the complete stable LSP 3.18 surface. This record
+originally set the boundary at LSP 3.17 and excluded notebook methods; ADR 0034
+first superseded that exclusion, and the 3.18 catalog programme later widened
+the boundary once all stable 3.18 methods were implemented. No proposed method
+appears in the default catalog or the default capabilities. Custom requests and
 notifications remain registrable beside the whole catalog and contribute
 nothing to `ServerCapabilities`;
 `$/cancelRequest` stays a protocol built-in, and `workspace/executeCommand`

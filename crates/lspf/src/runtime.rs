@@ -23,15 +23,20 @@ mod sealed {
 ///
 /// Native tasks can move between Tokio worker threads, whereas the
 /// Worker-hosted WASM runtime keeps them on the thread that spawned them.
+/// This sealed marker appears in public handler and transport bounds so those
+/// APIs can express the correct requirement on each target.
 #[cfg(not(target_arch = "wasm32"))]
-#[doc(hidden)]
 pub trait TaskSend: sealed::Sealed + Send {}
 
 #[cfg(not(target_arch = "wasm32"))]
 impl<T: Send + ?Sized> TaskSend for T {}
 
+/// Target-dependent task mobility bound.
+///
+/// Worker-hosted WASM tasks stay on the thread that spawned them, so this
+/// sealed marker does not require `Send` on that target. It appears in public
+/// handler and transport bounds to express that target-specific contract.
 #[cfg(target_arch = "wasm32")]
-#[doc(hidden)]
 pub trait TaskSend: sealed::Sealed {}
 
 #[cfg(target_arch = "wasm32")]
@@ -42,7 +47,6 @@ impl<T: ?Sized> TaskSend for T {}
 /// This behavioral trait lets public and internal boxed-future aliases name
 /// [`TaskSend`] once instead of spelling target-specific `dyn Future + Send`
 /// forks at every erasure site.
-#[doc(hidden)]
 pub trait TaskFuture<T>: Future<Output = T> + TaskSend {}
 
 impl<T, F> TaskFuture<T> for F where F: Future<Output = T> + TaskSend + ?Sized {}
