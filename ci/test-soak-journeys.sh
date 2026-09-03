@@ -15,11 +15,15 @@ cat >"$workloads" <<'EOF'
   "workloadVersion": 99,
   "durationSeconds": 1,
   "sampleIntervalMilliseconds": 100,
-  "scenarios": ["request","cancellation","edit","progress","slow-peer","reconnect","shutdown"],
+  "scenarios": ["request","cancellation","edit","notebook","partial-result","progress","slow-peer","reconnect","shutdown"],
   "traffic": {
     "requestConcurrency": 4,
     "cancellationConcurrency": 2,
     "editDocumentBytes": 4096,
+    "notebookCells": 2,
+    "notebookCyclesPerBatch": 2,
+    "notebookMinimumCycles": 16,
+    "partialResultChunksPerBurst": 16,
     "progressConcurrency": 1,
     "slowPeerAttemptsPerCycle": 16,
     "reconnectsPerCycle": 2,
@@ -29,8 +33,9 @@ cat >"$workloads" <<'EOF'
     "inboundRequests": 8,
     "outboundMessages": 4,
     "outboundBytes": 65536,
-    "documents": 1,
+    "documents": 2,
     "documentBytes": 8192,
+    "notebooks": 1,
     "handlerTimeoutMilliseconds": 5000,
     "outboundRequestTimeoutMilliseconds": 5000
   }
@@ -47,13 +52,14 @@ jq -e '
   .schemaVersion == 1
   and .workloadVersion == 99
   and .revision == "0123456789abcdef0123456789abcdef01234567"
-  and (.durationSeconds >= 7)
+  and (.durationSeconds >= 9)
   and (.traffic.operations > 0)
   and (.traffic.bytes > 0)
   and (.peakRssMiB > 0)
   and (.unexplainedGrowthMiB >= 0)
   and ([.scenarios[].name] | sort) ==
-      ["cancellation","edit","progress","reconnect","request","shutdown","slow-peer"]
+      ["cancellation","edit","notebook","partial-result","progress","reconnect","request","shutdown","slow-peer"]
+  and ([.scenarios[] | select(.name == "notebook") | .operations >= 16] == [true])
   and all(.scenarios[];
     .result == "success"
     and .durationMilliseconds >= 1000
@@ -61,9 +67,9 @@ jq -e '
 ' "$output" >/dev/null
 
 if ! jq -s -e '
-  length >= 14
+  length >= 18
   and ([.[].scenario] | unique | sort) ==
-      ["cancellation","edit","progress","reconnect","request","shutdown","slow-peer"]
+      ["cancellation","edit","notebook","partial-result","progress","reconnect","request","shutdown","slow-peer"]
   and all(.[];
     (.elapsedMilliseconds | numbers)
     and (.rssMiB > 0)
@@ -71,6 +77,7 @@ if ! jq -s -e '
   and any(.[]; .resources.inboundRequests > 0)
   and any(.[]; .resources.handlerTasks > 0)
   and any(.[]; .resources.documents > 0)
+  and any(.[]; .resources.notebooks > 0)
   and any(.[]; .resources.progressEntries > 0)
   and any(.[]; .resources.connections > 0)
   and any(.[]; .resources.outboundMessages > 0)

@@ -12,8 +12,8 @@ if [[ ! $revision =~ ^[0-9a-f]{40}$ ]]; then
     exit 2
 fi
 
-workloads="$(realpath -m "${SOAK_WORKLOADS:-soak/workloads-v1.json}")"
-thresholds="$(realpath -m "${SOAK_THRESHOLDS:-soak/thresholds-v1.json}")"
+workloads="$(realpath -m "${SOAK_WORKLOADS:-soak/workloads-v2.json}")"
+thresholds="$(realpath -m "${SOAK_THRESHOLDS:-soak/thresholds-v2.json}")"
 output_dir="$(realpath -m "$output_dir")"
 raw_results="$output_dir/raw-results.json"
 time_series_jsonl="$output_dir/time-series.jsonl"

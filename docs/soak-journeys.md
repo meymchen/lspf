@@ -9,14 +9,20 @@ still gives every journey its full duration.
 
 ## Workload
 
-[`soak/workloads-v1.json`](../soak/workloads-v1.json) is the versioned workload
+[`soak/workloads-v2.json`](../soak/workloads-v2.json) is the versioned workload
 definition. Each of these journeys runs for 60 seconds, for a total measured
-duration of about seven minutes across the matrix:
+duration of about nine minutes across the matrix:
 
 - 32 concurrent requests whose handlers stay in flight for the full 60-second
   journey before responding normally;
 - batches of 16 long-lived requests followed by `$/cancelRequest`;
 - full-document edits against a tracked 1 MiB Document;
+- repeated open, cell-text mutation, and close cycles for four-cell Notebooks,
+  in batches of eight and for at least 1,000 cycles; after every close, a probe
+  confirms that the cell Documents were reclaimed;
+- bursts of 128 partial-result chunks while the peer holds writes; the journey
+  requires excess chunks to hit the outbound message budget and the queue to
+  drain to zero;
 - work-done progress create, begin, report, and end cycles, eight at a time;
 - bursts of 128 notifications while the peer accepts writes slowly;
 - repeated Transport disconnects followed by new connections;
@@ -40,23 +46,25 @@ Every connection uses these limits:
 | Outbound bytes | 4 MiB |
 | Documents | 4 |
 | Document text | 4 MiB |
+| Notebooks | 1 |
 | Handler timeout | 120 seconds |
 | Outbound request timeout | 30 seconds |
 
 ## Failure rules
 
-[`soak/thresholds-v1.json`](../soak/thresholds-v1.json) allows at most 512 MiB
+[`soak/thresholds-v2.json`](../soak/thresholds-v2.json) allows at most 512 MiB
 peak RSS and 32 MiB unexplained growth between the first and last sample of
 any journey. Each journey must produce at least 30 samples. A 10-minute
 watchdog stops each command if it hangs.
 
 The run also fails when a journey crashes, returns an unexpected terminal
 outcome, misses a required scenario, or finishes with a nonzero resource
-count. A slow-peer journey must observe outbound overload. Edit journeys probe
-the public Documents view after close. Progress journeys cancel each ended
-token and fail if the connection registry still recognizes it. Request and
-cancellation journeys verify that admitted requests and handler tasks return
-to zero.
+count. Slow-peer and partial-result journeys must observe outbound overload;
+partial-result bursts additionally fail if accepted chunks exceed the message
+budget. Edit and Notebook journeys probe the public Documents view after
+close. Progress journeys cancel each ended token and fail if the connection
+registry still recognizes it. Request and cancellation journeys verify that
+admitted requests and handler tasks return to zero.
 
 ## Artifacts and local runs
 

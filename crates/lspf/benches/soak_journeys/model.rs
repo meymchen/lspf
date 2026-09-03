@@ -14,6 +14,8 @@ pub enum Scenario {
     Request,
     Cancellation,
     Edit,
+    Notebook,
+    PartialResult,
     Progress,
     SlowPeer,
     Reconnect,
@@ -21,10 +23,12 @@ pub enum Scenario {
 }
 
 impl Scenario {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 9] = [
         Self::Request,
         Self::Cancellation,
         Self::Edit,
+        Self::Notebook,
+        Self::PartialResult,
         Self::Progress,
         Self::SlowPeer,
         Self::Reconnect,
@@ -36,6 +40,8 @@ impl Scenario {
             Self::Request => "request",
             Self::Cancellation => "cancellation",
             Self::Edit => "edit",
+            Self::Notebook => "notebook",
+            Self::PartialResult => "partial-result",
             Self::Progress => "progress",
             Self::SlowPeer => "slow-peer",
             Self::Reconnect => "reconnect",
@@ -89,6 +95,10 @@ impl WorkloadManifest {
             || traffic.request_concurrency == 0
             || traffic.cancellation_concurrency == 0
             || traffic.edit_document_bytes == 0
+            || traffic.notebook_cells == 0
+            || traffic.notebook_cycles_per_batch == 0
+            || traffic.notebook_minimum_cycles == 0
+            || traffic.partial_result_chunks_per_burst == 0
             || traffic.progress_concurrency == 0
             || traffic.slow_peer_attempts_per_cycle == 0
             || traffic.reconnects_per_cycle == 0
@@ -98,7 +108,10 @@ impl WorkloadManifest {
             || limits.outbound_messages == 0
             || limits.outbound_bytes < 1024
             || limits.documents == 0
+            || limits.documents < traffic.notebook_cells
             || limits.document_bytes < traffic.edit_document_bytes
+            || limits.notebooks == 0
+            || traffic.partial_result_chunks_per_burst <= limits.outbound_messages
             || limits.handler_timeout_milliseconds == 0
             || limits.outbound_request_timeout_milliseconds == 0
         {
@@ -116,6 +129,10 @@ pub struct Traffic {
     pub request_concurrency: usize,
     pub cancellation_concurrency: usize,
     pub edit_document_bytes: usize,
+    pub notebook_cells: usize,
+    pub notebook_cycles_per_batch: usize,
+    pub notebook_minimum_cycles: u64,
+    pub partial_result_chunks_per_burst: usize,
     pub progress_concurrency: usize,
     pub slow_peer_attempts_per_cycle: usize,
     pub reconnects_per_cycle: usize,
@@ -130,6 +147,7 @@ pub struct Limits {
     pub outbound_bytes: usize,
     pub documents: usize,
     pub document_bytes: usize,
+    pub notebooks: usize,
     pub handler_timeout_milliseconds: u64,
     pub outbound_request_timeout_milliseconds: u64,
 }
@@ -142,7 +160,7 @@ impl Limits {
             max_outbound_bytes: self.outbound_bytes,
             max_documents: self.documents,
             max_document_bytes: self.document_bytes,
-            max_notebooks: ResourcePolicy::default().max_notebooks,
+            max_notebooks: self.notebooks,
             handler_timeout: Duration::from_millis(self.handler_timeout_milliseconds),
             outbound_request_timeout: Some(Duration::from_millis(
                 self.outbound_request_timeout_milliseconds,

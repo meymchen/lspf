@@ -5,7 +5,10 @@ use std::time::Duration;
 
 use lspf::types::notification::Notification;
 use lspf::types::request::Request;
-use lspf::types::{Uri, WorkDoneProgressCancelParams};
+use lspf::types::{
+    DocumentSymbolParams, DocumentSymbolPartialResponse, DocumentSymbolRequest,
+    DocumentSymbolResponse, Uri, WorkDoneProgressCancelParams,
+};
 use lspf::{
     CancellationToken, ClientError, LspError, ProgressOptions, RawMessage, ServerContext,
     Transport, TransportError, TransportReader, TransportWriter,
@@ -147,6 +150,44 @@ pub async fn progress_cancel_hook(
     }
     state.hooks_seen.fetch_add(1, Ordering::AcqRel);
     state.hook_notify.notify_waiters();
+}
+
+pub struct PartialResultState {
+    pub counts: Arc<ResourceCounts>,
+    pub chunks: usize,
+    pub completed: Mutex<Option<oneshot::Sender<(usize, usize)>>>,
+    pub release: Arc<Notify>,
+}
+
+pub async fn partial_result_burst(
+    state: Arc<PartialResultState>,
+    context: ServerContext,
+    _params: DocumentSymbolParams,
+    _cancellation: CancellationToken,
+) -> Result<Option<DocumentSymbolResponse>, LspError> {
+    let _task = CountGuard::enter(&state.counts.handler_tasks);
+    let sink = context
+        .partial_results::<DocumentSymbolRequest>()
+        .ok_or_else(|| LspError::internal("partial-result token was not available"))?;
+    let mut accepted = 0;
+    let mut overloaded = 0;
+    for _ in 0..state.chunks {
+        match sink.report(DocumentSymbolPartialResponse::DocumentSymbolList(Vec::new())) {
+            Ok(()) => accepted += 1,
+            Err(ClientError::OutboundOverloaded) => overloaded += 1,
+            Err(error) => return Err(LspError::internal(error)),
+        }
+    }
+    state
+        .completed
+        .lock()
+        .unwrap()
+        .take()
+        .expect("partial-result burst runs once")
+        .send((accepted, overloaded))
+        .ok();
+    state.release.notified().await;
+    Ok(None)
 }
 
 #[derive(Clone, Copy, Deserialize, Serialize)]
