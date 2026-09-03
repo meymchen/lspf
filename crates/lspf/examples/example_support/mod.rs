@@ -2,17 +2,16 @@
 
 #![allow(dead_code)]
 
+// The transport examples reach the same module directly; they serve a socket
+// instead of stdio, so they share the log format but not `serve` below.
+#[path = "../example_logging/mod.rs"]
+mod example_logging;
+
 use lspf::types::{Diagnostic, DiagnosticSeverity, Position, Range, Uri};
 use lspf::{LspError, Server, ServerContext};
 
 pub(crate) async fn serve<S: Send + Sync + 'static>(server: Server<S>) -> lspf::Result<()> {
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        // These stdio servers are normally launched by an editor, whose output
-        // channel does not interpret terminal formatting.
-        .with_ansi(false)
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
+    example_logging::init();
     let outcome = lspf::stdio(server).serve().await?;
     std::process::exit(outcome.code());
 }

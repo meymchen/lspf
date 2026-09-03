@@ -46,10 +46,49 @@ repository window, start `Attach to running LSP server/example` and choose the
 process whose name matches the selected example. CodeLLDB then debugs the same
 process that owns the active stdio connection.
 
-`RUST_LOG=lspf=trace` and `LSPF_LOG_FORMAT=json` are set by default. The
-`lspf-hello` output channel receives one JSON event per line. Export either
-variable before launching VSCode to override it; use `LSPF_LOG_FORMAT=text`
-for compact plain text.
+## Connecting over TCP or WebSocket
+
+Select `Run LSP example client over a socket (select transport)` and pick `tcp`
+or `websocket`. The pre-launch task builds `native_tcp` and `native_websocket`
+with only their adapter feature. The client then starts the chosen example and
+connects to the port it binds — `127.0.0.1:9257` for TCP, `127.0.0.1:9258` for
+WebSocket — so the socket adapters are driven by VS Code's own language client
+rather than by a scripted one.
+
+Open a `.txt` file in the Extension Development Host. Hover and completion come
+from [`examples/shared/mod.rs`](../../crates/lspf/examples/shared/mod.rs), which
+is the same handler set every transport example serves. The `lspf native_tcp`
+(or `lspf native_websocket`) output channel carries the server's `tracing`
+output, exactly as the stdio channels do. Rust breakpoints work the same way as
+over stdio: attach to the `native_tcp` or `native_websocket` process.
+
+Getting there needs two things that stdio gets for free. `vscode-languageclient`
+pipes a server's stderr into the output channel only when it spawned the process
+itself, so with a socket transport the extension forwards that stderr and hands
+the client the same channel rather than letting it open a second one. And the
+two transport examples install their own `tracing` subscriber — without one,
+`RUST_LOG` selects events that nothing records and the channel stays empty.
+
+`LSPF_TEST_TRANSPORT` selects the transport (`stdio`, `tcp`, or `websocket`) and
+defaults to `stdio`, so every existing launch configuration is unaffected. The
+two socket examples ignore `LSPF_TEST_EXAMPLE`: only they bind a port, and the
+stdio examples have no listener to dial.
+
+Each transport example binds once, accepts one client, and drops its listener,
+so one server serves exactly one Extension Development Host. Restart the launch
+configuration to get a fresh server.
+
+Zed cannot do this. It launches every language server as a command over stdio
+(`zed::Command` is a binary, arguments, and environment), with no socket option,
+so its lspf journeys stay on the stdio examples.
+
+`RUST_LOG=lspf=trace` and `LSPF_LOG_FORMAT=json` are set by default, and every
+server this client launches honours them — `lspf-hello`, the stdio examples,
+and the two socket examples alike — so every output channel it opens receives
+one JSON event per line. Export
+either variable before launching VSCode to override it; `LSPF_LOG_FORMAT=text`
+gives the plain-text format instead, one line of
+`elapsed level span_names: message fields`.
 
 ## Commands
 
@@ -67,6 +106,19 @@ titles in the Command Palette. Its `executeCommand` middleware adds the active
 editor's URI when a command needs one. Results are written to the
 `lspf-hello commands` output channel. The outgoing journey inserts a comment
 at the start of the active document while exercising `workspace/applyEdit`.
+
+## Tests
+
+`npm test` compiles the client and runs `test/**/*.test.ts`; `npm run
+test:coverage` adds the lcov report SonarCloud reads.
+
+The coverage run excludes `out/!(extensionCore).js`. Every test imports its
+subject from `src/`, except `extension.test.ts`, which loads the compiled
+`out/extensionCore.js` because `src/extensionCore.ts` uses the `.js` import
+specifiers TypeScript requires and Node cannot resolve to `.ts`. That compiled
+module pulls in the compiled copy of every other module, and `--enable-source-maps`
+maps those copies back onto the same `src/*.ts` paths — a second, mostly unhit
+record that would otherwise report tested code as uncovered.
 
 ## What this validates
 

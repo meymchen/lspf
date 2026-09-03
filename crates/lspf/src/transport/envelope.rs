@@ -49,12 +49,17 @@ pub fn parse(body: Bytes) -> RawMessage {
     if serde_json::from_str::<&str>(jsonrpc.get()).ok() != Some("2.0") {
         return invalid_request();
     }
-    if !params_are_structured(env.params.0) {
+    // JSON-RPC 2.0 requires a present `params` to be structured, but LSP
+    // clients routinely send `"params": null` for the parameterless methods
+    // (`shutdown`, `exit`). An explicit null carries no arguments, so accept it
+    // as the absent member it stands for rather than failing the envelope.
+    let params_raw = env.params.0.filter(|value| !is_json_null(value));
+    if !params_are_structured(params_raw) {
         return invalid_request();
     }
     // `params` and `result` are forwarded verbatim, so anything accepted here
     // must still be JSON a strict peer can parse.
-    if [env.params.0, env.result.0]
+    if [params_raw, env.result.0]
         .into_iter()
         .flatten()
         .any(|value| has_unpaired_surrogate_escape(value.get()))
@@ -62,11 +67,9 @@ pub fn parse(body: Bytes) -> RawMessage {
         return protocol_error(-32700, "Parse error");
     }
 
-    let has_params = env.params.0.is_some();
+    let has_params = params_raw.is_some();
     let has_id = env.id.0.is_some();
-    let params = env
-        .params
-        .0
+    let params = params_raw
         .map(|value| Bytes::copy_from_slice(value.get().as_bytes()))
         .unwrap_or_default();
 
@@ -173,6 +176,11 @@ fn has_unpaired_surrogate_escape(text: &str) -> bool {
         }
     }
     false
+}
+
+/// Report whether a raw member is the JSON literal `null`.
+fn is_json_null(value: &RawValue) -> bool {
+    value.get().trim_matches(|c: char| c.is_ascii_whitespace()) == "null"
 }
 
 fn params_are_structured(params: Option<&RawValue>) -> bool {
@@ -355,6 +363,40 @@ mod tests {
                 other => panic!("expected invalid request response, got {other:?}"),
             }
         }
+    }
+
+    // LSP clients send `"params": null` for the parameterless methods. The
+    // member carries no arguments, so it must decode exactly like an omitted
+    // one instead of failing the envelope.
+    #[test]
+    fn explicit_null_params_decode_as_absent_params() {
+        for body in [
+            br#"{"jsonrpc":"2.0","id":1,"method":"shutdown","params":null}"#.as_slice(),
+            br#"{"jsonrpc":"2.0","method":"exit","params": null }"#.as_slice(),
+        ] {
+            match parse(Bytes::copy_from_slice(body)) {
+                RawMessage::Request { params, .. } | RawMessage::Notification { params, .. } => {
+                    assert!(
+                        params.is_empty(),
+                        "expected absent params for {}",
+                        String::from_utf8_lossy(body)
+                    );
+                }
+                other => panic!("expected a dispatchable message, got {other:?}"),
+            }
+        }
+    }
+
+    // A response is distinguished from a request by carrying no `params`, and
+    // an explicit null is no `params`.
+    #[test]
+    fn explicit_null_params_still_parse_a_response() {
+        let body = br#"{"jsonrpc":"2.0","id":1,"result":{},"params":null}"#;
+
+        assert!(matches!(
+            parse(Bytes::copy_from_slice(body)),
+            RawMessage::Response { .. }
+        ));
     }
 
     // `params` and `result` are forwarded byte for byte, so an unpaired

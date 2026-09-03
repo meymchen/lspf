@@ -10,6 +10,18 @@ export interface ServerProfile {
 
 export function serverProfile(serverBinary: string): ServerProfile {
     const executable = path.basename(serverBinary).replace(/\.exe$/, '');
+    if (executable === 'native_tcp' || executable === 'native_websocket') {
+        // The socket examples serve `examples/shared/mod.rs`: hover, completion,
+        // and a custom request, over plain text documents. They advertise no
+        // commands and no reverse request, so this profile enables neither.
+        return {
+            id: 'lspf-transport',
+            name: `lspf ${executable === 'native_tcp' ? 'TCP' : 'WebSocket'} example`,
+            language: 'plaintext',
+            outputChannel: `lspf ${executable}`,
+            commandOutput: undefined,
+        };
+    }
     if (executable === 'lspf-markdown') {
         return {
             id: 'lspf-markdown',

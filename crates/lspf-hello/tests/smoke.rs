@@ -246,7 +246,7 @@ async fn stdout_carries_only_lsp_frames() {
 
     let logs = logs.await.expect("the stderr reader finished");
     assert!(
-        logs.contains("lspf"),
+        logs.contains("rpc message"),
         "the run produced no log output on stderr, so a clean stdout proves \
          nothing; got {logs:?}"
     );
