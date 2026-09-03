@@ -608,41 +608,59 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-  # Publish unreleased packages and create git tags / GitHub releases. The
-  # release gates live here rather than in a separate workflow so that one push
-  # runs them once: `needs` reuses the very jobs CI already ran for this
-  # revision, which keeps "not published without passing its gates" structural.
-  #
-  # Keep this list identical to `gate-a-evidence`'s. Gate A is what declares a
-  # revision releasable, so the checks that establish its evidence must be
-  # exactly the checks a publish has to clear; `gate-a-evidence` itself cannot
-  # be depended on, because it runs under `always()` and therefore succeeds even
-  # when the gates it reports on failed.
-  release-plz-release:
-    name: Release-plz release
+  # Scheduled Gate D keeps the ordinary branch under observation. A release
+  # candidate needs evidence for its exact revision, so an authorized release
+  # runs the same bounded verification once more in this workflow.
+  gate-d-candidate-evidence:
+    name: Gate D candidate evidence
+    if: ${{ github.event_name == 'push' && needs.release-context.outputs.authorized == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: release-context
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: nightly
+          cache: "false"
+      - name: Install the fuzz runner
+        run: cargo install cargo-fuzz --locked
+      - name: Run revision-locked Gate D candidate verification
+        run: >-
+          bash ci/run-gate-d-evidence.sh
+          "$GITHUB_SHA"
+          "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          "$RUNNER_TEMP/gate-d-candidate-evidence"
+      - name: Retain Gate D candidate evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: gate-d-candidate-evidence
+          path: ${{ runner.temp }}/gate-d-candidate-evidence
+          if-no-files-found: error
+          retention-days: 90
+
+  # Build and attest one candidate only after the four automated gate bundles
+  # succeeded for this exact revision. Publishing remains a later, explicit
+  # maintainer decision; this job has no package-registry or contents-write
+  # permission.
+  release-candidate:
+    name: Verified release candidate
     if: ${{ github.event_name == 'push' && needs.release-context.outputs.authorized == 'true' }}
     runs-on: ubuntu-latest
     needs:
       - release-context
-      - markdownlint
-      - public-docs
-      - packaged-crate
-      - security
-      - public-api
-      - msrv
-      - feature-contract
-      - public-interface
-      - native-matrix
-      - test
-      - native-lifecycle
-      - wasm
-      - test-coverage
-      - performance-baseline
+      - gate-a-evidence
+      - gate-b-evidence
+      - gate-c-evidence
+      - gate-d-candidate-evidence
     permissions:
+      actions: read
       attestations: write
-      contents: write
+      contents: read
       id-token: write
-      pull-requests: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -653,19 +671,15 @@ jobs:
         uses: ./.github/actions/setup-rust
         with:
           cache: "false"
-      - name: Prepare retry-safe release-plz config
-        id: release-config
+      - name: Download Gate A through D evidence
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          config="$RUNNER_TEMP/release-plz.toml"
-          awk '
-            /^release_always = false$/ {
-              print "release_always = true"
-              replacements++
-              next
-            }
-            { print }
-            END { if (replacements != 1) exit 1 }
-          ' release-plz.toml >"$config"
+          evidence="$RUNNER_TEMP/candidate-evidence"
+          gh run download "$GITHUB_RUN_ID" --name gate-a-release-evidence --dir "$evidence/gate-a"
+          gh run download "$GITHUB_RUN_ID" --name gate-b-bounded-resource-evidence --dir "$evidence/gate-b"
+          gh run download "$GITHUB_RUN_ID" --name gate-c-endpoint-evidence --dir "$evidence/gate-c"
+          gh run download "$GITHUB_RUN_ID" --name gate-d-candidate-evidence --dir "$evidence/gate-d"
       - name: Prepare release artifacts from the validated revision
         id: artifacts
         run: bash ci/prepare-release-artifacts.sh "$GITHUB_SHA" "$RUNNER_TEMP/release-artifacts"
@@ -677,69 +691,58 @@ jobs:
           output-file: ${{ steps.artifacts.outputs.sbom }}
           upload-artifact: false
           upload-release-assets: false
-      - name: Generate build provenance statement
+      - name: Prepare the verified candidate
+        run: >-
+          bash ci/prepare-release-candidate.sh
+          "$GITHUB_SHA"
+          "${{ steps.artifacts.outputs.directory }}"
+          "$RUNNER_TEMP/candidate-evidence"
+      - name: Generate candidate provenance
         id: provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: |
             ${{ steps.artifacts.outputs.crate }}
+            ${{ steps.artifacts.outputs.docs }}
             ${{ steps.artifacts.outputs.metadata }}
             ${{ steps.artifacts.outputs.sbom }}
             ${{ steps.artifacts.outputs.directory }}/CHANGELOG.md
             ${{ steps.artifacts.outputs.directory }}/lspf-CHANGELOG.md
+            ${{ steps.artifacts.outputs.directory }}/candidate-metadata.json
+            ${{ steps.artifacts.outputs.directory }}/candidate.md
+            ${{ steps.artifacts.outputs.directory }}/evidence/**/*.json
+            ${{ steps.artifacts.outputs.directory }}/evidence/**/*.md
       - name: Generate SBOM attestation
         id: sbom-attestation
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: ${{ steps.artifacts.outputs.crate }}
           sbom-path: ${{ steps.artifacts.outputs.sbom }}
-      - name: Retain attestation statements and artifact hashes
+      - name: Retain attestations and hash every candidate file
         env:
           ARTIFACT_DIRECTORY: ${{ steps.artifacts.outputs.directory }}
-          CRATE_PATH: ${{ steps.artifacts.outputs.crate }}
           PROVENANCE_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
-          SBOM_PATH: ${{ steps.artifacts.outputs.sbom }}
           SBOM_ATTESTATION_BUNDLE: ${{ steps.sbom-attestation.outputs.bundle-path }}
         run: |
           cp "$PROVENANCE_BUNDLE" "$ARTIFACT_DIRECTORY/provenance.jsonl"
           cp "$SBOM_ATTESTATION_BUNDLE" "$ARTIFACT_DIRECTORY/sbom-attestation.jsonl"
-          crate_file=$(basename "$CRATE_PATH")
-          sbom_file=$(basename "$SBOM_PATH")
           cd "$ARTIFACT_DIRECTORY"
-          sha256sum \
-            "$crate_file" \
-            CHANGELOG.md \
-            lspf-CHANGELOG.md \
-            release-metadata.json \
-            "$sbom_file" \
-            provenance.jsonl \
-            sbom-attestation.jsonl \
+          find . -type f ! -name SHA256SUMS -print0 \
+            | sort -z \
+            | xargs -0 sha256sum \
             > SHA256SUMS
-      - name: Retain traceable release artifacts
+      - name: Verify candidate hashes and clean installation
+        run: >-
+          bash ci/check-release-candidate.sh
+          "$GITHUB_SHA"
+          "${{ steps.artifacts.outputs.directory }}"
+      - name: Retain verified release candidate
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: lspf-${{ steps.artifacts.outputs.version }}-release-artifacts
+          name: lspf-${{ steps.artifacts.outputs.version }}-release-candidate
           path: ${{ steps.artifacts.outputs.directory }}
           if-no-files-found: error
           retention-days: 90
-      - name: Run release-plz
-        id: release
-        uses: release-plz/action@2eb1d8bcb770b4c48ccfaad919734b38b51958c9 # v0.5
-        with:
-          command: release
-          config: ${{ runner.temp }}/release-plz.toml
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-      - name: Attach artifacts to the GitHub release
-        if: steps.release.outputs.releases_created == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release upload \
-            "${{ steps.artifacts.outputs.tag }}" \
-            "${{ steps.artifacts.outputs.directory }}"/* \
-            --clobber
 
   # A normal main push only needs enough policy validation to protect the
   # write-capable release-plz PR job. Full dependency, platform, and release

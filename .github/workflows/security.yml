@@ -33,6 +33,10 @@ jobs:
         run: bash ci/test-check-workflow-security.sh
       - name: Test release artifact workflow contract
         run: bash ci/test-release-artifacts-workflow.sh
+      - name: Test release candidate preparation
+        run: bash ci/test-prepare-release-candidate.sh
+      - name: Test release candidate verification
+        run: bash ci/test-check-release-candidate.sh
       - name: Test SonarCloud workflow contract
         run: bash ci/test-sonarcloud-workflow.sh
       - name: Test CodeQL workflow contract
