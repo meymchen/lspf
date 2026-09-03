@@ -7,6 +7,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use gen_lsp_types::{LogMessageParams, MessageType};
 use lspf::types::request::Request;
+use lspf::types::{NotebookDocumentFilterWithNotebook, NotebookDocumentSyncOptions};
 use lspf::{
     ClientError, ClientHandle, DocumentsView, RawMessage, RequestId, ResourcePolicy, Server,
     ServerContext, Transport, TransportError, TransportReader, TransportWriter,
@@ -1054,6 +1055,12 @@ async fn fixed_budget_floods_and_a_slow_reader_never_exceed_connection_limits() 
     };
     let server = Server::builder(state.clone())
         .resource_policy(policy)
+        // Notebook sync is opt-in; without it the notebook opens below are
+        // ignored and never reach the `notebooks` resource budget.
+        .notebook_document_sync(NotebookDocumentSyncOptions::new(
+            vec![NotebookDocumentFilterWithNotebook::new("jupyter-notebook".into(), None).into()],
+            Some(true),
+        ))
         .request::<Stalls, _, _>(stalls::<StressState>)
         .request::<FillsQueue, _, _>(fills_queue)
         .build()

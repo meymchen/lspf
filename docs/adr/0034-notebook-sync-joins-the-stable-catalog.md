@@ -31,6 +31,19 @@ empty notebook to consume finite capacity. Opening a notebook that would
 exceed the notebook limit or either Document budget is refused through the
 same resource-exhaustion path as an over-limit text-document open.
 
+Notebook synchronization is opt-in, and advertising it is the opt-in.
+`ServerBuilder::notebook_document_sync` both contributes the
+`notebookDocumentSync` capability and makes the four notebook built-ins
+reachable; a connection that advertised nothing ignores a notebook notification
+that arrives anyway. This matches the reference TypeScript implementation, where
+the server's notebook handlers exist only once the notebook sync feature is
+applied and the client activates its side only when the server advertised the
+capability. The rule also keeps notebook sync consistent with ADR 0023's
+treatment of text-document sync, where an unadvertised notification is likewise
+ignored rather than processed. Without it an unadvertised capability would still
+mutate the notebook layer, open cell [[Document]]s against the connection's
+[[Resource policy]], and reach a hook.
+
 Notebook lifecycle notifications are protocol-owned built-ins. Their user
 registrations are post-mutation hooks and observe the notebook layer and
 [[Documents]] after the complete notebook mutation succeeds. Cell text changes

@@ -387,13 +387,16 @@ All four `notebookDocument/*` notifications are protocol built-ins: the engine
 decodes each one and mutates the connection's notebook and document state
 itself, and that behaviour cannot be replaced. Registering one of these methods
 records a post-mutation hook, exactly as a text-document registration does, so
-there is no notebook *handler* to write (ADR 0034). What a server does have to
-do is *ask* for the notifications —
+there is no notebook *handler* to write (ADR 0034).
+
+Notebook sync is opt-in, and
 [`notebook_document_sync(options)`](lspf::ServerBuilder::notebook_document_sync)
-advertises `notebookDocumentSync`, which is what makes a client send notebook
-notifications at all. Notebook sync is its own LSP capability rather than a
-mode of `textDocumentSync`, so the text-document sync switches do not affect
-it.
+is the opt-in. It advertises `notebookDocumentSync`, which is what makes a
+client send notebook notifications at all, and it is also what makes the four
+built-ins reachable: a server that never calls it ignores a notebook
+notification that arrives anyway, mutating nothing and running no hook. Notebook
+sync is its own LSP capability rather than a mode of `textDocumentSync`, so the
+text-document sync switches neither enable nor disable it.
 
 ```rust
 # use lspf::types::{NotebookDocumentFilterWithNotebook, NotebookDocumentSyncOptions};

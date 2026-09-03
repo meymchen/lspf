@@ -712,6 +712,16 @@ impl<S> Router<S> {
     pub(crate) fn document_sync(&self) -> DocumentSyncSettings {
         self.document_sync.clone()
     }
+
+    /// Whether this connection opted into notebook synchronization through
+    /// [`ServerBuilder::notebook_document_sync`].
+    ///
+    /// Notebook sync is its own LSP capability rather than a mode of
+    /// `textDocumentSync`, so it is opt-in on its own terms: a server that
+    /// never advertised `notebookDocumentSync` runs no notebook built-in.
+    pub(crate) fn notebook_sync_enabled(&self) -> bool {
+        self.capabilities.notebook_document_sync.is_some()
+    }
 }
 
 /// Collects static registrations for one connection before handing them to a
