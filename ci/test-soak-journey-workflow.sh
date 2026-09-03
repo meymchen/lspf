@@ -20,6 +20,8 @@ jq -e '
         "request",
         "cancellation",
         "edit",
+        "notebook",
+        "partial-result",
         "progress",
         "slow-peer",
         "reconnect",

@@ -24,6 +24,7 @@ pub struct ResourceCounts {
     pub pending_requests: Arc<AtomicUsize>,
     pub handler_tasks: Arc<AtomicUsize>,
     pub documents: Arc<AtomicUsize>,
+    pub notebooks: Arc<AtomicUsize>,
     pub progress_entries: Arc<AtomicUsize>,
     pub connections: Arc<AtomicUsize>,
     pub outbound_messages: Arc<AtomicUsize>,
@@ -36,6 +37,7 @@ pub struct Resources {
     pending_requests: usize,
     handler_tasks: usize,
     documents: usize,
+    notebooks: usize,
     progress_entries: usize,
     connections: usize,
     outbound_messages: usize,
@@ -48,6 +50,7 @@ impl ResourceCounts {
             pending_requests: self.pending_requests.load(Ordering::Acquire),
             handler_tasks: self.handler_tasks.load(Ordering::Acquire),
             documents: self.documents.load(Ordering::Acquire),
+            notebooks: self.notebooks.load(Ordering::Acquire),
             progress_entries: self.progress_entries.load(Ordering::Acquire),
             connections: self.connections.load(Ordering::Acquire),
             outbound_messages: self.outbound_messages.load(Ordering::Acquire),
@@ -60,6 +63,7 @@ impl ResourceCounts {
             || resources.pending_requests != 0
             || resources.handler_tasks != 0
             || resources.documents != 0
+            || resources.notebooks != 0
             || resources.progress_entries != 0
             || resources.connections != 0
             || resources.outbound_messages != 0
@@ -127,6 +131,7 @@ where
             Some("inbound_requests") => &self.counts.inbound_requests,
             Some("pending_requests") => &self.counts.pending_requests,
             Some("documents") => &self.counts.documents,
+            Some("notebooks") => &self.counts.notebooks,
             Some("outbound_queue") => &self.counts.outbound_messages,
             _ => return,
         };

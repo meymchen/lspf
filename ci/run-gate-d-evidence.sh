@@ -176,7 +176,7 @@ record_component performance 'Performance baseline' \
     docs/performance-baselines.md performance/workloads-v1.json \
     performance/regression-budget-v1.json
 record_component soak 'Bounded-memory soak journeys' \
-    docs/soak-journeys.md soak/workloads-v1.json soak/thresholds-v1.json
+    docs/soak-journeys.md soak/workloads-v2.json soak/thresholds-v2.json
 record_component reference-server 'Reference server' \
     crates/lspf-markdown/Cargo.toml crates/lspf-markdown/src/main.rs \
     crates/lspf-markdown/tests/packaged_editor_journey.rs

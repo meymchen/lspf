@@ -432,6 +432,8 @@ jobs:
           - request
           - cancellation
           - edit
+          - notebook
+          - partial-result
           - progress
           - slow-peer
           - reconnect
@@ -449,7 +451,7 @@ jobs:
         run: >-
           jq --arg scenario "$SOAK_SCENARIO"
           '.scenarios = [$scenario]'
-          soak/workloads-v1.json
+          soak/workloads-v2.json
           > "$RUNNER_TEMP/soak-workload.json"
       - name: Run revision-locked soak journeys
         env:
