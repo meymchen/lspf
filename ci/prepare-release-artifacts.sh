@@ -42,6 +42,7 @@ crate_version="$(cargo metadata --no-deps --format-version 1 \
         '.packages[] | select(.name == $name) | .version')"
 release_tag="v$crate_version"
 crate_file="$crate_name-$crate_version.crate"
+docs_file="$crate_name-$crate_version-docs.tar.gz"
 
 echo "Packaging $crate_name $crate_version from $revision"
 cargo package -p "$crate_name" --locked
@@ -62,6 +63,26 @@ cp "$package_path" "$output_dir/$crate_file"
 cp CHANGELOG.md "$output_dir/CHANGELOG.md"
 cp crates/lspf/CHANGELOG.md "$output_dir/lspf-CHANGELOG.md"
 
+docs_root="$(mktemp -d)"
+trap 'rm -rf "$docs_root"' EXIT
+echo "Building revision-locked documentation for $crate_name $crate_version"
+RUSTFLAGS="${RUSTFLAGS:-} -D warnings" \
+RUSTDOCFLAGS="${RUSTDOCFLAGS:-} -D warnings" \
+CARGO_TARGET_DIR="$docs_root/target" \
+    cargo doc -p "$crate_name" --no-deps --locked
+jq -n \
+    --arg crate "$crate_name" \
+    --arg version "$crate_version" \
+    --arg revision "$revision" '
+    {
+      schemaVersion: 1,
+      crate: $crate,
+      version: $version,
+      revision: $revision
+    }
+  ' >"$docs_root/target/doc/release-docs-metadata.json"
+tar -czf "$output_dir/$docs_file" -C "$docs_root/target/doc" .
+
 metadata_path="$output_dir/release-metadata.json"
 sbom_path="$output_dir/$crate_name-$crate_version.spdx.json"
 
@@ -73,6 +94,7 @@ jq -n \
     --arg repository "https://github.com/${GITHUB_REPOSITORY:-meymchen/lspf}" \
     --arg workflow_run "${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-meymchen/lspf}/actions/runs/${GITHUB_RUN_ID:-local}" \
     --arg crate_file "$crate_file" \
+    --arg docs_file "$docs_file" \
     '{
         schemaVersion: 1,
         crate: $crate,
@@ -83,6 +105,7 @@ jq -n \
         workflowRun: $workflow_run,
         artifacts: {
             crate: $crate_file,
+            docs: $docs_file,
             changelogs: ["CHANGELOG.md", "lspf-CHANGELOG.md"],
             sbom: ($crate + "-" + $version + ".spdx.json"),
             hashes: "SHA256SUMS",
@@ -95,6 +118,7 @@ if [[ -n ${GITHUB_OUTPUT:-} ]]; then
     {
         printf 'directory=%s\n' "$output_dir"
         printf 'crate=%s\n' "$output_dir/$crate_file"
+        printf 'docs=%s\n' "$output_dir/$docs_file"
         printf 'metadata=%s\n' "$metadata_path"
         printf 'sbom=%s\n' "$sbom_path"
         printf 'tag=%s\n' "$release_tag"
