@@ -13,6 +13,7 @@
       "public-api": { "contents": "read" },
       "msrv": { "contents": "read" },
       "feature-contract": { "contents": "read" },
+      "public-interface": { "contents": "read" },
       "native-matrix": { "contents": "read" },
       "test": { "contents": "read" },
       "native-lifecycle": { "contents": "read" },

@@ -72,10 +72,10 @@ jq -n \
         },
         {
           id: "compatibility-policy",
-          statement: "The compatibility policy is documented and every supported public API surface is compared with its released baseline.",
+          statement: "The compatibility policy is documented, the frozen interface is inventoried item by item, and every supported public API surface is compared with its released baseline.",
           classification: "automated",
-          sources: [source("SECURITY.md"), source("ci/check-public-api.sh"), source("ci/public-api-breaking-approvals.json")],
-          checks: [check("public-api"; "Public API compatibility")]
+          sources: [source("SECURITY.md"), source("docs/public-interface.md"), source("ci/check-public-api.sh"), source("ci/check-public-interface.sh"), source("ci/public-api-breaking-approvals.json")],
+          checks: [check("public-api"; "Public API compatibility"), check("public-interface"; "Public interface freeze")]
         },
         {
           id: "packaged-consumer",

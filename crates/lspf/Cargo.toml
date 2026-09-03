@@ -311,6 +311,19 @@ required-features = ["runtime-tokio"]
 name = "testing"
 required-features = ["testing"]
 
+# The frozen-interface journey names the public surface as a downstream crate
+# does. `testing` supplies the in-memory seam it drives; the transport rows it
+# also names are selected inside the file.
+[[test]]
+name = "frozen_interface"
+required-features = ["testing"]
+
+# This compile-only journey is selected by the real-target WASM test job and
+# names exports that cannot exist in the native `frozen_interface` journey.
+[[test]]
+name = "frozen_wasm_interface"
+required-features = ["worker-channel"]
+
 [[test]]
 name = "lsp_318_inbound"
 required-features = ["testing"]

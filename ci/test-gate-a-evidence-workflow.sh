@@ -23,6 +23,7 @@ jq -e '
     "performance-baseline",
     "public-api",
     "public-docs",
+    "public-interface",
     "release-context",
     "security",
     "test",
