@@ -28,7 +28,8 @@ use lspf::types::notification::{
 use lspf::types::request::Request;
 use lspf::types::{
     DidChangeNotebookDocumentParams, DidCloseNotebookDocumentParams, DidOpenNotebookDocumentParams,
-    DidSaveNotebookDocumentParams, Uri,
+    DidSaveNotebookDocumentParams, NotebookDocumentFilterWithNotebook, NotebookDocumentSyncOptions,
+    Uri,
 };
 use lspf::{
     CancellationToken, ConnectionDirection, ConnectionFailure, ConnectionFailureCategory, LspError,
@@ -435,6 +436,15 @@ fn probe_request_at(id: i32, notebook: &str, cells: Vec<&str>) -> RawMessage {
 
 // --- Harness -----------------------------------------------------------------
 
+/// The selector every test server advertises. Notebook sync is opt-in, so a
+/// server that omits this call receives no notebook notification at all.
+fn notebook_sync_options() -> NotebookDocumentSyncOptions {
+    NotebookDocumentSyncOptions::new(
+        vec![NotebookDocumentFilterWithNotebook::new("jupyter-notebook".into(), None).into()],
+        Some(true),
+    )
+}
+
 fn observing_server(seen: &Log) -> Server<AppState> {
     observing_server_with_policy(seen, ResourcePolicy::default())
 }
@@ -443,6 +453,7 @@ fn observing_server_with_policy(seen: &Log, policy: ResourcePolicy) -> Server<Ap
     Server::builder(AppState {
         seen: Arc::clone(seen),
     })
+    .notebook_document_sync(notebook_sync_options())
     .notification::<DidOpenNotebookDocument, _, _>(on_did_open)
     .notification::<DidChangeNotebookDocument, _, _>(on_did_change)
     .notification::<DidSaveNotebookDocument, _, _>(on_did_save)
@@ -486,6 +497,25 @@ async fn drive(server: Server<AppState>, messages: Vec<RawMessage>) -> Vec<RawMe
 
     outbox.extend(std::iter::from_fn(|| out_rx.try_recv().ok()));
     outbox
+}
+
+/// The `capabilities` object from the initialize response `id`.
+fn probed_capabilities(outbox: &[RawMessage], id: i32) -> Value {
+    let response = outbox
+        .iter()
+        .find(
+            |m| matches!(m, RawMessage::Response { id: rid, .. } if *rid == RequestId::Number(id)),
+        )
+        .expect("initialize was answered");
+    match response {
+        RawMessage::Response {
+            result: Ok(bytes), ..
+        } => {
+            let body: Value = serde_json::from_slice(bytes).expect("the result decodes");
+            body["capabilities"].clone()
+        }
+        other => panic!("expected a success response, got {other:?}"),
+    }
 }
 
 fn probed(outbox: &[RawMessage], id: i32) -> ProbeResult {
@@ -875,6 +905,7 @@ async fn notebook_and_document_count_exhaustion_follow_the_same_overload_path() 
     let server = Server::builder(AppState {
         seen: Arc::clone(&seen),
     })
+    .notebook_document_sync(notebook_sync_options())
     .notification::<DidOpenNotebookDocument, _, _>(on_did_open)
     .request::<Probe, _, _>(probe)
     .resource_policy(ResourcePolicy {
@@ -960,6 +991,7 @@ async fn notebook_and_document_byte_exhaustion_follow_the_same_overload_path() {
     let server = Server::builder(AppState {
         seen: Arc::default(),
     })
+    .notebook_document_sync(notebook_sync_options())
     .request::<Probe, _, _>(probe)
     .resource_policy(ResourcePolicy {
         max_document_bytes: 4,
@@ -1027,10 +1059,59 @@ async fn notebook_and_document_byte_exhaustion_follow_the_same_overload_path() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_server_that_never_advertised_notebook_sync_ignores_notebook_notifications() {
+    // Notebook sync is opt-in: a server that never called
+    // `notebook_document_sync` advertises no `notebookDocumentSync`, so a
+    // conformant client sends nothing here. A peer that sends anyway must not
+    // reach the notebook layer, the cell Documents, or the hook — an
+    // unadvertised capability is not a back door into connection state.
+    let seen: Log = Arc::default();
+    let server = Server::builder(AppState {
+        seen: Arc::clone(&seen),
+    })
+    .notification::<DidOpenNotebookDocument, _, _>(on_did_open)
+    .notification::<DidCloseNotebookDocument, _, _>(on_did_close)
+    .request::<Probe, _, _>(probe)
+    .build()
+    .expect("notebook hooks without the sync capability are a valid registration set");
+
+    let outbox = drive(
+        server,
+        vec![
+            initialize_request(1),
+            notebook_did_open(1, vec![CELL_ONE], vec![(CELL_ONE, "one")]),
+            probe_request(2),
+        ],
+    )
+    .await;
+
+    let initialized = probed_capabilities(&outbox, 1);
+    assert_eq!(
+        initialized.get("notebookDocumentSync"),
+        None,
+        "the server advertised no notebook sync capability"
+    );
+
+    let probe = probed(&outbox, 2);
+    assert_eq!(probe.notebook, None, "the notebook layer stayed empty");
+    assert_eq!(
+        texts(&probe),
+        [None, None, None],
+        "no cell text Document was opened"
+    );
+    assert_eq!(
+        *seen.lock().expect("the log is not poisoned"),
+        Vec::new(),
+        "the ignored notification ran no post-mutation hook"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_built_in_mutation_runs_without_any_registered_hook() {
     let server = Server::builder(AppState {
         seen: Arc::default(),
     })
+    .notebook_document_sync(notebook_sync_options())
     .request::<Probe, _, _>(probe)
     .build()
     .expect("a lone custom request builds");
@@ -1062,6 +1143,7 @@ async fn notebook_cell_mutations_never_reach_the_text_document_hooks() {
     let server = Server::builder(AppState {
         seen: Arc::clone(&seen),
     })
+    .notebook_document_sync(notebook_sync_options())
     .notification::<DidOpenNotebookDocument, _, _>(on_did_open)
     .notification::<DidOpenTextDocument, _, _>(|state: Arc<AppState>, _ctx, _params| async move {
         state
@@ -1220,6 +1302,7 @@ async fn an_out_of_range_splice_reports_an_inbound_protocol_failure() {
     let server = Server::builder(AppState {
         seen: Arc::default(),
     })
+    .notebook_document_sync(notebook_sync_options())
     .request::<Probe, _, _>(probe)
     .on_error(move |failure| recorded.lock().unwrap().push(failure))
     .build()

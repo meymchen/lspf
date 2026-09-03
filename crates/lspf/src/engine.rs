@@ -364,6 +364,9 @@ struct ProtocolEngine<S, R> {
     notebooks: Notebooks,
     workspace: Option<Workspace>,
     document_sync: TextDocumentSyncOptions,
+    /// Whether this connection advertised `notebookDocumentSync`, which is what
+    /// makes the four notebook built-ins reachable.
+    notebook_sync: bool,
     lifecycle: Lifecycle<S>,
     /// The `on_initialized` hook awaiting the client's `initialized`
     /// notification. Lifted out of [`Pending`] when the initialize transaction
@@ -404,6 +407,9 @@ where
             // Document notifications are processed only after initialize has
             // replaced this with the validated effective configuration.
             document_sync: TextDocumentSyncOptions::default(),
+            // Likewise: notebook notifications stay unreachable until
+            // initialize reads the frozen registrations' opt-in.
+            notebook_sync: false,
             lifecycle: Lifecycle::Uninitialized(Box::new(Pending {
                 registrations: server.registrations,
                 file_provider: server.file_provider,
@@ -1221,12 +1227,16 @@ where
             | ProtocolNotification::ProgressCancel => true,
             // Notebook synchronization is its own capability in LSP, not a
             // mode of `textDocumentSync`, so the text-document switches below
-            // do not gate it. Advertising and gating that capability is
-            // issue #252.
+            // do not gate it — its own opt-in does. A server that never called
+            // `notebook_document_sync` advertises nothing, so a conformant
+            // client sends no notebook notification; ignoring one that arrives
+            // anyway keeps an unadvertised capability from mutating the
+            // notebook layer, opening cell Documents against the connection's
+            // budgets, or reaching a hook (ADR 0034).
             ProtocolNotification::NotebookOpen
             | ProtocolNotification::NotebookChange
             | ProtocolNotification::NotebookSave
-            | ProtocolNotification::NotebookClose => true,
+            | ProtocolNotification::NotebookClose => self.notebook_sync,
             _ if self.document_sync.change == Some(TextDocumentSyncKind::None) => false,
             ProtocolNotification::Open | ProtocolNotification::Close => {
                 self.document_sync.open_close == Some(true)
@@ -1378,6 +1388,11 @@ where
         let document_sync = router.document_sync();
         self.document_sync = document_sync.options;
         standard_capabilities.text_document_sync = Some(document_sync.capability);
+        // Notebook sync carries its own capability and its own opt-in. The
+        // generated catalog already holds whatever `notebook_document_sync`
+        // contributed; the engine only records whether the built-ins it drives
+        // are reachable at all on this connection (ADR 0034).
+        self.notebook_sync = router.notebook_sync_enabled();
         // Workspace-folder sync is likewise a protocol built-in, so the
         // engine advertises its support itself. Registration-contributed
         // workspace fields (the file-operation families) come from the frozen
