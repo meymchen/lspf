@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "workloadVersion": 2,
+  "maximums": {
+    "startupP95Ms": 50,
+    "requestP95Ms": 10,
+    "requestP99Ms": 25,
+    "largeDocumentEditP95Ms": 50,
+    "largeDocumentEditP99Ms": 100,
+    "notebookOpenMs": 100,
+    "notebookEditP95Ms": 50,
+    "notebookEditP99Ms": 100,
+    "peakRssMiB": 256
+  },
+  "minimums": {
+    "throughputOperationsPerSecond": 1000,
+    "partialResultChunksPerSecond": 1000,
+    "slowPeerOverloadCount": 1
+  }
+}

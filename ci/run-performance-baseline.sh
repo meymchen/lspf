@@ -12,8 +12,8 @@ if [[ ! $revision =~ ^[0-9a-f]{40}$ ]]; then
     exit 2
 fi
 
-workloads="$(realpath -m "${PERFORMANCE_WORKLOADS:-performance/workloads-v1.json}")"
-budget="$(realpath -m "${PERFORMANCE_BUDGET:-performance/regression-budget-v1.json}")"
+workloads="$(realpath -m "${PERFORMANCE_WORKLOADS:-performance/workloads-v2.json}")"
+budget="$(realpath -m "${PERFORMANCE_BUDGET:-performance/regression-budget-v2.json}")"
 output_dir="$(realpath -m "$output_dir")"
 raw_results="$output_dir/raw-results.json"
 cargo_bin="${CARGO_BIN:-cargo}"
@@ -49,7 +49,11 @@ jq -e \
       and .revision == $revision
       and (.environment | type == "object")
       and (.latencyMs | type == "object")
+      and (.latencyMs.notebookOpen | numbers)
+      and (.latencyMs.notebookEditP95 | numbers)
+      and (.latencyMs.notebookEditP99 | numbers)
       and (.throughputOperationsPerSecond | numbers)
+      and (.partialResultChunksPerSecond | numbers)
       and (.peakRssMiB | numbers)
       and (.limitBehavior.slowPeer | type == "object")
     ' "$raw_results" >/dev/null
@@ -90,11 +94,23 @@ jq --slurpfile budget "$budget" '
       maximum("large-document-edit-p99-latency"; "Large-document edit p99 latency";
         $results.latencyMs.largeDocumentEditP99;
         $limits.maximums.largeDocumentEditP99Ms; "ms"),
+      maximum("notebook-open-latency"; "Notebook open latency";
+        $results.latencyMs.notebookOpen;
+        $limits.maximums.notebookOpenMs; "ms"),
+      maximum("notebook-edit-p95-latency"; "Notebook edit p95 latency";
+        $results.latencyMs.notebookEditP95;
+        $limits.maximums.notebookEditP95Ms; "ms"),
+      maximum("notebook-edit-p99-latency"; "Notebook edit p99 latency";
+        $results.latencyMs.notebookEditP99;
+        $limits.maximums.notebookEditP99Ms; "ms"),
       maximum("peak-rss"; "Peak RSS";
         $results.peakRssMiB; $limits.maximums.peakRssMiB; "MiB"),
       minimum("throughput"; "Throughput";
         $results.throughputOperationsPerSecond;
         $limits.minimums.throughputOperationsPerSecond; "operations/s"),
+      minimum("partial-result-throughput"; "Partial-result chunk throughput";
+        $results.partialResultChunksPerSecond;
+        $limits.minimums.partialResultChunksPerSecond; "chunks/s"),
       minimum("slow-peer-overloads"; "Slow-peer overloads";
         $results.limitBehavior.slowPeer.overloaded;
         $limits.minimums.slowPeerOverloadCount; "count")

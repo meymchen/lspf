@@ -9,9 +9,12 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use lspf::testing::{ScriptedPeer, ServerJourney};
-use lspf::types::Uri;
 use lspf::types::notification::Notification;
 use lspf::types::request::Request;
+use lspf::types::{
+    DocumentSymbolOptions, DocumentSymbolParams, DocumentSymbolPartialResponse,
+    DocumentSymbolRequest, DocumentSymbolResponse, Uri,
+};
 use lspf::{
     CancellationToken, ClientError, LspError, RawMessage, RequestId, ResourcePolicy, Server,
     ServerContext, Transport, TransportError, TransportReader, TransportWriter,
@@ -37,6 +40,8 @@ struct Workloads {
     request_latency: RequestLatencyWorkload,
     throughput: ThroughputWorkload,
     large_document_editing: LargeDocumentWorkload,
+    notebook_editing: NotebookEditingWorkload,
+    partial_result_throughput: PartialResultThroughputWorkload,
     slow_peer: SlowPeerWorkload,
 }
 
@@ -63,6 +68,24 @@ struct LargeDocumentWorkload {
     document_bytes: usize,
     edits: usize,
     replacement_bytes: usize,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NotebookEditingWorkload {
+    cells: usize,
+    edits: usize,
+    replacement_bytes: usize,
+}
+
+#[derive(Deserialize)]
+struct PartialResultThroughputWorkload {
+    chunks: usize,
+}
+
+struct NotebookEditingMeasurement {
+    open: Duration,
+    edits: Vec<Duration>,
 }
 
 #[derive(Clone, Copy, Deserialize)]
@@ -120,6 +143,26 @@ async fn document_probe(
         .documents()
         .get(&params.uri)
         .and_then(|document| document.version()))
+}
+
+struct PartialResultState {
+    chunks: usize,
+}
+
+async fn stream_partial_results(
+    state: Arc<PartialResultState>,
+    context: ServerContext,
+    _params: DocumentSymbolParams,
+    _cancellation: CancellationToken,
+) -> Result<Option<DocumentSymbolResponse>, LspError> {
+    let sink = context
+        .partial_results::<DocumentSymbolRequest>()
+        .ok_or_else(|| LspError::internal("partial-result token was not available"))?;
+    for _ in 0..state.chunks {
+        sink.report(DocumentSymbolPartialResponse::DocumentSymbolList(Vec::new()))
+            .map_err(LspError::internal)?;
+    }
+    Ok(None)
 }
 
 #[derive(Clone, Copy, Deserialize, Serialize)]
@@ -243,6 +286,9 @@ async fn main() -> BenchmarkResult<()> {
     let throughput = measure_throughput(&manifest.workloads.throughput).await?;
     let large_document =
         measure_large_document_editing(&manifest.workloads.large_document_editing).await?;
+    let notebook_editing = measure_notebook_editing(&manifest.workloads.notebook_editing).await?;
+    let partial_result_throughput =
+        measure_partial_result_throughput(&manifest.workloads.partial_result_throughput).await?;
     let slow_peer = measure_slow_peer(manifest.workloads.slow_peer).await?;
     let peak_rss_mib = peak_rss_mib()?;
 
@@ -263,9 +309,13 @@ async fn main() -> BenchmarkResult<()> {
             "requestP95": percentile_ms(&request_latency, 0.95),
             "requestP99": percentile_ms(&request_latency, 0.99),
             "largeDocumentEditP95": percentile_ms(&large_document, 0.95),
-            "largeDocumentEditP99": percentile_ms(&large_document, 0.99)
+            "largeDocumentEditP99": percentile_ms(&large_document, 0.99),
+            "notebookOpen": notebook_editing.open.as_secs_f64() * 1000.0,
+            "notebookEditP95": percentile_ms(&notebook_editing.edits, 0.95),
+            "notebookEditP99": percentile_ms(&notebook_editing.edits, 0.99)
         },
         "throughputOperationsPerSecond": throughput,
+        "partialResultChunksPerSecond": partial_result_throughput,
         "peakRssMiB": peak_rss_mib,
         "limitBehavior": {
             "slowPeer": {
@@ -320,6 +370,10 @@ fn validate_manifest(manifest: &WorkloadManifest) -> BenchmarkResult<()> {
         || workloads.large_document_editing.replacement_bytes == 0
         || workloads.large_document_editing.replacement_bytes
             > workloads.large_document_editing.document_bytes
+        || workloads.notebook_editing.cells == 0
+        || workloads.notebook_editing.edits == 0
+        || workloads.notebook_editing.replacement_bytes == 0
+        || workloads.partial_result_throughput.chunks == 0
         || workloads.slow_peer.attempts == 0
         || workloads.slow_peer.outbound_message_limit == 0
         || workloads.slow_peer.outbound_byte_limit == 0
@@ -328,6 +382,128 @@ fn validate_manifest(manifest: &WorkloadManifest) -> BenchmarkResult<()> {
         return Err("performance workload counts and limits must be positive and valid".into());
     }
     Ok(())
+}
+
+async fn measure_notebook_editing(
+    workload: &NotebookEditingWorkload,
+) -> BenchmarkResult<NotebookEditingMeasurement> {
+    let server = Server::builder(())
+        .request::<DocumentProbe, _, _>(document_probe)
+        .build()?;
+    let mut journey = ServerJourney::start(server).await?;
+    let notebook_uri = "file:///performance-baseline.ipynb";
+    let cell_uris: Vec<_> = (0..workload.cells)
+        .map(|index| format!("{notebook_uri}#cell-{index}"))
+        .collect();
+    let cells: Vec<_> = cell_uris
+        .iter()
+        .map(|uri| json!({"kind": 2, "document": uri}))
+        .collect();
+    let cell_documents: Vec<_> = cell_uris
+        .iter()
+        .map(|uri| {
+            json!({
+                "uri": uri,
+                "languageId": "plaintext",
+                "version": 1,
+                "text": "a"
+            })
+        })
+        .collect();
+    let open_started = Instant::now();
+    journey.peer().send(notification(
+        "notebookDocument/didOpen",
+        &json!({
+            "notebookDocument": {
+                "uri": notebook_uri,
+                "notebookType": "jupyter-notebook",
+                "version": 1,
+                "cells": cells
+            },
+            "cellTextDocuments": cell_documents
+        }),
+    )?)?;
+    let first_cell = Uri::from_str(&cell_uris[0])?;
+    probe_document(journey.peer(), 30_000, &first_cell, 1).await?;
+    let open = open_started.elapsed();
+
+    let replacement = "b".repeat(workload.replacement_bytes);
+    let mut samples = Vec::with_capacity(workload.edits);
+    for edit in 0..workload.edits {
+        let version = i32::try_from(edit + 2)?;
+        let cell_uri = Uri::from_str(&cell_uris[edit % cell_uris.len()])?;
+        let started = Instant::now();
+        journey.peer().send(notification(
+            "notebookDocument/didChange",
+            &json!({
+                "notebookDocument": {"uri": notebook_uri, "version": version},
+                "change": {
+                    "cells": {
+                        "textContent": [{
+                            "document": {"uri": cell_uri.as_str(), "version": version},
+                            "changes": [{"text": replacement}]
+                        }]
+                    }
+                }
+            }),
+        )?)?;
+        probe_document(journey.peer(), 30_001 + version, &cell_uri, version).await?;
+        samples.push(started.elapsed());
+    }
+
+    journey.peer().send(notification(
+        "notebookDocument/didClose",
+        &json!({
+            "notebookDocument": {"uri": notebook_uri},
+            "cellTextDocuments": []
+        }),
+    )?)?;
+    journey.finish().await?;
+    Ok(NotebookEditingMeasurement {
+        open,
+        edits: samples,
+    })
+}
+
+async fn measure_partial_result_throughput(
+    workload: &PartialResultThroughputWorkload,
+) -> BenchmarkResult<f64> {
+    let max_outbound_messages = workload
+        .chunks
+        .checked_add(2)
+        .ok_or("partial-result chunk count is too large")?;
+    let server = Server::builder(PartialResultState {
+        chunks: workload.chunks,
+    })
+    .resource_policy(ResourcePolicy {
+        max_outbound_messages,
+        ..ResourcePolicy::default()
+    })
+    .feature(
+        lspf::features::document_symbol(DocumentSymbolOptions::default()),
+        stream_partial_results,
+    )
+    .build()?;
+    let mut journey = ServerJourney::start(server).await?;
+    let started = Instant::now();
+    journey.peer().send(request(
+        40_000,
+        DocumentSymbolRequest::METHOD,
+        &json!({
+            "textDocument": {"uri": "file:///performance-baseline.rs"},
+            "partialResultToken": "performance-baseline"
+        }),
+    )?)?;
+    for _ in 0..workload.chunks {
+        let message = journey.peer().recv().await?;
+        if message.method() != Some("$/progress") {
+            return Err(format!("unexpected partial-result message: {message:?}").into());
+        }
+    }
+    expect_success(journey.peer()).await?;
+    let elapsed = started.elapsed().as_secs_f64();
+    journey.finish().await?;
+    Ok(workload.chunks as f64 / elapsed)
 }
 
 async fn measure_startup(workload: &StartupWorkload) -> BenchmarkResult<Vec<Duration>> {

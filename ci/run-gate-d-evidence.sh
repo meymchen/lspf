@@ -173,8 +173,8 @@ record_component model 'Model interleavings' \
     crates/lspf/tests/concurrency_model.rs \
     crates/lspf/tests/concurrency_model_support/mod.rs
 record_component performance 'Performance baseline' \
-    docs/performance-baselines.md performance/workloads-v1.json \
-    performance/regression-budget-v1.json
+    docs/performance-baselines.md performance/workloads-v2.json \
+    performance/regression-budget-v2.json
 record_component soak 'Bounded-memory soak journeys' \
     docs/soak-journeys.md soak/workloads-v2.json soak/thresholds-v2.json
 record_component reference-server 'Reference server' \
