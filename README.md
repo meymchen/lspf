@@ -183,7 +183,7 @@ also uses them internally.
   configurable concurrency limit (64 by default); `$/cancelRequest`
   propagates through a `CancellationToken`.
 - **Protocol details handled for you.** Lifecycle ordering, JSON-RPC
-  framing, text synchronization, and UTF-8/UTF-16 position negotiation
+  framing, text synchronization, and UTF-8/UTF-32/UTF-16 position negotiation
   are built in.
 - **First-party and custom transports.** `stdio`, single-client TCP,
   single-client WebSocket, and WASM worker-channel adapters are provided;
@@ -307,7 +307,7 @@ Available today:
   under the connection's outbound budget.
 - Concurrent dispatch, bounded concurrency, request cancellation, and
   `tracing` spans.
-- Rope-backed documents with UTF-8/UTF-16 position negotiation.
+- Rope-backed documents with UTF-8/UTF-32/UTF-16 position negotiation.
 
 ## Examples
 

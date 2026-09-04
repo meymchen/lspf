@@ -238,7 +238,8 @@ pub fn uri_identity(data: &[u8]) {
     }
 }
 
-/// Exercise UTF-8 and UTF-16 position conversion over arbitrary Unicode text.
+/// Exercise UTF-8, UTF-32, and UTF-16 position conversion over arbitrary
+/// Unicode text.
 pub fn position_conversion(data: &[u8]) {
     if data.len() > LARGE_INPUT_LIMIT {
         return;
@@ -248,7 +249,11 @@ pub fn position_conversion(data: &[u8]) {
     let uri = Uri::from_str("file:///fuzz.txt").expect("static URI parses");
     let document = Document::provider_snapshot(uri, text.clone());
 
-    for encoding in [PositionEncoding::Utf8, PositionEncoding::Utf16] {
+    for encoding in [
+        PositionEncoding::Utf8,
+        PositionEncoding::Utf32,
+        PositionEncoding::Utf16,
+    ] {
         for offset in text
             .char_indices()
             .map(|(offset, _)| offset)
@@ -286,10 +291,10 @@ pub fn incremental_edits(data: &[u8]) {
         String::from_utf8_lossy(payload.get(split + 1..).unwrap_or_default()).into_owned();
     let uri = Uri::from_str("file:///fuzz.txt").expect("static URI parses");
     let mut document = Document::provider_snapshot(uri, initial.clone());
-    let encoding = if controls.first().copied().unwrap_or_default() & 1 == 0 {
-        PositionEncoding::Utf8
-    } else {
-        PositionEncoding::Utf16
+    let encoding = match controls.first().copied().unwrap_or_default() % 3 {
+        0 => PositionEncoding::Utf8,
+        1 => PositionEncoding::Utf32,
+        _ => PositionEncoding::Utf16,
     };
     let change = if controls.first().copied().unwrap_or_default() % 5 == 0 {
         gen_lsp_types::TextDocumentContentChangeWholeDocument::new(replacement).into()
