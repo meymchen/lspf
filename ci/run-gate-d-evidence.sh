@@ -10,6 +10,9 @@ output_dir="${3:?usage: run-gate-d-evidence.sh REVISION RUN_URL OUTPUT_DIRECTORY
 repository="${GITHUB_REPOSITORY:-meymchen/lspf}"
 server_url="${GITHUB_SERVER_URL:-https://github.com}"
 component_runner="${GATE_D_COMPONENT_RUNNER:-}"
+# When the fuzz sweep ran as a parallel matrix, this points at the legs' results
+# and the fuzz component reassembles them instead of fuzzing here.
+fuzz_results="${GATE_D_FUZZ_RESULTS:-}"
 
 if [[ ! $revision =~ ^[0-9a-f]{40}$ ]]; then
     printf 'Gate D evidence revision must be a full lowercase commit SHA: %s\n' \
@@ -38,8 +41,13 @@ run_default_component() {
 
     case "$id" in
         fuzz)
-            FUZZ_ARTIFACT_ROOT="$directory/reproducers" \
-                run_logged "$log" "$commands_file" bash ci/run-fuzz.sh --all
+            if [[ -n $fuzz_results ]]; then
+                run_logged "$log" "$commands_file" \
+                    bash ci/run-fuzz.sh --collect "$fuzz_results" "$directory"
+            else
+                FUZZ_ARTIFACT_ROOT="$directory/reproducers" \
+                    run_logged "$log" "$commands_file" bash ci/run-fuzz.sh --all
+            fi
             ;;
         model)
             run_logged "$log" "$commands_file" \
@@ -105,6 +113,12 @@ record_component() {
     set -e
     finished_ns="$(date +%s%N)"
     duration_ms=$(((finished_ns - started_ns) / 1000000))
+    # A component whose work ran elsewhere reports the span of that work rather
+    # than the seconds this step spent collecting it, so a parallelised sweep
+    # does not read in the evidence as though it barely ran.
+    if [[ -f $directory/duration-ms ]]; then
+        duration_ms="$(cat "$directory/duration-ms")"
+    fi
     command="$(joined_logged_commands "$commands_file")"
     rm -f "$commands_file"
 

@@ -21,6 +21,13 @@ if [[ ${FAIL_COMPONENT:-} == "$component" ]]; then
     exit 1
 fi
 
+# A component whose work ran on other machines - the parallel fuzz sweep -
+# reports the span of that work here instead of the time this job spent
+# collecting it.
+if [[ $component == fuzz ]]; then
+    printf '%s\n' 1234567 >"$output_dir/duration-ms"
+fi
+
 if [[ $component == performance ]]; then
     cat >"$output_dir/results.json" <<JSON
 {
@@ -72,6 +79,8 @@ jq -e \
         and (.command | type == "string" and length > 0)
         and (.log | type == "string" and length > 0))
       and (.failedComponents | length == 0)
+      and (.components[] | select(.id == "fuzz") | .durationMilliseconds)
+        == 1234567
       and .performanceClaims.revision == $revision
       and .performanceClaims.latencyMs.requestP99 == 0.3
       and .performanceClaims.throughputOperationsPerSecond == 90000
