@@ -13,12 +13,12 @@ libFuzzer per-input hang threshold; budget is the total run time per target.
 | Target | Maximum input | Timeout | Scheduled budget |
 | --- | ---: | ---: | ---: |
 | `envelope` | 65536 | 5 s | 300 s |
-| `content_length` | 65536 | 5 s | 300 s |
-| `uri_identity` | 4096 | 5 s | 300 s |
-| `position_conversion` | 65536 | 5 s | 300 s |
-| `incremental_edits` | 65536 | 5 s | 300 s |
-| `notebook_cell_sync` | 4096 | 5 s | 300 s |
-| `lifecycle_sequences` | 16384 | 10 s | 300 s |
+| `content-length` | 65536 | 5 s | 300 s |
+| `uri-identity` | 4096 | 5 s | 300 s |
+| `position-conversion` | 65536 | 5 s | 300 s |
+| `incremental-edits` | 65536 | 5 s | 300 s |
+| `notebook-cell-sync` | 4096 | 5 s | 300 s |
+| `lifecycle-sequences` | 16384 | 10 s | 300 s |
 
 Each `corpus/<target>/` directory contains at least one valid and one malformed
 seed. The Content-Length seeds use visible `\r\n` escapes, which that target

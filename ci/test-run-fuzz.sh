@@ -7,12 +7,12 @@ runner="$repo_root/ci/run-fuzz.sh"
 
 expected=$(cat <<'EOF'
 envelope 65536 5 300
-content_length 65536 5 300
-uri_identity 4096 5 300
-position_conversion 65536 5 300
-incremental_edits 65536 5 300
-notebook_cell_sync 4096 5 300
-lifecycle_sequences 16384 10 300
+content-length 65536 5 300
+uri-identity 4096 5 300
+position-conversion 65536 5 300
+incremental-edits 65536 5 300
+notebook-cell-sync 4096 5 300
+lifecycle-sequences 16384 10 300
 EOF
 )
 

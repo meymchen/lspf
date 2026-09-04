@@ -1,4 +1,4 @@
-//! The `notebook_cell_sync` fuzz target, run as an ordinary test (issue #254).
+//! The `notebook-cell-sync` fuzz target, run as an ordinary test (issue #254).
 //!
 //! A scheduled `ci/run-fuzz.sh` sweep reports only that it found nothing, and it
 //! runs twice a week. These tests drive `lspf::fuzzing::notebook_cell_sync` with
@@ -44,7 +44,7 @@ fn splice(
 
 #[test]
 fn every_committed_seed_decodes_to_the_outcome_its_name_claims() {
-    let corpus = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fuzz/corpus/notebook_cell_sync");
+    let corpus = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fuzz/corpus/notebook-cell-sync");
     let mut seen = Vec::new();
 
     for entry in std::fs::read_dir(&corpus).expect("the committed seed corpus is present") {
