@@ -102,6 +102,10 @@ grep -F 'documentation archive' "$test_root/wrong-docs.output" >/dev/null
 
 echo 'Mismatched documentation revision rejection verified'
 
+# The candidate carries whatever version the authorized release-plz pull request
+# bumped to, so no version is privileged. What must not pass is a bundle whose
+# parts disagree: metadata naming one version over a documentation archive built
+# for another.
 wrong_version_artifacts="$test_root/wrong-version-artifacts"
 wrong_version_evidence="$test_root/wrong-version-evidence"
 mkdir "$wrong_version_artifacts"
@@ -114,7 +118,7 @@ cp \
     "$artifacts/release-metadata.json" \
     "$wrong_version_artifacts"
 cp -R "$evidence" "$wrong_version_evidence"
-jq '.version = "0.11.0"' "$wrong_version_artifacts/release-metadata.json" \
+jq '.version = "1.1.0"' "$wrong_version_artifacts/release-metadata.json" \
     >"$wrong_version_artifacts/release-metadata.next"
 mv "$wrong_version_artifacts/release-metadata.next" \
     "$wrong_version_artifacts/release-metadata.json"
@@ -123,9 +127,25 @@ if bash ci/prepare-release-candidate.sh \
     "$revision" "$wrong_version_artifacts" "$wrong_version_evidence" \
     >"$test_root/wrong-version.output" 2>&1
 then
-    echo 'test failure: a non-1.0 release produced the 1.0 candidate' >&2
+    echo 'test failure: mismatched artifact versions produced a candidate' >&2
     exit 1
 fi
-grep -F 'version must be 1.0.0' "$test_root/wrong-version.output" >/dev/null
+grep -F 'documentation archive' "$test_root/wrong-version.output" >/dev/null
 
-echo 'Non-1.0 candidate rejection verified'
+echo 'Mismatched candidate version rejection verified'
+
+# A release that is not 1.0.0 is an ordinary release, not an error.
+next_artifacts="$test_root/next-artifacts"
+next_evidence="$test_root/next-evidence"
+create_release_candidate_fixture "$revision" "$next_artifacts" "$next_evidence" \
+    1.1.0
+
+bash ci/prepare-release-candidate.sh "$revision" "$next_artifacts" "$next_evidence"
+
+jq -e '
+    .candidate == "lspf-1.1.0"
+    and .artifacts.crate == "lspf-1.1.0.crate"
+    and .artifacts.docs == "lspf-1.1.0-docs.tar.gz"
+  ' "$next_artifacts/candidate-metadata.json" >/dev/null
+
+echo 'Post-1.0 candidate preparation verified'

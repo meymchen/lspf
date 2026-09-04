@@ -608,17 +608,38 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-  # Scheduled Gate D keeps the ordinary branch under observation. A release
-  # candidate needs evidence for its exact revision, so an authorized release
-  # runs the same bounded verification once more in this workflow.
-  gate-d-candidate-evidence:
-    name: Gate D candidate evidence
-    if: ${{ github.event_name == 'push' && needs.release-context.outputs.authorized == 'true' && needs.release-context.outputs.version == '1.0.0' }}
+  # The scheduled Gate D in `fuzz.yml` fans its sweep out the same way, for the
+  # same reason: every target holds a fixed wall-clock budget, so sweeping them
+  # in one process costs the sum of those budgets. The list lives in
+  # `ci/run-fuzz.sh`, where `--check` already holds it against the manifest, the
+  # seeds and the documented budgets.
+  gate-d-fuzz-matrix:
+    name: load candidate fuzz target matrix
+    if: ${{ github.event_name == 'push' && needs.release-context.outputs.authorized == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
     needs: release-context
     permissions:
       contents: read
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - id: matrix
+        run: printf 'matrix=%s\n' "$(bash ci/run-fuzz.sh --matrix)" >>"$GITHUB_OUTPUT"
+
+  gate-d-fuzz-target:
+    name: candidate fuzz ${{ matrix.target }}
+    if: ${{ github.event_name == 'push' && needs.release-context.outputs.authorized == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs:
+      - release-context
+      - gate-d-fuzz-matrix
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.gate-d-fuzz-matrix.outputs.matrix) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup-rust
@@ -627,7 +648,64 @@ jobs:
           cache: "false"
       - name: Install the fuzz runner
         run: cargo install cargo-fuzz --locked
+      - name: Fuzz one target
+        env:
+          TARGET: ${{ matrix.target }}
+        run: bash ci/run-fuzz.sh --target "$TARGET" "$RUNNER_TEMP/fuzz-result"
+      - name: Retain the target result
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: gate-d-candidate-fuzz-${{ matrix.target }}
+          path: ${{ runner.temp }}/fuzz-result
+          if-no-files-found: error
+          retention-days: 90
+
+  # Scheduled Gate D keeps the ordinary branch under observation. A release
+  # candidate needs evidence for its exact revision, so an authorized release
+  # runs the same bounded verification once more in this workflow.
+  gate-d-candidate-evidence:
+    name: Gate D candidate evidence
+    # A failing target still has to reach the evidence artifact, which is where
+    # a maintainer reads why the release stopped, so this runs on anything short
+    # of cancellation. The job itself then fails and the candidate is never
+    # built.
+    if: ${{ !cancelled() && github.event_name == 'push' && needs.release-context.outputs.authorized == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs:
+      - release-context
+      - gate-d-fuzz-matrix
+      - gate-d-fuzz-target
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # The remaining components run on the toolchain `rust-toolchain.toml`
+      # pins, which is what they always ran on: only the fuzz sweep needed
+      # nightly, and it no longer runs in this job.
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache: "false"
+      - name: Download the fuzz target results
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MATRIX: ${{ needs.gate-d-fuzz-matrix.outputs.matrix }}
+        # A leg that never produced a result is a Gate D failure that belongs in
+        # the evidence, so a missing artifact must not take this job down before
+        # it can record one.
+        run: |
+          results="$RUNNER_TEMP/fuzz-results"
+          mkdir -p "$results"
+          for target in $(jq -r '.target[]' <<<"$MATRIX"); do
+            gh run download "$GITHUB_RUN_ID" \
+              --name "gate-d-candidate-fuzz-$target" --dir "$results/$target" \
+              || echo "no result artifact for fuzz target $target" >&2
+          done
       - name: Run revision-locked Gate D candidate verification
+        env:
+          GATE_D_FUZZ_RESULTS: ${{ runner.temp }}/fuzz-results
         run: >-
           bash ci/run-gate-d-evidence.sh
           "$GITHUB_SHA"
@@ -648,7 +726,7 @@ jobs:
   # permission.
   release-candidate:
     name: Verified release candidate
-    if: ${{ github.event_name == 'push' && needs.release-context.outputs.authorized == 'true' && needs.release-context.outputs.version == '1.0.0' }}
+    if: ${{ github.event_name == 'push' && needs.release-context.outputs.authorized == 'true' }}
     runs-on: ubuntu-latest
     needs:
       - release-context
@@ -749,9 +827,18 @@ jobs:
   # a worktree reconstructed from this revision, so the compatibility,
   # overload, timeout, disconnect, child-cleanup, reference-server, and editor
   # journeys all compile the packaged bytes that will be published.
+  #
+  # One part of what it reports is not automated. The worksheet under
+  # `editor-validation/` records what an operator saw driving the packaged
+  # server through the editor journeys by hand, and its observations only
+  # describe the release they were taken against. The file is checked in, so
+  # this gate runs for any release either way; `ci/run-gate-e-evidence.sh`
+  # reports it as a human judgment rather than proof, so leaving it stale
+  # weakens the evidence instead of failing the gate. Refresh it while
+  # preparing a release.
   gate-e-evidence:
     name: Gate E candidate validation evidence
-    if: ${{ github.event_name == 'push' && needs.release-context.outputs.authorized == 'true' && needs.release-context.outputs.version == '1.0.0' }}
+    if: ${{ github.event_name == 'push' && needs.release-context.outputs.authorized == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     needs:
@@ -801,7 +888,7 @@ jobs:
   # before it archives the release record.
   release-publish:
     name: Publish the verified candidate
-    if: ${{ github.event_name == 'push' && needs.release-context.outputs.authorized == 'true' && needs.release-context.outputs.version == '1.0.0' }}
+    if: ${{ github.event_name == 'push' && needs.release-context.outputs.authorized == 'true' }}
     runs-on: ubuntu-latest
     needs:
       - release-context

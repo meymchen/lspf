@@ -25,10 +25,11 @@ then
     echo 'release metadata is missing, malformed, or names another revision' >&2
     exit 1
 fi
-if ! jq -e '.version == "1.0.0"' "$release_metadata" >/dev/null; then
-    echo 'release candidate version must be 1.0.0' >&2
-    exit 1
-fi
+# The candidate is authorized by the merged release-plz pull request, so the
+# version it carries is whatever that request bumped to. What has to hold is
+# that every artifact in the bundle describes the same version as the metadata
+# that names them.
+release_version="$(jq -r '.version' "$release_metadata")"
 
 while IFS= read -r artifact; do
     artifact="${artifact%$'\r'}"
@@ -55,10 +56,10 @@ if ! docs_metadata="$(
     || tar -xOzf "$artifact_dir/$docs_artifact" ./release-docs-metadata.json \
         2>/dev/null
 )" \
-    || ! jq -e --arg revision "$revision" '
+    || ! jq -e --arg revision "$revision" --arg version "$release_version" '
         .schemaVersion == 1
         and .crate == "lspf"
-        and .version == "1.0.0"
+        and .version == $version
         and .revision == $revision
       ' \
         <<<"$docs_metadata" >/dev/null 2>&1

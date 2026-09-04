@@ -14,7 +14,7 @@ job="$(jq -c '.jobs["release-publish"]' <<<"$ci_json")"
 # environment, and it must never be reachable from a pull request.
 jq -e '
   .name == "Publish the verified candidate"
-  and .if == "${{ github.event_name == '\''push'\'' && needs.release-context.outputs.authorized == '\''true'\'' && needs.release-context.outputs.version == '\''1.0.0'\'' }}"
+  and .if == "${{ github.event_name == '\''push'\'' && needs.release-context.outputs.authorized == '\''true'\'' }}"
   and (.needs | sort)
     == ["gate-e-evidence", "release-candidate", "release-context"]
   and .environment == "crates-io"
