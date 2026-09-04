@@ -6,7 +6,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 source ci/supported-feature-matrix.sh
 
-bash ci/test-native-feature-command.sh
+bash ci/tests/unit/native-feature-command.sh
 
 fail() {
     echo "feature-contract error: $*" >&2
@@ -92,8 +92,8 @@ worker_only_packages=$(comm -13 \
 if [[ $default_packages != "$stdio_packages" ]]; then
     fail "the native default dependency graph must equal explicit stdio"
 fi
-if ! diff -u ci/default-dependencies.txt <(printf '%s\n' "$default_package_names"); then
-    fail "the native default dependency allowlist changed; verify no Transport- or WASM-only package leaked, then update ci/default-dependencies.txt"
+if ! diff -u ci/policy/default-dependencies.txt <(printf '%s\n' "$default_package_names"); then
+    fail "the native default dependency allowlist changed; verify no Transport- or WASM-only package leaked, then update ci/policy/default-dependencies.txt"
 fi
 for exclusive_packages in \
     "$tcp_only_packages" \

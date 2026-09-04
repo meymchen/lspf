@@ -342,12 +342,12 @@ Each is a deliberate boundary with the decision that set it, not an oversight.
 
 | What | Gate |
 | --- | --- |
-| This inventory matches the code, in both directions | `ci/check-public-interface.sh`, self-tested by `ci/test-check-public-interface.sh` |
+| This inventory matches the code, in both directions | `ci/check-public-interface.sh`, self-tested by `ci/tests/unit/check-public-interface.sh` |
 | Downstream crates can name the frozen root, native, WASM-only, testing, and owned-alias exports | `crates/lspf/tests/frozen_interface.rs` and `crates/lspf/tests/frozen_wasm_interface.rs`; the latter compiles for the real `wasm32-unknown-unknown` target |
 | Every feature descriptor is callable from a downstream crate and contributes the intended capability | `crates/lspf/tests/catalog.rs` |
 | Full downstream Server and Client journeys still work through public API alone | `crates/lspf/tests/public_conformance.rs` |
 | The published Server and Client tutorials compile as clean consumers and run together over stdio | `ci/check-tutorials.sh`, called by the packaged-crate gate |
-| A frozen item's methods, members, fields, variants, bounds, or signatures are not removed or changed incompatibly | CI `public API compatibility` (`ci/check-public-api.sh`), with reviewed breaks recorded in `ci/public-api-breaking-approvals.json` |
+| A frozen item's methods, members, fields, variants, bounds, or signatures are not removed or changed incompatibly | CI `public API compatibility` (`ci/check-public-api.sh`), with reviewed breaks recorded in `ci/policy/public-api-breaking-approvals.json` |
 | Every frozen item has warning-free documentation on every supported surface | CI `public docs` (`ci/check-public-docs.sh`) |
 | Every documented feature selection compiles, and unsupported ones fail as designed | CI `feature contract` (`ci/check-feature-contract.sh`) |
 | The catalog still matches the LSP 3.18 metaModel | `crates/lspf/tests/catalog.rs` |

@@ -142,7 +142,7 @@ The gate always asks cargo-semver-checks to apply patch-level compatibility.
 Exit code 100 means the tool found a break. Each failing report row includes a
 hash of normalized, order-independent failure blocks, so output ordering cannot
 split one finding set into several approvals. An intentional break can
-be approved in `ci/public-api-breaking-approvals.json` for one baseline,
+be approved in `ci/policy/public-api-breaking-approvals.json` for one baseline,
 current version, target, and feature selection. A different or additional
 finding changes the hash and still fails the gate.
 
@@ -231,7 +231,7 @@ reference server's own test suite, and the editor journey driven through an
 installed `lspf-markdown` selected by `LSPF_MARKDOWN_SERVER`.
 
 Gate E also reads
-[`ci/release-blockers-v1.json`](./ci/release-blockers-v1.json), the register of
+[`ci/policy/release-blockers-v1.json`](./ci/policy/release-blockers-v1.json), the register of
 blockers that validation discovered. Each entry names a severity, an owner, a
 tracked issue, and a disposition. A framework-owned P0 or P1 that is still
 `open` has no disposition and fails the gate; one that is `accepted` passes but

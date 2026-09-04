@@ -82,7 +82,7 @@ Run the automated checks with:
 
 ```bash
 cargo test -p lspf-markdown --test packaged_editor_journey
-bash ci/test-check-editor-validation.sh
+bash ci/tests/unit/check-editor-validation.sh
 ```
 
 The Rust test drives the packaged stdio executable from outside the process. It

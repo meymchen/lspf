@@ -2,7 +2,7 @@
 set -euo pipefail
 
 workflow_dir="${1:-.github/workflows}"
-policy_file="${2:-ci/workflow-permissions.json}"
+policy_file="${2:-ci/policy/workflow-permissions.json}"
 yq_bin="${YQ_BIN:-yq}"
 status=0
 

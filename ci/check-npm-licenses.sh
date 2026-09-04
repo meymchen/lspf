@@ -2,7 +2,7 @@
 set -euo pipefail
 
 lock_file="${1:-tools/vscode-test-client/package-lock.json}"
-allowed_file="${2:-ci/npm-allowed-licenses.txt}"
+allowed_file="${2:-ci/policy/npm-allowed-licenses.txt}"
 status=0
 dependencies=""
 dependency_rows=""

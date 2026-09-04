@@ -74,7 +74,7 @@ jq -n \
           id: "compatibility-policy",
           statement: "The compatibility policy is documented, the frozen interface is inventoried item by item, and every supported public API surface is compared with its released baseline.",
           classification: "automated",
-          sources: [source("SECURITY.md"), source("docs/public-interface.md"), source("ci/check-public-api.sh"), source("ci/check-public-interface.sh"), source("ci/public-api-breaking-approvals.json")],
+          sources: [source("SECURITY.md"), source("docs/public-interface.md"), source("ci/check-public-api.sh"), source("ci/check-public-interface.sh"), source("ci/policy/public-api-breaking-approvals.json")],
           checks: [check("public-api"; "Public API compatibility"), check("public-interface"; "Public interface freeze")]
         },
         {
@@ -88,7 +88,7 @@ jq -n \
           id: "coverage",
           statement: "Workspace coverage and protocol-engine coverage are checked against recorded baselines with named failure-path tests.",
           classification: "automated",
-          sources: [source("ci/check-test-coverage.sh"), source("ci/test-coverage-baseline.json"), source("ci/run-coverage-evidence-tests.sh")],
+          sources: [source("ci/check-test-coverage.sh"), source("ci/policy/test-coverage-baseline.json"), source("ci/run-coverage-evidence-tests.sh")],
           checks: [check("test-coverage"; "Test coverage")]
         },
         {
@@ -102,7 +102,7 @@ jq -n \
           id: "release-traceability",
           statement: "The release workflow contract retains package metadata, hashes, provenance, and an SBOM from one revision, and publishes only a candidate the registry can be shown to match.",
           classification: "automated",
-          sources: [source("ci/authorize-release.sh"), source("ci/prepare-release-artifacts.sh"), source("ci/test-release-artifacts-workflow.sh"), source("ci/prepare-release-record.sh"), source("ci/check-release-record.sh"), source("ci/test-release-publication-workflow.sh"), source(".github/workflows/ci.yml")],
+          sources: [source("ci/authorize-release.sh"), source("ci/prepare-release-artifacts.sh"), source("ci/tests/workflow/release-artifacts.sh"), source("ci/prepare-release-record.sh"), source("ci/check-release-record.sh"), source("ci/tests/workflow/release-publication.sh"), source(".github/workflows/ci.yml")],
           checks: [check("security"; "Release artifact workflow contract")]
         }
       ],
@@ -120,7 +120,7 @@ jq -n \
         {
           statement: "Whether an intentional breaking change and its release notes are acceptable requires maintainer review; automation only matches the recorded approval to exact findings.",
           classification: "human",
-          sources: [source("SECURITY.md"), source("ci/public-api-breaking-approvals.json")]
+          sources: [source("SECURITY.md"), source("ci/policy/public-api-breaking-approvals.json")]
         },
         {
           statement: "Vulnerability severity, project-code security, disclosure timing, and reporter communication require human security review; supply-chain checks do not establish their absence.",

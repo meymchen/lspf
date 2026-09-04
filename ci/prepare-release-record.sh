@@ -24,10 +24,10 @@ policies=(
     SECURITY.md
     deny.toml
     docs/public-interface.md
-    ci/public-api-breaking-approvals.json
-    ci/workflow-permissions.json
-    ci/npm-allowed-licenses.txt
-    ci/release-blockers-v1.json
+    ci/policy/public-api-breaking-approvals.json
+    ci/policy/workflow-permissions.json
+    ci/policy/npm-allowed-licenses.txt
+    ci/policy/release-blockers-v1.json
 )
 
 if [[ ! $revision =~ ^[0-9a-f]{40}$ ]]; then

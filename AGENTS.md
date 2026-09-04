@@ -23,9 +23,28 @@ that states the impact and migration. The changelog template in
 `release-plz.toml` renders that body under the entry.
 
 A breaking change needs its findings recorded in
-`ci/public-api-breaking-approvals.json`. Run `bash ci/check-public-api.sh` and
+`ci/policy/public-api-breaking-approvals.json`. Run `bash ci/check-public-api.sh` and
 paste the `approval candidate:` line it prints; the approval records the
 reviewed findings, not a version.
+
+## CI scripts
+
+`ci/` holds the scripts the workflows run: `check-*` verifies, `run-*` produces
+evidence, `prepare-*` assembles artifacts. `ci/policy/` holds the checked-in
+expectations those checks compare against.
+
+Tests live under `ci/tests/` and carry no `test-` prefix, so a test's path names
+its subject:
+
+- `ci/tests/unit/NAME.sh` tests `ci/NAME.sh`
+- `ci/tests/workflow/NAME.sh` asserts the structure of a workflow YAML
+- `ci/tests/system/NAME.sh` drives a real bench or toolchain
+
+`ci/test-coverage-*.sh` are libraries about test coverage, not tests.
+
+Every test resolves the repo root with
+`cd "$(dirname "${BASH_SOURCE[0]}")/../../.."` and refers to other files by a
+path from there, so a moved test needs that depth updated.
 
 ## Agent skills
 
