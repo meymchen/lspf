@@ -327,7 +327,7 @@ Each is a deliberate boundary with the decision that set it, not an oversight.
   nor stores `Documents`, `ServerContext`, or `ClientContext`. Registering a
   built-in document or workspace notification records a post-mutation hook
   instead of replacing the mutation.
-- **Position encodings beyond UTF-8 and UTF-16.** `PositionEncoding` has two
+- **Position encodings beyond UTF-8, UTF-32, and UTF-16.** `PositionEncoding` has three
   variants and negotiation chooses between them (ADR 0016).
 - **`testing` and `worker-channel` outside their targets.** `testing` is
   native-only and `worker-channel` is `wasm32`-only; each unsupported

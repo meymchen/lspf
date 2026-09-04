@@ -1,4 +1,4 @@
-# Position encoding: negotiate UTF-8, default UTF-16
+# Position encoding: negotiate UTF-8, UTF-32, default UTF-16
 
 LSP `Position.character` is not a character index and not a byte offset —
 its meaning is the *negotiated* `PositionEncodingKind` (LSP 3.18,
@@ -8,8 +8,8 @@ capability, and the server echoes its pick back in
 `InitializeResult.capabilities.positionEncoding`. If the server omits it,
 the encoding is UTF-16.
 
-lspf negotiates **UTF-8 when the client offers it, falling back to
-UTF-16** otherwise. The negotiated kind is stored as runtime state on the
+lspf negotiates **UTF-8, then UTF-32, when the client offers them, falling
+back to UTF-16** otherwise. The negotiated kind is stored as runtime state on the
 [[Documents]] store and governs every later `position ↔ offset`
 conversion. This is rust-analyzer's strategy.
 
@@ -45,13 +45,13 @@ Two consequences follow:
 1. The `InitializeResult` builder must **see the client capabilities** —
    the capability-assembly step takes `InitializeParams`, not just
    `&self`, so it can intersect the client's `general.positionEncodings`
-   with lspf's preference order (`[utf-8, utf-16]`).
+   with lspf's preference order (`[utf-8, utf-32, utf-16]`).
 2. The negotiated kind is **runtime state**, not a const. The
    [[Documents]] store holds it and every conversion method reads it; a
    handler never has to thread the encoding through itself.
 
-The cost we accept: two conversion code paths (UTF-8 native, UTF-16
-transcoded) plus the negotiation logic, and a `positionEncoding` that
+The cost we accept: three conversion code paths (UTF-8 native, UTF-32
+code-point counting, and UTF-16 transcoding) plus the negotiation logic, and a `positionEncoding` that
 sits outside the otherwise-uniform const-derived capability model. We
 treat the asymmetry as honest — position encoding genuinely *is*
 negotiated rather than declared, and pretending otherwise would either
