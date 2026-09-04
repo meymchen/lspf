@@ -163,6 +163,7 @@ fn publish_line_diagnostics(state: &State, ctx: &ServerContext, uri: Uri) {
 fn line_range(number: usize, line: &str, encoding: PositionEncoding) -> Range {
     let width = match encoding {
         PositionEncoding::Utf8 => line.len(),
+        PositionEncoding::Utf32 => line.chars().count(),
         PositionEncoding::Utf16 => line.encode_utf16().count(),
     };
     let line_index = u32::try_from(number).unwrap_or(u32::MAX);
@@ -334,6 +335,7 @@ fn publish_line_diagnostics(state: &State, ctx: &ServerContext, uri: Uri) {
 fn line_range(number: usize, line: &str, encoding: PositionEncoding) -> Range {
     let width = match encoding {
         PositionEncoding::Utf8 => line.len(),
+        PositionEncoding::Utf32 => line.chars().count(),
         PositionEncoding::Utf16 => line.encode_utf16().count(),
     };
     let line_index = u32::try_from(number).unwrap_or(u32::MAX);

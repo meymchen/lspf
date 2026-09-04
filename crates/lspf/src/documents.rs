@@ -27,12 +27,15 @@ fn document_text_capacity_exhausted() -> DocumentMutationError {
 
 /// Negotiated meaning of `Position.character` (ADR 0016).
 ///
-/// LSP defaults to UTF-16; lspf prefers UTF-8 when the client offers it.
+/// LSP defaults to UTF-16; lspf prefers UTF-8, then UTF-32, when the client
+/// offers them.
 /// The store's current value governs every `position ↔ offset` conversion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PositionEncoding {
     /// `Position.character` is a UTF-8 byte offset within the line.
     Utf8,
+    /// `Position.character` is a Unicode code-point offset within the line.
+    Utf32,
     /// `Position.character` is a UTF-16 code-unit offset within the line.
     ///
     /// LSP-mandatory default until UTF-8 negotiation (issue #10) overwrites it.
@@ -125,6 +128,18 @@ impl Document {
                 }
                 None
             }
+            PositionEncoding::Utf32 => {
+                let character = position.character as usize;
+                let line_content = line_text.trim_end_matches(['\r', '\n']);
+                line_content
+                    .char_indices()
+                    .nth(character)
+                    .map(|(byte_idx, _)| line_start_byte + byte_idx)
+                    .or_else(|| {
+                        (character == line_content.chars().count())
+                            .then_some(line_start_byte + line_content.len())
+                    })
+            }
         }
     }
 
@@ -164,6 +179,19 @@ impl Document {
                     character: utf16_count as u32,
                 })
             }
+            PositionEncoding::Utf32 => line_text
+                .char_indices()
+                .find(|(byte_idx, _)| *byte_idx == line_offset)
+                .map(|(_, _)| Position {
+                    line: line_idx as u32,
+                    character: line_text[..line_offset].chars().count() as u32,
+                })
+                .or_else(|| {
+                    (line_offset == line_text.len()).then_some(Position {
+                        line: line_idx as u32,
+                        character: line_text.chars().count() as u32,
+                    })
+                }),
         }
     }
 
@@ -525,8 +553,9 @@ impl Documents {
     /// return the LSP kind to advertise in `InitializeResult` (ADR 0016).
     ///
     /// lspf intersects the client's offered `general.positionEncodings` with
-    /// its own preference order (`utf-8` then `utf-16`). A client that offers
-    /// nothing, nothing supported, or omits the field defaults to UTF-16.
+    /// its own preference order (`utf-8`, `utf-32`, then `utf-16`). A client
+    /// that offers nothing, nothing supported, or omits the field defaults to
+    /// UTF-16.
     pub(crate) fn negotiate_position_encoding(
         &self,
         params: &InitializeParams,
@@ -537,7 +566,11 @@ impl Documents {
             .as_ref()
             .and_then(|g| g.position_encodings.as_deref());
 
-        let preferred = [PositionEncodingKind::UTF8, PositionEncodingKind::UTF16];
+        let preferred = [
+            PositionEncodingKind::UTF8,
+            PositionEncodingKind::UTF32,
+            PositionEncodingKind::UTF16,
+        ];
         let chosen = offered
             .and_then(|encodings| {
                 preferred
@@ -547,10 +580,10 @@ impl Documents {
             })
             .unwrap_or(PositionEncodingKind::UTF16);
 
-        self.set_position_encoding(if chosen == PositionEncodingKind::UTF8 {
-            PositionEncoding::Utf8
-        } else {
-            PositionEncoding::Utf16
+        self.set_position_encoding(match chosen {
+            PositionEncodingKind::UTF8 => PositionEncoding::Utf8,
+            PositionEncodingKind::UTF32 => PositionEncoding::Utf32,
+            _ => PositionEncoding::Utf16,
         });
         chosen
     }
@@ -830,6 +863,18 @@ mod tests {
     }
 
     #[test]
+    fn utf32_position_counts_unicode_code_points() {
+        let (docs, u) = opened("file:///unicode.txt", "héllo😋");
+        docs.set_position_encoding(PositionEncoding::Utf32);
+
+        // The second 'l' starts at code-point offset 3 and the emoji at offset 5.
+        assert_eq!(docs.position_to_offset(&u, at(0, 3)), Some(4));
+        assert_eq!(docs.position_to_offset(&u, at(0, 5)), Some(6));
+        assert_eq!(docs.offset_to_position(&u, 6), Some(at(0, 5)));
+        assert_eq!(docs.position_to_offset(&u, at(0, 6)), Some(10));
+    }
+
+    #[test]
     fn utf8_position_rejects_mid_codepoint_and_past_eol() {
         let (docs, u) = opened("file:///unicode.txt", "héllo\nworld");
         docs.set_position_encoding(PositionEncoding::Utf8);
@@ -898,13 +943,17 @@ mod tests {
     }
 
     #[test]
-    fn utf8_and_utf16_positions_round_trip_complex_unicode_across_lines() {
+    fn positions_round_trip_complex_unicode_across_lines() {
         // Covers a mixed-width sample: composed and decomposed text,
         // BMP characters, a surrogate pair, and a line boundary.
         let text = "äa\u{0308}錯誤😋\näa\u{0308}錯誤😋";
         let (docs, u) = opened("file:///position-round-trip.txt", text);
 
-        for encoding in [PositionEncoding::Utf8, PositionEncoding::Utf16] {
+        for encoding in [
+            PositionEncoding::Utf8,
+            PositionEncoding::Utf32,
+            PositionEncoding::Utf16,
+        ] {
             docs.set_position_encoding(encoding);
             let mut line_start = 0;
 
@@ -917,6 +966,7 @@ mod tests {
                     assert_eq!(docs.offset_to_position(&u, offset), Some(position));
                     character += match encoding {
                         PositionEncoding::Utf8 => ch.len_utf8() as u32,
+                        PositionEncoding::Utf32 => 1,
                         PositionEncoding::Utf16 => ch.len_utf16() as u32,
                     };
                 }
@@ -939,7 +989,11 @@ mod tests {
     fn positions_use_line_content_before_crlf_and_lf_endings() {
         let (docs, u) = opened("file:///line-endings.txt", "x\r\ny\n");
 
-        for encoding in [PositionEncoding::Utf8, PositionEncoding::Utf16] {
+        for encoding in [
+            PositionEncoding::Utf8,
+            PositionEncoding::Utf32,
+            PositionEncoding::Utf16,
+        ] {
             docs.set_position_encoding(encoding);
             assert_eq!(docs.position_to_offset(&u, at(0, 1)), Some(1));
             assert_eq!(docs.offset_to_position(&u, 1), Some(at(0, 1)));
@@ -948,6 +1002,11 @@ mod tests {
             assert_eq!(docs.position_to_offset(&u, at(1, 1)), Some(4));
             assert_eq!(docs.position_to_offset(&u, at(2, 0)), Some(5));
         }
+
+        docs.set_position_encoding(PositionEncoding::Utf32);
+        assert_eq!(docs.position_to_offset(&u, at(0, 2)), None);
+        assert_eq!(docs.position_to_offset(&u, at(0, 3)), None);
+        assert_eq!(docs.position_to_offset(&u, at(1, 2)), None);
     }
 
     #[test]
@@ -1107,16 +1166,23 @@ mod tests {
     }
 
     #[test]
-    fn negotiation_falls_back_to_utf16_for_utf16_only_and_unsupported_offers() {
-        for offered in [PositionEncodingKind::UTF16, PositionEncodingKind::UTF32] {
-            let docs = Documents::new();
-            assert_eq!(
-                docs.negotiate_position_encoding(&offering(vec![offered.clone()])),
-                PositionEncodingKind::UTF16,
-                "offering only {offered:?} leaves the LSP-mandatory default"
-            );
-            assert_eq!(docs.position_encoding(), PositionEncoding::Utf16);
-        }
+    fn negotiation_keeps_utf16_for_a_utf16_only_offer() {
+        let docs = Documents::new();
+        assert_eq!(
+            docs.negotiate_position_encoding(&offering(vec![PositionEncodingKind::UTF16])),
+            PositionEncodingKind::UTF16
+        );
+        assert_eq!(docs.position_encoding(), PositionEncoding::Utf16);
+    }
+
+    #[test]
+    fn negotiation_picks_utf32_when_utf8_is_not_offered() {
+        let docs = Documents::new();
+        assert_eq!(
+            docs.negotiate_position_encoding(&offering(vec![PositionEncodingKind::UTF32])),
+            PositionEncodingKind::UTF32
+        );
+        assert_eq!(docs.position_encoding(), PositionEncoding::Utf32);
     }
 
     #[test]
