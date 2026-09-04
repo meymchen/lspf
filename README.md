@@ -124,12 +124,12 @@ async fn main() -> lspf::Result<()> {
 ```
 
 No handwritten `ServerCapabilities` and no framework change are involved:
-the capabilities come from the registrations themselves. A runnable copy of
-the complete journey — hover, completion plus resolve, Commands, document
-synchronization, multi-root workspace state, and unopened-file lookup — lives
-at [`crates/lspf-hello/src/main.rs`](./crates/lspf-hello/src/main.rs), the
-installable template server described under [Editor setup](#editor-setup),
-with an end-to-end stdio test beside it. The
+the capabilities come from the registrations themselves. For a ready-to-copy
+server and VS Code extension, start from
+[`lspf-vscode-extension-template`](https://github.com/meymchen/lspf-vscode-extension-template).
+The framework's public feature, workspace, client, and stdio seams are covered
+by the `crates/lspf` integration tests and the in-tree `lspf-markdown`
+reference server. The
 [feature registration](https://meymchen.github.io/lspf/en/guides/features-and-workspace/)
 and [workspace state](https://meymchen.github.io/lspf/en/guides/workspace-state/)
 guides walk through each piece. To choose a Transport adapter, enable only
@@ -281,18 +281,17 @@ that business logic does not fork between native and WASM hosts. See the
 for native TCP, native WebSocket, and browser/Node worker-channel build
 commands.
 
-Run the template server straight from the workspace, or point any
-LSP-aware tool at the spawned process:
+Generate a new Rust language server plus VS Code extension from the dedicated
+template repository:
 
 ```bash
-cargo run -p lspf-hello
+cargo generate --git https://github.com/meymchen/lspf-vscode-extension-template
 ```
 
-It is the complete typed journey — hover, completion plus resolve, Commands,
-document synchronization, multi-root workspace state, and unopened-file
-lookup — verified end to end by
-[`crates/lspf-hello/tests/e2e.rs`](./crates/lspf-hello/tests/e2e.rs).
-To wire it into a real editor instead, see [Editor setup](#editor-setup).
+You can also use GitHub's **Use this template** action or clone the repository
+directly. Keeping that starter outside this workspace lets it carry standalone
+project metadata, release automation, and editor packaging without coupling
+those choices to the framework repository.
 
 For a maintained, task-focused server rather than a template, install the
 first-party Markdown link server:
@@ -309,86 +308,53 @@ journeys live in
 
 ## Editor setup
 
-This repository is a Cargo workspace with three members:
+This repository is a Cargo workspace with two members:
 
 - [`crates/lspf`](./crates/lspf) — the framework library you depend on
   (`lspf = "1.0.0"`).
-- [`crates/lspf-hello`](./crates/lspf-hello) — an installable **template
-  server**. It builds a `lspf-hello` binary that speaks LSP over stdio: it
-  answers hover and completion (with resolve), dispatches four Commands for
-  workspace roots, file reads, outgoing client helpers, and cancellable
-  progress, and reads unopened files through an `OsFileProvider`. On every
-  `textDocument/didOpen`, it publishes an informational diagnostic
-  ("lspf saw this document open"). Fork it as the starting point for your
-  own language server.
 - [`crates/lspf-markdown`](./crates/lspf-markdown) — the installable
   **reference server**. It builds the `lspf-markdown` stdio binary and applies
   the framework's public document, workspace, feature, client, and testing
   interfaces to real Markdown link behavior.
 
-### Install the server
+Use [`lspf-vscode-extension-template`](https://github.com/meymchen/lspf-vscode-extension-template)
+to create a new project. Keep `lspf-markdown` for framework development and
+integration validation: unlike a starter, it implements one concrete domain
+and must keep working as `lspf` evolves.
+
+### Install the reference server
 
 ```bash
-cargo install --path crates/lspf-hello
+cargo install --path crates/lspf-markdown
 ```
 
-This installs the `lspf-hello` binary into Cargo's bin directory
+This installs the `lspf-markdown` binary into Cargo's bin directory
 (`~/.cargo/bin` by default). Make sure that directory is on your `PATH` so
 your editor can launch the server by name.
 
-### VS Code
+### Editor validation
 
-VS Code has no built-in generic LSP client, so install a thin generic-client
-extension such as [Generic LSP Client
-(v2)](https://marketplace.visualstudio.com/items?itemName=zsol.vscode-glspc),
-then add this to your `settings.json`:
-
-```json
-{
-  "glspc.server.command": "lspf-hello",
-  "glspc.server.commandArguments": [],
-  "glspc.server.languageId": ["plaintext"]
-}
-```
-
-Open any plain-text (`.txt`) file and you should see the
-"lspf saw this document open" diagnostic on line 1.
-
-For repository debugging, use the bundled VS Code client and checked-in editor
-tasks described in [`CONTRIBUTING.md`](./CONTRIBUTING.md#debug-a-server).
-
-### Zed
-
-Zed currently requires a language extension to register each language-server
-adapter. Its `lsp.<name>.binary` setting can override the executable for an
-adapter that Zed already knows, but it cannot register a new arbitrary server
-such as `lspf-hello` from `settings.json` alone.
-
-This repository does not yet ship a Zed extension. See Zed's
-[language extension documentation](https://zed.dev/docs/extensions/languages)
-to create a development extension that registers `lspf-hello`, or use the
-VS Code test client above for the repository's supported editor smoke-test
-path.
+The bundled VS Code test client now launches `lspf-markdown` by default. The
+same installed binary is also exercised by the checked-in Neovim and Zed
+adapters. Follow [`editor-validation/README.md`](./editor-validation/README.md)
+for the reproducible three-editor journey, or use the VS Code tasks described
+in [`CONTRIBUTING.md`](./CONTRIBUTING.md#debug-a-server).
 
 ### Troubleshooting
 
-- **`lspf-hello` not found / "command not found".** The binary isn't on your
-  `PATH`. Confirm `which lspf-hello` resolves; if not, add `~/.cargo/bin` to
-  your `PATH`, or use the absolute path in the editor config above.
-- **The server doesn't start or no diagnostic appears.** Make sure you
-  ran `cargo install --path crates/lspf-hello` after your latest changes,
-  and that your editor client routes the opened file to this server. The
-  example editor setup targets plain-text files; the server itself does not
-  filter `didOpen` by language id. Run `lspf-hello` in a terminal with
-  `RUST_LOG=lspf=trace LSPF_LOG_FORMAT=json lspf-hello` to confirm it starts
-  and to emit newline-delimited JSON on stderr.
+- **`lspf-markdown` not found / "command not found".** The binary isn't on your
+  `PATH`. Confirm `which lspf-markdown` resolves; if not, add `~/.cargo/bin` to
+  your `PATH`, or use an absolute path in the editor configuration.
+- **The server doesn't start or an expected feature is unavailable.** Make
+  sure you ran `cargo install --path crates/lspf-markdown` after your latest
+  changes, and that your editor client routes Markdown files to this server.
 - **Edited the config but nothing changed.** Editors read LSP settings at
   startup — reload the window after editing `settings.json` (VS Code:
   *Developer: Reload Window*; Zed: reopen the workspace).
-- **A direct run appears stuck.** `lspf-hello` and the framework examples speak
-  LSP over stdio. Use one of the VS Code client configurations to start the
-  process, then attach CodeLLDB from VS Code or Zed. Use the quick test task for
-  an automated check.
+- **A direct run appears stuck.** `lspf-markdown` and the framework examples
+  speak LSP over stdio. Use one of the VS Code client configurations to start
+  the process, then attach CodeLLDB from VS Code or Zed. Use the quick test
+  task for an automated check.
 
 ## Contributing
 

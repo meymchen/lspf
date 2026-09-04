@@ -7,9 +7,13 @@ This guide covers how a lspf server gains stable LSP 3.18 features, where
 its `ServerCapabilities` come from, who owns the workspace and the documents,
 how Commands dispatch, and how unopened files resolve through a
 `FileProvider`. Every example here compiles as a doctest against the shipped
-crate, and the complete journey runs as a real server in
-[`crates/lspf-hello`](https://github.com/meymchen/lspf/blob/main/crates/lspf-hello/src/main.rs) with an end-to-end
-stdio test beside it.
+crate. The public interfaces are exercised by the framework's
+[integration tests](https://github.com/meymchen/lspf/tree/main/crates/lspf/tests),
+while the
+[`lspf-markdown` reference server](https://github.com/meymchen/lspf/tree/main/crates/lspf-markdown)
+drives the same document, workspace, feature, and stdio boundaries with real
+Markdown behavior. For a project starter, use
+[`lspf-vscode-extension-template`](https://github.com/meymchen/lspf-vscode-extension-template).
 
 ## Feature registration
 

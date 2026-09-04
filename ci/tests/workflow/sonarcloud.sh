@@ -75,8 +75,8 @@ assert_contract '
     | map(select(.uses == $scanner_ref))
     | .[0].with.args as $args
     | ($args | contains("-Dsonar.javascript.lcov.reportPaths=coverage/vscode-test-client/lcov.info"))
-      and ($args | contains("-Dsonar.sources=crates/lspf/src,crates/lspf-hello/src,crates/lspf-markdown/src,tools/vscode-test-client/src"))
-      and ($args | contains("-Dsonar.tests=crates/lspf/tests,crates/lspf-hello/tests,crates/lspf-markdown/tests,tools/vscode-test-client/test"))
+      and ($args | contains("-Dsonar.sources=crates/lspf/src,crates/lspf-markdown/src,tools/vscode-test-client/src"))
+      and ($args | contains("-Dsonar.tests=crates/lspf/tests,crates/lspf-markdown/tests,tools/vscode-test-client/test"))
       and ($args |
         contains("-Dsonar.test.inclusions=tools/vscode-test-client/test/**/*.test.ts"))
 ' 'SonarCloud analysis must import the generated TypeScript LCOV report'

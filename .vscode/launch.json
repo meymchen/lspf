@@ -12,7 +12,7 @@
       "outFiles": [
         "${workspaceFolder}/tools/vscode-test-client/out/**/*.js"
       ],
-      "preLaunchTask": "prepare VS Code LSP smoke"
+      "preLaunchTask": "prepare VS Code reference server"
     },
     {
       "name": "Run LSP example client (select example)",

@@ -1,9 +1,9 @@
 # lspf VS Code test client
 
-Minimal VSCode extension that spawns `target/debug/lspf-hello` as a
-language server. Used for manual smoke testing during development —
-the CI side of the same path is the `lspf-hello` end-to-end suite,
-run with `cargo test -p lspf-hello` (or `cargo test --workspace`).
+Minimal VS Code extension that runs the in-tree `lspf-markdown` reference
+server or one of the framework examples through VS Code's real language
+client. The automated counterpart is the packaged reference-server journey,
+run with `cargo test -p lspf-markdown --test packaged_editor_journey`.
 
 ## Setup
 
@@ -20,19 +20,15 @@ npm --prefix tools/vscode-test-client test
 
 Open the repository root in VS Code and select
 `Debug LSP client (Extension Host)` from the Run and Debug view. An Extension
-Development Host window opens. The pre-launch task builds `lspf-hello` and
+Development Host window opens. The pre-launch task builds `lspf-markdown` and
 starts the TypeScript compiler in watch mode. If test-client dependencies are
 missing, it installs the locked versions first. A separate setup or Cargo build
-is not needed for F5. Create or open any `.txt` file. You
-should see the `lspf-hello` output channel come alive with LSP traffic,
-and the server's `tracing` spans on its stderr (visible in the
-Extension Host's debug console).
+is not needed for F5. Create or open a Markdown file. You should see the
+`lspf-markdown` output channel come alive with LSP traffic.
 
-To run the Markdown reference-server journey instead, install
-`lspf-markdown`, set `LSPF_MARKDOWN_SERVER` to its absolute path, then launch the
-same Extension Host configuration. The client switches its document selector
-to Markdown and does not register the `lspf-hello` reverse-request or Command
-middleware. The complete three-editor procedure lives in
+To validate an installed reference server instead of the workspace binary,
+set `LSPF_MARKDOWN_SERVER` to its absolute path before launching the same
+Extension Host configuration. The complete three-editor procedure lives in
 [`../../editor-validation`](../../editor-validation).
 
 To run one of the framework examples instead, select
@@ -83,29 +79,10 @@ Zed cannot do this. It launches every language server as a command over stdio
 so its lspf journeys stay on the stdio examples.
 
 `RUST_LOG=lspf=trace` and `LSPF_LOG_FORMAT=json` are set by default, and every
-server this client launches honours them — `lspf-hello`, the stdio examples,
-and the two socket examples alike — so every output channel it opens receives
-one JSON event per line. Export
-either variable before launching VSCode to override it; `LSPF_LOG_FORMAT=text`
-gives the plain-text format instead, one line of
-`elapsed level span_names: message fields`.
-
-## Commands
-
-Once the language client has initialized, open the Command Palette and choose
-an entry in the `lspf hello` category:
-
-- `Show Workspace Roots`
-- `Read Active File`
-- `Run Outgoing Helper Journey`
-- `Run Cancellable Progress`
-
-`vscode-languageclient` automatically registers the commands advertised by the
-server's `executeCommandProvider`; `package.json` only gives those commands
-titles in the Command Palette. Its `executeCommand` middleware adds the active
-editor's URI when a command needs one. Results are written to the
-`lspf-hello commands` output channel. The outgoing journey inserts a comment
-at the start of the active document while exercising `workspace/applyEdit`.
+framework example this client launches honours them, so its output channel
+receives one JSON event per line. Export either variable before launching VS
+Code to override it; `LSPF_LOG_FORMAT=text` gives the plain-text format
+instead, one line of `elapsed level span_names: message fields`.
 
 ## Tests
 
@@ -122,8 +99,9 @@ record that would otherwise report tested code as uncovered.
 
 ## What this validates
 
-The wire-level claims a real editor makes on the server: VSCode's own
+The wire-level claims a real editor makes on the server: VS Code's own
 `initialize` payload deserializes into `lsp_types::InitializeParams`, the
 generated `ServerCapabilities` advertise incremental document sync, and the
-reply, the `didOpen` that follows it, and the diagnostic the server publishes
-all round-trip through stdio framing.
+reply, document notifications, diagnostics, hover, and definition requests all
+round-trip through stdio framing. Framework examples additionally exercise the
+same client over stdio, TCP, and WebSocket adapters.

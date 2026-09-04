@@ -110,16 +110,16 @@ uploads a coverage artifact for pull requests and pushes to `main`.
 
 The checked-in VS Code configuration provides these useful entries:
 
-- `Debug LSP client (Extension Host)` builds `lspf-hello` and opens an
+- `Debug LSP client (Extension Host)` builds `lspf-markdown` and opens an
   Extension Development Host.
 - `Run LSP example client (select example)` starts one framework example
   behind the bundled test client.
 - `Attach to running LSP server/example` attaches CodeLLDB to the process
   started by either client configuration.
 
-Open a `.txt` file in the Extension Development Host to exercise the server.
-For an example, attach to the matching process and set breakpoints in
-`crates/lspf/examples/<name>.rs`.
+Open a Markdown file in the Extension Development Host to exercise the
+reference server. For an example, open a `.txt` file, attach to the matching
+process, and set breakpoints in `crates/lspf/examples/<name>.rs`.
 
 The `.zed/tasks.json` file has build, quick-test, full-test, and example tasks.
 `.zed/debug.json` can attach CodeLLDB to a server that was started by another

@@ -21,29 +21,16 @@ interface ClientCall {
 }
 
 const clientCalls: ClientCall[] = [];
-const requests: string[] = [];
-const outputLines: string[] = [];
-const appended: string[] = [];
 const channelNames: string[] = [];
-const shownErrors: string[] = [];
-let outputShown = false;
 let started = false;
 
 const outputChannel = {
-    appendLine(line: string) {
-        outputLines.push(line);
-    },
-    append(text: string) {
-        appended.push(text);
-    },
-    show() {
-        outputShown = true;
-    },
+    appendLine() {},
+    append() {},
+    show() {},
     dispose() {},
 };
 const watcher = { dispose() {} };
-const requestRegistration = { dispose() {} };
-
 const host: ExtensionHost = {
     stdioTransport: 'stdio' as never,
     createOutputChannel: (name) => {
@@ -51,17 +38,9 @@ const host: ExtensionHost = {
         return outputChannel as never;
     },
     createFileSystemWatcher: () => watcher as never,
-    activeDocumentUri: () => 'file:///repo/readme.md',
-    showErrorMessage: async (message) => {
-        shownErrors.push(message);
-    },
     createLanguageClient(id, name, serverOptions, clientOptions) {
         clientCalls.push({ id, name, serverOptions, clientOptions });
         return {
-            onRequest(method) {
-                requests.push(method);
-                return requestRegistration;
-            },
             async start() {
                 started = true;
             },
@@ -75,16 +54,11 @@ afterEach(() => {
     delete process.env.LSPF_MARKDOWN_SERVER;
     delete process.env.LSPF_TEST_TRANSPORT;
     clientCalls.length = 0;
-    requests.length = 0;
-    outputLines.length = 0;
-    appended.length = 0;
     channelNames.length = 0;
-    shownErrors.length = 0;
-    outputShown = false;
     started = false;
 });
 
-test('activates the installed Markdown server without hello-only wiring', async () => {
+test('activates the installed Markdown server', async () => {
     process.env.LSPF_TEST_SERVER = 'lspf-markdown';
     const subscriptions: unknown[] = [];
     const activateClient = await loadActivateClient();
@@ -103,20 +77,11 @@ test('activates the installed Markdown server without hello-only wiring', async 
         { scheme: 'file', language: 'markdown' },
     ]);
     assert.equal(clientCalls[0].clientOptions.outputChannelName, 'lspf-markdown');
-    assert.deepEqual(requests, []);
     assert.equal(started, true);
     assert.deepEqual(subscriptions, []);
-
-    const args = [{ command: 'unchanged' }];
-    const result = await clientCalls[0].clientOptions.middleware?.executeCommand?.(
-        'workspace.command',
-        args,
-        async (_command, receivedArgs) => receivedArgs,
-    );
-    assert.equal(result, args);
 });
 
-test('retains output and ping wiring for the default development server', async () => {
+test('uses the Markdown reference server by default', async () => {
     const subscriptions: unknown[] = [];
     const activateClient = await loadActivateClient();
 
@@ -126,24 +91,13 @@ test('retains output and ping wiring for the default development server', async 
     );
 
     assert.equal(clientCalls.length, 1);
-    assert.equal(clientCalls[0].id, 'lspf-hello');
-    assert.equal(clientCalls[0].name, 'lspf hello');
+    assert.equal(clientCalls[0].id, 'lspf-markdown');
+    assert.equal(clientCalls[0].name, 'lspf Markdown');
     assert.deepEqual(clientCalls[0].clientOptions.documentSelector, [
-        { scheme: 'file', language: 'plaintext' },
+        { scheme: 'file', language: 'markdown' },
     ]);
-    assert.equal(clientCalls[0].clientOptions.outputChannelName, 'lspf-hello');
-    assert.deepEqual(requests, ['lspf-hello/ping']);
-    assert.equal(subscriptions.length, 2);
-
-    const result = await clientCalls[0].clientOptions.middleware?.executeCommand?.(
-        'lspf-hello.workspaceRoots',
-        [],
-        async () => ({ roots: ['/repo'] }),
-    );
-    assert.deepEqual(result, { roots: ['/repo'] });
-    assert.equal(outputShown, true);
-    assert.match(outputLines[0], /lspf-hello\.workspaceRoots/);
-    assert.deepEqual(shownErrors, []);
+    assert.equal(clientCalls[0].clientOptions.outputChannelName, 'lspf-markdown');
+    assert.deepEqual(subscriptions, []);
 });
 
 // Over a socket the client owns no server process, so it pipes no stderr into
@@ -172,5 +126,4 @@ test('a socket transport gives the client the channel the server output goes to'
         { scheme: 'file', language: 'plaintext' },
     ]);
     // The shared example advertises no command and no reverse request.
-    assert.deepEqual(requests, []);
 });

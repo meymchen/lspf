@@ -13,8 +13,6 @@ export async function activate(context: ExtensionContext): Promise<void> {
         stdioTransport: TransportKind.stdio,
         createOutputChannel: (name) => window.createOutputChannel(name),
         createFileSystemWatcher: (glob) => workspace.createFileSystemWatcher(glob),
-        activeDocumentUri: () => window.activeTextEditor?.document.uri.toString(),
-        showErrorMessage: (message) => window.showErrorMessage(message),
         createLanguageClient: (id, name, serverOptions, clientOptions) =>
             new LanguageClient(id, name, serverOptions, clientOptions),
     });

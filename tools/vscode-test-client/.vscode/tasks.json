@@ -2,10 +2,10 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "build lspf-hello",
+      "label": "build lspf-markdown",
       "type": "process",
       "command": "cargo",
-      "args": ["build", "-p", "lspf-hello"],
+      "args": ["build", "-p", "lspf-markdown"],
       "options": {
         "cwd": "${workspaceFolder}/../.."
       },
@@ -37,11 +37,11 @@
       "group": { "kind": "build", "isDefault": true }
     },
     {
-      "label": "prepare VS Code LSP smoke",
+      "label": "prepare VS Code reference server",
       "dependsOrder": "sequence",
       "dependsOn": [
         "ensure VS Code test client dependencies",
-        "build lspf-hello",
+        "build lspf-markdown",
         "watch VS Code test client"
       ],
       "problemMatcher": []

@@ -428,9 +428,10 @@ stderr.
 
 `cargo install --path .` puts `lspf-tutorial-server` on your `PATH`. From
 there, any editor that can launch a generic LSP server over stdio can use it;
-the [editor setup](https://github.com/meymchen/lspf#editor-setup) section of the README walks
-through VS Code and Zed with the repository's template server, and the same
-settings work for this binary.
+configure that editor to run `lspf-tutorial-server` for plain-text documents.
+For a ready-made VS Code extension alongside the Rust server, start from
+[`lspf-vscode-extension-template`](https://github.com/meymchen/lspf-vscode-extension-template)
+and move this tutorial's handlers into the generated server.
 
 ## Where to go next
 
