@@ -64,6 +64,13 @@
     ".github/workflows/public-docs.yml": {
       "public-docs": { "contents": "read" }
     },
+    ".github/workflows/project-site.yml": {
+      "build": { "contents": "read" },
+      "deploy": {
+        "id-token": "write",
+        "pages": "write"
+      }
+    },
     ".github/workflows/fuzz.yml": {
       "fuzz-matrix": { "contents": "read" },
       "fuzz-target": { "contents": "read" },

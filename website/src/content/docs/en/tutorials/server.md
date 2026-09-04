@@ -1,4 +1,7 @@
-# Tutorial: build a language server
+---
+title: Build a language server
+description: Build a complete stdio language server, then drive it from a terminal or editor.
+---
 
 This tutorial builds a complete stdio language server from an empty Cargo
 project. The finished server answers `textDocument/hover` with a word count,
@@ -33,7 +36,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-lspf = "0.11.0"
+lspf = "1.0.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -184,7 +187,7 @@ fn line_range(number: usize, line: &str, encoding: PositionEncoding) -> Range {
 `ctx.client().notify::<PublishDiagnostics>(…)`. For the rest of the
 server-to-client surface, including window messages, workspace edits, progress,
 and refreshes, see the
-[outgoing client helpers](../guides/outgoing-client.md) guide.
+[outgoing client helpers](../../guides/outgoing-client/) guide.
 
 ## 5. Expose a Command
 
@@ -225,7 +228,7 @@ async fn count_words(
 Bad input from the editor is `invalid_params`; a well-formed request the
 server cannot satisfy is `invalid_request`. Both become JSON-RPC error
 responses with the codes LSP prescribes, and neither ends the connection. The
-[errors and cancellation](../guides/errors-and-cancellation.md) guide covers
+[errors and cancellation](../../guides/errors-and-cancellation/) guide covers
 the rest of the taxonomy.
 
 ## 6. Build the server and serve it
@@ -400,7 +403,7 @@ async fn main() -> lspf::Result<()> {
 
 ## 8. Drive it from a terminal
 
-Complete the sibling [Client tutorial](./client.md), then run its client
+Complete the sibling [Client tutorial](../client/), then run its client
 against this server. The client waits for each response before it sends
 `shutdown`, so shutdown cannot cancel the hover request it is checking:
 
@@ -425,23 +428,25 @@ stderr.
 
 `cargo install --path .` puts `lspf-tutorial-server` on your `PATH`. From
 there, any editor that can launch a generic LSP server over stdio can use it;
-the [editor setup](../../README.md#editor-setup) section of the README walks
+the [editor setup](https://github.com/meymchen/lspf#editor-setup) section of the README walks
 through VS Code and Zed with the repository's template server, and the same
 settings work for this binary.
 
 ## Where to go next
 
-- [Drive this server from your own application](./client.md): the Client
+- [Drive this server from your own application](../client/): the Client
   tutorial connects to the binary you just built.
-- [Features, capabilities, and the workspace](../guides/features-and-workspace.md)
-  covers the rest of the registration surface, multi-root workspace state,
-  notebooks, and `FileProvider` configuration.
-- [Protocol testing](../guides/testing.md): run this server in-process
+- [Feature registration](../../guides/features-and-workspace/) covers the rest
+  of the registration surface; [workspace state](../../guides/workspace-state/)
+  covers multi-root state, notebooks, and `FileProvider` configuration.
+- [Protocol testing](../../guides/testing/): run this server in-process
   against a scripted peer instead of a terminal.
-- [Errors and cancellation](../guides/errors-and-cancellation.md): what to
+- [Errors and cancellation](../../guides/errors-and-cancellation/): what to
   return, what cancels, and where blocking work goes.
-- [Operating a server](../guides/operations.md): resource budgets,
-  concurrency, logging, and deployment.
+- [Resource and observability policies](../../guides/operations/): budgets,
+  concurrency, and logging. Continue to
+  [deployment and troubleshooting](../../guides/deployment-and-troubleshooting/)
+  for process topology and shutdown.
 
 [`BuildError`]: https://docs.rs/lspf/latest/lspf/enum.BuildError.html
 [`LspError`]: https://docs.rs/lspf/latest/lspf/enum.LspError.html

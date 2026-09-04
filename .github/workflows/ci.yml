@@ -13,9 +13,9 @@ name: CI
 # planning and the write-capable release-plz policy gate; an authorized release
 # revision alone reruns the exact release gates. `SECURITY.md` is deliberately absent:
 # Gate A cites it as the implementation of the support-matrix and
-# compatibility-policy claims. `README.md` and `docs/guides/**` are absent too,
-# because they are compiled into rustdoc through `#[doc = include_str!]` and
-# their examples are doctested.
+# compatibility-policy claims. `README.md` and the English website guides are
+# absent too, because they are compiled into rustdoc through
+# `#[doc = include_str!]` and their examples are doctested.
 on:
   push:
     branches: [main]

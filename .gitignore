@@ -28,6 +28,11 @@ Desktop.ini
 # Logs
 *.log
 
+# Documentation site build artifacts
+/website/node_modules/
+/website/dist/
+/website/.astro/
+
 # Scratch files
 .scratch/
 
