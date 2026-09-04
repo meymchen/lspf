@@ -37,14 +37,14 @@ create_release_candidate_fixture() {
         crate: "lspf",
         version: $version,
         revision: $revision,
-        tag: "v" + $version,
+        tag: ("v" + $version),
         sourceRepository: "https://github.com/meymchen/lspf",
         workflowRun: "https://github.com/meymchen/lspf/actions/runs/123",
         artifacts: {
-          crate: "lspf-" + $version + ".crate",
-          docs: "lspf-" + $version + "-docs.tar.gz",
+          crate: ("lspf-" + $version + ".crate"),
+          docs: ("lspf-" + $version + "-docs.tar.gz"),
           changelogs: ["CHANGELOG.md", "lspf-CHANGELOG.md"],
-          sbom: "lspf-" + $version + ".spdx.json",
+          sbom: ("lspf-" + $version + ".spdx.json"),
           hashes: "SHA256SUMS",
           provenance: "provenance.jsonl",
           sbomAttestation: "sbom-attestation.jsonl"
