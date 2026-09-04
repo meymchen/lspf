@@ -104,7 +104,8 @@ jq -e --arg revision "$revision" '
   and .revision == $revision
   and .overallResult == "success"
   and .commandOutcome == "success"
-  and (.timeSeries | length == 14)
+  and .timeSeriesSamples == 14
+  and (has("timeSeries") | not)
   and ([.scenarios[].name] | sort) ==
       ["cancellation","edit","progress","reconnect","request","shutdown","slow-peer"]
   and all(.scenarios[];
@@ -115,6 +116,12 @@ jq -e --arg revision "$revision" '
 ' "$output_dir/results.json" >/dev/null
 cmp "$workloads" "$output_dir/workloads.json"
 cmp "$thresholds" "$output_dir/thresholds.json"
+# The samples are retained exactly once, in the form the bench writes.
+[[ $(wc -l <"$output_dir/time-series.jsonl") -eq 14 ]]
+if [[ -e $output_dir/time-series.json ]]; then
+    echo 'test failure: the scratch array form of the samples was retained' >&2
+    exit 1
+fi
 grep -F 'Overall result: **success**' "$output_dir/results.md" >/dev/null
 grep -F '| `slow-peer` | success | `transport_closed` |' "$output_dir/results.md" >/dev/null
 grep -F '| Peak RSS | 41 MiB | at most 256 MiB | success |' "$output_dir/results.md" >/dev/null

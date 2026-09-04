@@ -72,7 +72,13 @@ if [[ ! -f $raw_results ]]; then
     ' >"$raw_results"
 fi
 
-jq -s '.' "$time_series_jsonl" >"$output_dir/time-series.json"
+# The samples are the bulk of this evidence, so they are retained once, in the
+# line-oriented form the bench writes. The array form below feeds `--slurpfile`
+# and is scratch: materializing it next to the JSONL stored the same samples a
+# second time, and embedding it in `results.json` stored them a third.
+time_series_json="$(mktemp)"
+trap 'rm -f "$time_series_json"' EXIT
+jq -s '.' "$time_series_jsonl" >"$time_series_json"
 
 jq \
     --arg revision "$revision" \
@@ -80,7 +86,7 @@ jq \
     --argjson workload_version "$workload_version" \
     --slurpfile workload "$workloads" \
     --slurpfile thresholds "$thresholds" \
-    --slurpfile time_series "$output_dir/time-series.json" '
+    --slurpfile time_series "$time_series_json" '
   def check($id; $name; $actual; $limit; $comparison; $unit; $success):
     {
       id: $id,
@@ -155,6 +161,10 @@ jq \
     )
   | .overallResult =
       (if (.failedChecks | length) == 0 then "success" else "failure" end)
+  # Every check that needs a sample has already read one. Keep the count the
+  # report quotes and leave the samples themselves in `time-series.jsonl`.
+  | .timeSeriesSamples = (.timeSeries | length)
+  | del(.timeSeries)
 ' "$raw_results" >"$output_dir/results.json"
 
 jq -r '
@@ -182,7 +192,7 @@ jq -r '
   "\n## Traffic\n",
   "- Operations: `" + (.traffic.operations | tostring) + "`",
   "- Payload bytes: `" + (.traffic.bytes | tostring) + "`",
-  "- Time-series samples: `" + (.timeSeries | length | tostring) + "`"
+  "- Time-series samples: `" + (.timeSeriesSamples | tostring) + "` (`time-series.jsonl`)"
 ' "$output_dir/results.json" >"$output_dir/results.md"
 
 if ! jq -e '.overallResult == "success"' "$output_dir/results.json" >/dev/null; then
