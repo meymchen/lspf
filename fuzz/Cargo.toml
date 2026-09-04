@@ -22,43 +22,43 @@ doc = false
 bench = false
 
 [[bin]]
-name = "content_length"
-path = "fuzz_targets/content_length.rs"
+name = "content-length"
+path = "fuzz_targets/content-length.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
-name = "uri_identity"
-path = "fuzz_targets/uri_identity.rs"
+name = "uri-identity"
+path = "fuzz_targets/uri-identity.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
-name = "position_conversion"
-path = "fuzz_targets/position_conversion.rs"
+name = "position-conversion"
+path = "fuzz_targets/position-conversion.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
-name = "incremental_edits"
-path = "fuzz_targets/incremental_edits.rs"
+name = "incremental-edits"
+path = "fuzz_targets/incremental-edits.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
-name = "notebook_cell_sync"
-path = "fuzz_targets/notebook_cell_sync.rs"
+name = "notebook-cell-sync"
+path = "fuzz_targets/notebook-cell-sync.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
-name = "lifecycle_sequences"
-path = "fuzz_targets/lifecycle_sequences.rs"
+name = "lifecycle-sequences"
+path = "fuzz_targets/lifecycle-sequences.rs"
 test = false
 doc = false
 bench = false
