@@ -329,7 +329,7 @@ checksum = "953f07c43838f8e6f9758cab68bf5bed85465e7587ebe0b823f1bcd81978ad3a"
 
 [[package]]
 name = "lspf"
-version = "0.11.0"
+version = "1.0.0"
 dependencies = [
  "bytes",
  "futures-channel",
@@ -358,7 +358,7 @@ dependencies = [
 
 [[package]]
 name = "lspf-hello"
-version = "0.11.0"
+version = "1.0.0"
 dependencies = [
  "lspf",
  "serde_json",
@@ -370,7 +370,7 @@ dependencies = [
 
 [[package]]
 name = "lspf-markdown"
-version = "0.11.0"
+version = "1.0.0"
 dependencies = [
  "bytes",
  "lspf",
