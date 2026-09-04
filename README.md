@@ -577,7 +577,7 @@ npx --yes markdownlint-cli2@0.22.1 --fix
 To generate a local HTML coverage report, run:
 
 ```bash
-cargo install cargo-llvm-cov --version 0.6.21 --locked
+cargo install cargo-llvm-cov --version 0.9.0 --locked
 cargo coverage
 ```
 

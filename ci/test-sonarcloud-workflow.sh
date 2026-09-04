@@ -3,7 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 workflow="$repo_root/.github/workflows/sonarcloud.yml"
-checkout_ref="actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
+checkout_ref="actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
 scanner_ref="SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f"
 workflow_json="$(yq -o=json '.' "$workflow")"
 
