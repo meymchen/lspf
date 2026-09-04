@@ -100,9 +100,9 @@ jq -n \
         },
         {
           id: "release-traceability",
-          statement: "The release workflow contract retains package metadata, hashes, provenance, and an SBOM from one revision.",
+          statement: "The release workflow contract retains package metadata, hashes, provenance, and an SBOM from one revision, and publishes only a candidate the registry can be shown to match.",
           classification: "automated",
-          sources: [source("ci/authorize-release.sh"), source("ci/prepare-release-artifacts.sh"), source("ci/test-release-artifacts-workflow.sh"), source(".github/workflows/ci.yml")],
+          sources: [source("ci/authorize-release.sh"), source("ci/prepare-release-artifacts.sh"), source("ci/test-release-artifacts-workflow.sh"), source("ci/prepare-release-record.sh"), source("ci/check-release-record.sh"), source("ci/test-release-publication-workflow.sh"), source(".github/workflows/ci.yml")],
           checks: [check("security"; "Release artifact workflow contract")]
         }
       ],

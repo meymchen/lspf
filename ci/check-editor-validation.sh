@@ -24,6 +24,12 @@ jq -e '
   and (.automatedEvidence.assertions | length > 0)
   and .humanUxObservations.kind == "human"
   and (.humanUxObservations.status == "pending" or .humanUxObservations.status == "recorded")
+  and (
+    if .humanUxObservations.status == "recorded" then
+      (.humanUxObservations.evidence | type == "string" and length > 0)
+      and (.humanUxObservations.records | length > 0)
+    else true end
+  )
   and ((.frameworkGaps.untracked // []) | length == 0)
   and all(.frameworkGaps.tracked[]?;
     (.issue | test("^https://github.com/meymchen/lspf/issues/[0-9]+$"))
@@ -31,14 +37,32 @@ jq -e '
 ' "$manifest" >/dev/null
 
 while IFS= read -r relative_path; do
+    relative_path="${relative_path%$'\r'}"
     [[ -f "$repo_root/$relative_path" ]] || {
         echo "missing editor validation file: $relative_path" >&2
         exit 1
     }
 done < <(jq -r '.editors[].configurationFiles[]' "$manifest")
 
+# `recorded` must point at an archived worksheet that ships with the repository.
+# Without this the status is a self-assertion, and a release record would cite
+# human evidence nobody can open.
+observation_evidence="$(jq -r '.humanUxObservations.evidence // ""' "$manifest")"
+observation_evidence="${observation_evidence%$'\r'}"
+if [[ -n $observation_evidence ]]; then
+    if [[ $observation_evidence == /* || $observation_evidence == *..* \
+        || ! -s "$repo_root/$observation_evidence" ]]; then
+        echo "recorded human observations name a missing or unsafe file: $observation_evidence" >&2
+        exit 1
+    fi
+fi
+
 grep -q 'LSPF_MARKDOWN_SERVER' \
     "$repo_root/tools/vscode-test-client/src/serverPath.ts"
+# Gate E points the automated journey at a server built from the release
+# candidate through the same variable the editors read.
+grep -q 'LSPF_MARKDOWN_SERVER' \
+    "$repo_root/crates/lspf-markdown/tests/packaged_editor_journey.rs"
 grep -q "vim.lsp.config('lspf_markdown'" \
     "$repo_root/editor-validation/neovim/init.lua"
 grep -q 'worktree.which("lspf-markdown")' \

@@ -2,6 +2,7 @@
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
+source ci/gate-evidence-helpers.sh
 
 revision="${1:?usage: run-gate-d-evidence.sh REVISION RUN_URL OUTPUT_DIRECTORY}"
 run_url="${2:?usage: run-gate-d-evidence.sh REVISION RUN_URL OUTPUT_DIRECTORY}"
@@ -28,19 +29,6 @@ mkdir -p "$output_dir/components"
 output_dir="$(cd "$output_dir" && pwd)"
 components="$output_dir/components.json"
 printf '[]\n' >"$components"
-
-run_logged() {
-    local log=$1
-    local commands_file=$2
-    shift 2
-    local rendered
-
-    printf -v rendered '%q ' "$@"
-    rendered=${rendered% }
-    printf '%s\n' "$rendered" >>"$commands_file"
-    printf '$ %s\n' "$rendered" >>"$log"
-    "$@"
-}
 
 run_default_component() {
     local id=$1
@@ -117,7 +105,7 @@ record_component() {
     set -e
     finished_ns="$(date +%s%N)"
     duration_ms=$(((finished_ns - started_ns) / 1000000))
-    command="$(awk 'NR == 1 {combined=$0; next} {combined=combined " && " $0} END {print combined}' "$commands_file")"
+    command="$(joined_logged_commands "$commands_file")"
     rm -f "$commands_file"
 
     if ((status == 0)); then

@@ -91,11 +91,29 @@ a second process start. The shell test checks the three configuration paths,
 the required journey steps, evidence separation, and issue links for framework
 gaps.
 
+Setting `LSPF_MARKDOWN_SERVER` redirects the Rust test at an installed server
+instead of the workspace build, using the same variable the three editor
+configurations read. Gate E installs `lspf-markdown` against the release
+candidate crate and replays this journey through that binary, so the editor
+evidence for a release describes the artifact being published:
+
+```bash
+cargo install --path crates/lspf-markdown --root "$install_root" --locked
+LSPF_MARKDOWN_SERVER="$install_root/bin/lspf-markdown" \
+  cargo test -p lspf-markdown --test packaged_editor_journey
+```
+
 Human UI observations belong in a copy of
 [`human-observations-template.md`](human-observations-template.md). Do not turn
 an automated assertion into a UX observation. If a run exposes a framework
 gap, open an issue first and add its URL to `frameworkGaps.tracked` in the JSON
 manifest.
+
+Finishing a run means archiving its worksheet under `observations/`, then
+setting `humanUxObservations.status` to `recorded` and pointing
+`humanUxObservations.evidence` at that file. The checker rejects `recorded`
+whenever the named worksheet is missing, because a release record that cites
+human evidence should link to something a later reader can open.
 
 The interactive wizard walks through all three editors and writes the record
 without mixing in automated assertions:

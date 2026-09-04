@@ -18,6 +18,13 @@ jobs:
         uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
         with:
           command: check advisories licenses
+      # Without this the npm steps below run on whatever npm the runner image
+      # happens to ship, which is how a registry-side rejection of
+      # `--package-lock-only` arrived without any dependency changing.
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: tools/vscode-test-client/.nvmrc
       - name: Audit npm dependency advisories
         run: npm audit --package-lock-only --audit-level=low --prefix tools/vscode-test-client
       - name: Test npm license policy diagnostics
@@ -37,6 +44,14 @@ jobs:
         run: bash ci/test-prepare-release-candidate.sh
       - name: Test release candidate verification
         run: bash ci/test-check-release-candidate.sh
+      - name: Test release blocker register diagnostics
+        run: bash ci/test-check-release-blockers.sh
+      - name: Test Gate E candidate validation
+        run: bash ci/test-run-gate-e-evidence.sh
+      - name: Test the pre-publication repackaging comparison
+        run: bash ci/test-check-repackaged-candidate.sh
+      - name: Test release record preparation and verification
+        run: bash ci/test-prepare-release-record.sh
       - name: Test SonarCloud workflow contract
         run: bash ci/test-sonarcloud-workflow.sh
       - name: Test CodeQL workflow contract
@@ -49,6 +64,10 @@ jobs:
         run: bash ci/test-gate-c-evidence-workflow.sh
       - name: Test Gate D evidence workflow contract
         run: bash ci/test-gate-d-evidence-workflow.sh
+      - name: Test Gate E evidence workflow contract
+        run: bash ci/test-gate-e-evidence-workflow.sh
+      - name: Test release publication workflow contract
+        run: bash ci/test-release-publication-workflow.sh
       - name: Test performance baseline workflow contract
         run: bash ci/test-performance-baseline-workflow.sh
       - name: Test soak journey workflow contract

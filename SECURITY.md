@@ -217,6 +217,76 @@ passed. It cannot prove that future support responses will meet the policy,
 approve the substance of an intentional breaking change, or assess a private
 vulnerability report.
 
+## Gate E candidate validation
+
+Gates A through D establish properties of a revision. Gate E establishes them
+for the artifact that will be published. CI `gate-e-evidence` downloads the
+verified candidate, reconstructs the release revision with `git archive`, and
+grafts the unpacked candidate crate over `crates/lspf`. Every journey it then
+runs compiles the packaged bytes rather than the workspace sources:
+compatibility against the frozen public interface, admission overload, handler
+and outgoing request timeouts, peer disconnect, stdio child cleanup, the
+reference server's own test suite, and the editor journey driven through an
+installed `lspf-markdown` selected by `LSPF_MARKDOWN_SERVER`.
+
+Gate E also reads
+[`ci/release-blockers-v1.json`](./ci/release-blockers-v1.json), the register of
+blockers that validation discovered. Each entry names a severity, an owner, a
+tracked issue, and a disposition. A framework-owned P0 or P1 that is still
+`open` has no disposition and fails the gate; one that is `accepted` passes but
+is reported as a maintainer judgment rather than absorbed into a passing
+result. Any framework gap the editor journeys tracked must appear in the
+register, so it cannot stay empty while validation is finding problems.
+
+Reproduce the evidence for a downloaded candidate with:
+
+```bash
+gh run download RUN_ID \
+  --name lspf-1.0.0-release-candidate \
+  --dir target/downloaded-candidate
+revision="$(jq -r .revision target/downloaded-candidate/candidate-metadata.json)"
+bash ci/run-gate-e-evidence.sh \
+  "$revision" \
+  "https://github.com/meymchen/lspf/actions/runs/RUN_ID" \
+  target/downloaded-candidate \
+  target/reproduced-gate-e-evidence
+```
+
+## Publication and the release record
+
+Publishing is the only irreversible step in the pipeline, so CI
+`release-publish` is the only job behind a protected environment: a maintainer
+approves it after reading the candidate report and the Gate E evidence.
+
+`cargo publish` packages the checked-out source rather than uploading an
+artifact, so the crate it sends is the validated candidate only if packaging
+the release revision still reproduces those bytes. The job proves that first,
+with `ci/check-repackaged-candidate.sh`, and stops before minting a token if
+the comparison fails: afterwards a mismatch would be a permanently published
+crate that no evidence covers. Only then does it mint a short-lived crates.io
+token through trusted publishing, publish the validated revision, download the
+crate the registry serves, and check that crate against the candidate hash a
+second time.
+
+What survives the release is the release record: one archive holding the
+candidate bundle, the crate the registry served, provenance, the SBOM and its
+attestation, the documentation archive, both changelogs, the policies that were
+in force at the release revision, and Gate A through E evidence. Both hash
+lists are self-verifying, so a later reader can check the archive without
+trusting the job that produced it:
+
+```bash
+gh run download RUN_ID \
+  --name lspf-1.0.0-release-record \
+  --dir target/downloaded-release-record
+revision="$(jq -r .revision target/downloaded-release-record/release-record.json)"
+bash ci/check-release-record.sh "$revision" target/downloaded-release-record
+```
+
+The release record proves that the published crate is the validated candidate.
+It does not prove that publishing was the right decision; the maintainer
+authorization that released it is recorded as a human judgment.
+
 ## Reporting a vulnerability
 
 Do not open a public issue for a suspected vulnerability. Use GitHub's
