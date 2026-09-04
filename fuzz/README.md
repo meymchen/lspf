@@ -20,6 +20,14 @@ libFuzzer per-input hang threshold; budget is the total run time per target.
 | `notebook-cell-sync` | 4096 | 5 s | 300 s |
 | `lifecycle-sequences` | 16384 | 10 s | 300 s |
 
+Each budget is wall clock, so running the targets in sequence cost their sum.
+The scheduled workflow instead fans them out: `ci/run-fuzz.sh --matrix` emits
+the list above as a job matrix, each leg runs `ci/run-fuzz.sh --target <target>
+<directory>` on its own runner and uploads what it recorded, and the Gate D job
+reassembles the sweep with `ci/run-fuzz.sh --collect`. A leg that never reports
+fails the gate exactly as a crashing one does. `--all` still runs the whole
+sweep in one process, which is what to use locally.
+
 Each `corpus/<target>/` directory contains at least one valid and one malformed
 seed. The Content-Length seeds use visible `\r\n` escapes, which that target
 expands to wire CRLF before decoding. Run a target locally with:

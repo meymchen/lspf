@@ -28,13 +28,35 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  gate-d-evidence:
-    name: Gate D verification evidence
+  # The target list lives in `ci/run-fuzz.sh`, where `--check` already holds it
+  # against the manifest, the seeds and the documented budgets. Reading it here
+  # keeps the matrix from becoming a second, silently stale copy.
+  fuzz-matrix:
+    name: load fuzz target matrix
     runs-on: ubuntu-latest
-    timeout-minutes: 60
     permissions:
       contents: read
-      issues: write
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - id: matrix
+        run: printf 'matrix=%s\n' "$(bash ci/run-fuzz.sh --matrix)" >>"$GITHUB_OUTPUT"
+
+  # Each target holds a fixed wall-clock budget, so running them in sequence
+  # made the sweep cost the sum of those budgets. They share nothing, and a
+  # target that has a whole runner to itself also fuzzes faster than one of
+  # seven sharing four cores.
+  fuzz-target:
+    name: fuzz ${{ matrix.target }}
+    needs: fuzz-matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.fuzz-matrix.outputs.matrix) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup-rust
@@ -43,7 +65,59 @@ jobs:
           cache: "false"
       - name: Install the fuzz runner
         run: cargo install cargo-fuzz --locked
+      - name: Fuzz one target
+        env:
+          TARGET: ${{ matrix.target }}
+        run: bash ci/run-fuzz.sh --target "$TARGET" "$RUNNER_TEMP/fuzz-result"
+      - name: Retain the target result
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: fuzz-target-${{ matrix.target }}
+          path: ${{ runner.temp }}/fuzz-result
+          if-no-files-found: error
+          retention-days: 90
+
+  gate-d-evidence:
+    name: Gate D verification evidence
+    needs:
+      - fuzz-matrix
+      - fuzz-target
+    # A failing target still has to reach the evidence artifact and the issue
+    # this workflow files, so this runs on anything short of cancellation.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # The remaining components run on the toolchain `rust-toolchain.toml`
+      # pins, which is what they always ran on: only the fuzz sweep needed
+      # nightly, and it no longer runs in this job.
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache: "false"
+      - name: Download the fuzz target results
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MATRIX: ${{ needs.fuzz-matrix.outputs.matrix }}
+        # A leg that never produced a result is a Gate D failure that belongs in
+        # the evidence, so a missing artifact must not take this job down before
+        # it can record one.
+        run: |
+          results="$RUNNER_TEMP/fuzz-results"
+          mkdir -p "$results"
+          for target in $(jq -r '.target[]' <<<"$MATRIX"); do
+            gh run download "$GITHUB_RUN_ID" \
+              --name "fuzz-target-$target" --dir "$results/$target" \
+              || echo "no result artifact for fuzz target $target" >&2
+          done
       - name: Run revision-locked Gate D verification
+        env:
+          GATE_D_FUZZ_RESULTS: ${{ runner.temp }}/fuzz-results
         run: >-
           bash ci/run-gate-d-evidence.sh
           "$GITHUB_SHA"
