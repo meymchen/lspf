@@ -64,6 +64,8 @@ jobs:
         run: bash ci/test-gate-c-evidence-workflow.sh
       - name: Test Gate D evidence workflow contract
         run: bash ci/test-gate-d-evidence-workflow.sh
+      - name: Test Gate D evidence assembly
+        run: bash ci/test-run-gate-d-evidence.sh
       - name: Test Gate E evidence workflow contract
         run: bash ci/test-gate-e-evidence-workflow.sh
       - name: Test release publication workflow contract

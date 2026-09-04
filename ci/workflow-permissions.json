@@ -60,7 +60,10 @@
       "public-docs": { "contents": "read" }
     },
     ".github/workflows/fuzz.yml": {
+      "fuzz-matrix": { "contents": "read" },
+      "fuzz-target": { "contents": "read" },
       "gate-d-evidence": {
+        "actions": "read",
         "contents": "read",
         "issues": "write"
       }

@@ -16,3 +16,12 @@ jobs:
       - uses: ./.github/actions/setup-rust
       - run: bash ci/test-package-file-policy.sh
       - run: bash ci/check-packaged-crate.sh
+      # `cargo package` leaves an extracted copy of the crate under
+      # `target/package/`, and the verification build leaves scratch symlinks
+      # inside it that resolve to nothing once the tree is restored elsewhere.
+      # Cached, they accumulate one directory per released version and every
+      # later restore reports each dangling entry as an error. Nothing after
+      # this step reads them, so they never reach the cache.
+      - name: Drop the packaging scratch tree before it is cached
+        if: ${{ always() }}
+        run: rm -rf target/package
