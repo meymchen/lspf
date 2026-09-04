@@ -1,11 +1,14 @@
-# Protocol testing
+---
+title: Test protocol behavior
+description: Test servers and clients with in-memory peers and deterministic deadlines.
+---
 
 Enable the native-only `testing` feature in development dependencies to run a
 real lspf endpoint without sockets or child processes:
 
 ```toml
 [dev-dependencies]
-lspf = { version = "0.11.0", default-features = false, features = ["testing"] }
+lspf = { version = "1.0.0", default-features = false, features = ["testing"] }
 tokio = { version = "1", features = ["macros", "rt", "time"] }
 ```
 
@@ -57,7 +60,7 @@ runtime. Call `advance` after the message that arms the deadline has appeared
 at the scripted peer; the clock jump then makes the timeout deterministic.
 
 For process-boundary coverage, `ci/check-tutorials.sh` extracts the complete
-[Server](../tutorials/server.md) and [Client](../tutorials/client.md) tutorial
+[Server](../../tutorials/server/) and [Client](../../tutorials/client/) tutorial
 programs into separate Cargo projects, builds them against the packaged lspf
 crate, and runs the Client against the Server. Use an in-memory journey for
 precise protocol assertions and virtual time; keep at least one supervised

@@ -78,7 +78,8 @@ supported.
 | `wasm32-unknown-unknown` | `tcp` or `websocket` | Intentionally invalid | CI `feature-contract` checks the compile-time diagnostics |
 | `wasm32-unknown-unknown` | `testing` | Intentionally invalid | CI `feature-contract` checks the compile-time diagnostic |
 
-The [Transport guide](./docs/guides/transports.md) gives build commands and
+The [Transport guide](https://meymchen.github.io/lspf/en/guides/transports/)
+gives build commands and
 describes the APIs enabled by each feature. CI `feature-contract` compiles
 every supported selection and checks that Transport-specific dependencies do
 not leak into the default build.

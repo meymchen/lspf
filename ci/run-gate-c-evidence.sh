@@ -97,7 +97,7 @@ jq -n \
       workflowRun: $run,
       sources: [
         source("crates/lspf/tests/public_conformance.rs"),
-        source("docs/guides/client-adoption.md"),
+        source("website/src/content/docs/en/guides/client-adoption.md"),
         source("docs/adr/0029-client-lifecycle-control.md"),
         source("docs/adr/0030-client-context-stays-protocol-only.md"),
         source("docs/adr/0031-stdio-child-owns-supervision.md")

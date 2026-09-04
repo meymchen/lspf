@@ -1,0 +1,27 @@
+{
+  "name": "lspf-docs",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "check": "npm run check:brand && npm run check:i18n && astro check",
+    "check:brand": "node scripts/check-brand-assets.mjs",
+    "check:i18n": "node scripts/check-i18n-parity.mjs",
+    "build": "astro build",
+    "preview": "astro preview"
+  },
+  "dependencies": {
+    "@astrojs/markdown-remark": "7.3.0",
+    "@astrojs/starlight": "0.42.0",
+    "astro": "7.3.1",
+    "sharp": "0.35.4"
+  },
+  "devDependencies": {
+    "@astrojs/check": "0.9.10",
+    "typescript": "6.0.3"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

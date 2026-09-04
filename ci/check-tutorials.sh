@@ -56,8 +56,8 @@ make_consumer() {
     extract_block "$source" 'lspf:tutorial-program' "$directory/src/main.rs"
 }
 
-make_consumer server docs/tutorials/server.md
-make_consumer client docs/tutorials/client.md
+make_consumer server website/src/content/docs/en/tutorials/server.md
+make_consumer client website/src/content/docs/en/tutorials/client.md
 
 echo "Locking and building the Server tutorial as a clean consumer"
 cargo generate-lockfile --manifest-path "$test_root/server/Cargo.toml"

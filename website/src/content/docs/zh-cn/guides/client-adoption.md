@@ -1,43 +1,31 @@
-# Adopting the Client endpoint
+---
+title: 构建 LSP 客户端
+description: 通过自定义传输或受监督的 stdio 子进程连接语言服务器。
+---
 
-The [`Client`](lspf::Client) endpoint lets an application connect to a language
-server. It works over a caller-provided [`Transport`](lspf::Transport), or it
-can launch and supervise a native stdio child. In both cases, lspf owns LSP
-correlation and lifecycle state. The application still owns editor behavior:
-workspace models, UI, filesystem access, progress presentation, and decisions
-about diagnostics or edits.
+[`Client`](lspf::Client) 端点让应用能够连接语言服务器。它既能使用调用方提供的 [`Transport`](lspf::Transport)，也能启动并监督原生 stdio 子进程。两种方式都由 lspf 管理 LSP 请求关联和生命周期状态；工作区模型、UI、文件系统访问、进度展示，以及如何处理诊断或编辑等编辑器行为仍由应用负责。
 
-This guide has two complete walkthroughs. They compile as doctests against the
-public crate. The downstream-only journey in
-[`public_conformance.rs`](../../crates/lspf/tests/public_conformance.rs) also
-runs both connection shapes against a real protocol peer.
+下面提供两套完整流程。示例会作为 doctest 针对公开 crate 编译；[`public_conformance.rs`](https://github.com/meymchen/lspf/blob/main/crates/lspf/tests/public_conformance.rs) 中仅使用下游公开 API 的流程，还会让两种连接方式与真实协议对端通信。
 
-## Choose a connection shape
+## 选择连接方式
 
-Use a custom Transport when the application already has a message channel or
-controls its own process and network lifecycle. Use `ClientBuilder::spawn`
-when one Client should own one native language-server process from launch
-through reap.
+应用已经拥有消息通道，或需要自行控制进程和网络生命周期时，使用自定义 Transport。一个 Client 需要从启动到回收全程拥有一个原生语言服务器进程时，使用 `ClientBuilder::spawn`。
 
-The ownership boundary differs:
+两种方式的所有权边界如下：
 
-| Type | Owns | Clone? |
+| 类型 | 拥有的内容 | 能否克隆 |
 | --- | --- | --- |
-| `Client<T>` | Initialization inputs, reverse-handler registrations, policy, and one Transport before connection | No |
-| `ClientConnection` | The initialized generic connection and its inbound protocol driver | No; `serve` consumes it |
-| `ServerHandle` | Typed client-to-server calls and lifecycle transitions for that connection | Yes |
-| `ClientContext` | One reverse call's request ID, tracing span, and a `ServerHandle` | Yes |
-| `ChildConnection` | A `ClientConnection`, child process, protocol driver, and stderr drain | No; `shutdown` or `wait` consumes it |
+| `Client<T>` | 初始化输入、反向处理器注册、策略，以及连接前的一个 Transport | 不能 |
+| `ClientConnection` | 已初始化的通用连接及其入站协议驱动器 | 不能；`serve` 会消费它 |
+| `ServerHandle` | 该连接上从客户端到服务器的类型化调用和生命周期转换 | 能 |
+| `ClientContext` | 一次反向调用的请求 ID、追踪 span 和一个 `ServerHandle` | 能 |
+| `ChildConnection` | 一个 `ClientConnection`、子进程、协议驱动器和 stderr 排空任务 | 不能；`shutdown` 或 `wait` 会消费它 |
 
-`ServerHandle` is deliberately smaller than either connection owner. Clone it
-for tasks that need to send requests or notifications, but keep exactly one
-task responsible for the terminal lifecycle.
+`ServerHandle` 刻意比两种连接所有者都小。需要发送请求或通知的任务可以克隆它，但只能由一个任务负责最终生命周期。
 
-## Walkthrough: connect over a custom Transport
+## 流程一：通过自定义 Transport 连接
 
-This example uses two Tokio channels as an already message-framed Transport.
-One side runs a Server only to make the example self-contained. A real host
-would replace that side with its existing channel adapter.
+这个示例把两条 Tokio 通道作为已经完成消息分帧的 Transport。为了让示例能够独立运行，其中一端启动了 Server；真实宿主应把这一端替换成已有的通道适配器。
 
 ```rust,no_run
 use std::time::Duration;
@@ -176,20 +164,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-The adapter must yield one complete `RawMessage` per read, preserve send order,
-and return `TransportError::Closed` for ordinary EOF or peer closure. A framing
-or I/O failure ends the connection; lspf does not reconnect behind the
-application's back. When `ClientConnection::serve` returns, pending typed calls
-resolve instead of hanging. Call `ServerHandle::disconnect` if the application
-needs to close its side without sending `shutdown` and `exit`.
+适配器每次读取必须产出一个完整 `RawMessage`，保持发送顺序，并在普通 EOF 或对端关闭时返回 `TransportError::Closed`。分帧或 I/O 失败会结束连接；lspf 不会在应用不知情时自动重连。`ClientConnection::serve` 返回时，待处理的类型化调用会得到结果而不会永久等待。应用需要在不发送 `shutdown` 和 `exit` 的情况下关闭本端时，调用 `ServerHandle::disconnect`。
 
-## Walkthrough: own a stdio language-server child
+## 流程二：拥有一个 stdio 语言服务器子进程
 
-With the default `stdio` feature, `ClientBuilder::spawn` pipes stdin, stdout,
-and stderr, completes initialization, starts the protocol driver and stderr
-drain, then returns one `ChildConnection`. The reverse notification handler
-below stores raw diagnostics in caller-owned state. Rendering them is still the
-editor's job.
+启用默认 `stdio` 功能后，`ClientBuilder::spawn` 会连接 stdin、stdout 和 stderr，完成初始化，启动协议驱动器和 stderr 排空任务，然后返回一个 `ChildConnection`。下面的反向通知处理器把原始诊断存入调用方状态；如何展示仍是编辑器的职责。
 
 ```rust,no_run
 use std::sync::Arc;
@@ -248,49 +227,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-Use `shutdown` when the application initiates a graceful stop. Use `wait` when
-the child is expected to exit by itself; it returns the same `ChildOutput` with
-the protocol `Outcome`, OS status, and captured stderr. An early process exit
-closes the connection and resolves pending requests with
-`ClientError::Cancelled`. Inspect the status and stderr before deciding whether
-to restart or report the failure.
+应用主动优雅停止时使用 `shutdown`；预计子进程自行退出时使用 `wait`。后者返回相同的 `ChildOutput`，其中包含协议 `Outcome`、操作系统状态和捕获的 stderr。进程提前退出会关闭连接，并让待处理请求以 `ClientError::Cancelled` 结束。决定重启或报告失败前，应检查状态和 stderr。
 
-Stderr is always drained to prevent a pipe deadlock. `ChildOutput` retains its
-first 64 KiB and records whether the rest was truncated. If graceful shutdown
-stalls, supervision uses bounded waits before terminate and kill. Dropping a
-live `ChildConnection` also transfers the process to cleanup code that will
-reap it, but an explicit `shutdown` or `wait` is better because it returns the
-terminal evidence.
+stderr 始终会被排空，以免管道死锁。`ChildOutput` 保留最初 64 KiB，并记录其余内容是否被截断。优雅关闭卡住时，监督逻辑会在逐级 terminate 和 kill 前进行有界等待。丢弃仍存活的 `ChildConnection` 也会把进程交给清理代码回收，但显式调用 `shutdown` 或 `wait` 更好，因为应用能取得终止证据。
 
-## Deadlines and cancellation
+## 截止时间与取消
 
-`ResourcePolicy` belongs to one Client connection. `max_inbound_requests`
-bounds admitted reverse requests before handler work starts.
-`max_outbound_messages` and `max_outbound_bytes` bound queued client-to-server
-traffic; an ordinary `ServerHandle` send that cannot fit returns
-`ClientError::OutboundOverloaded` without retaining the message or pending
-request. All three limits must be greater than zero.
+`ResourcePolicy` 属于一条 Client 连接。`max_inbound_requests` 限制处理器开始工作前已接纳的反向请求；`max_outbound_messages` 和 `max_outbound_bytes` 限制排队中的客户端到服务器流量。普通 `ServerHandle` 发送若无法进入队列，会返回 `ClientError::OutboundOverloaded`，且不会保留消息或待处理请求。三个限制都必须大于零。
 
-`outbound_request_timeout` applies to requests sent through `ServerHandle`;
-expiry returns `ClientError::Timeout`, removes the pending request, and
-attempts one `$/cancelRequest`. Set it to `None` only when the application has
-another firm deadline.
+`outbound_request_timeout` 适用于通过 `ServerHandle` 发送的请求；到期会返回 `ClientError::Timeout`、移除待处理请求，并尝试发送一次 `$/cancelRequest`。只有应用另有明确截止时间时，才把它设为 `None`。
 
-`handler_timeout` bounds reverse request handlers. A peer cancellation or
-deadline fires the handler's `CancellationToken`; handlers should stop work
-promptly and return `LspError::RequestCancelled` when appropriate. Dropping a
-pending request future also removes it and attempts cancellation. Late
-responses cannot satisfy later requests because request IDs are never reused.
+`handler_timeout` 限制反向请求处理器。对端取消或截止时间到期会触发处理器的 `CancellationToken`；处理器应立即停止工作，并在适当时返回 `LspError::RequestCancelled`。丢弃待处理请求的 future 也会移除它并尝试取消。请求 ID 永不复用，因此迟到的响应不能满足后来的请求。
 
-## Failure and shutdown checklist
+## 故障与关闭清单
 
-- Drive a custom `ClientConnection::serve` concurrently with every use of its
-  `ServerHandle`.
-- Give one task responsibility for `shutdown` followed by `exit`. Use
-  `disconnect` for local teardown when graceful protocol traffic is unwanted.
-- Treat Transport failure, EOF, and early child exit as terminal. Pending calls
-  resolve during the shared close path.
-- Keep editor state and policy in application-owned values captured by reverse
-  handlers. `ClientContext` is protocol-only.
-- Prefer `ChildConnection::shutdown` or `wait` over Drop so the application can
-  inspect `Outcome`, exit status, and stderr.
+- 使用 `ServerHandle` 的同时，必须并发驱动自定义 `ClientConnection::serve`。
+- 只让一个任务负责依次执行 `shutdown` 和 `exit`。不需要优雅协议流量的本地拆除使用 `disconnect`。
+- Transport 失败、EOF 和子进程提前退出都应视为终止事件。共享关闭路径会解决待处理调用。
+- 编辑器状态和策略应放在应用拥有、由反向处理器捕获的值中；`ClientContext` 只含协议状态。
+- 优先使用 `ChildConnection::shutdown` 或 `wait`，不要依赖 Drop，这样应用才能检查 `Outcome`、退出状态和 stderr。

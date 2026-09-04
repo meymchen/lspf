@@ -7,22 +7,21 @@
 
 A Rust framework for building extensible LSP (Language Server Protocol) language servers.
 
+[Project documentation](https://meymchen.github.io/lspf/en/) ·
+[简体中文文档](https://meymchen.github.io/lspf/zh-cn/)
+
 `lspf` is **async-only** and designed so a developer can stand up a working
 language server in very little code. You register typed handlers on a
 `Server`, hand it to a transport, and the framework owns the protocol:
 lifecycle, document synchronization, cancellation, bounded concurrency,
 `tracing` spans, and typed server-to-client traffic through `ClientHandle`.
 
-> **Status:** early-stage. The current published release is **0.11.0**. It
-> includes the complete stable LSP 3.18 inbound feature catalog — inline
-> completion, workspace text-document content, and multiple-ranges formatting
-> among them — typed Commands, the multi-root `Workspace`, outgoing
-> `ClientHandle` helpers, and stdio, TCP, WebSocket, and WASM worker-channel
-> transports.
->
-> Notebook document synchronization, partial-result reporting, and the two
-> LSP 3.18 workspace refresh requests are on `main` and ship in the next
-> release; they are marked below. See the
+> **Status:** the current published release is **1.0.0**, with a frozen public
+> interface. It includes the complete stable LSP 3.18 inbound feature catalog,
+> UTF-8/UTF-32/UTF-16 position negotiation, notebook synchronization,
+> partial-result reporting, all seven workspace refresh requests, typed
+> Commands, and the multi-root `Workspace`. Native stdio, TCP, WebSocket, and
+> WASM worker-channel transports are available. See the
 > [package changelog](./crates/lspf/CHANGELOG.md) for release history.
 
 ## Quick start
@@ -131,15 +130,18 @@ synchronization, multi-root workspace state, and unopened-file lookup — lives
 at [`crates/lspf-hello/src/main.rs`](./crates/lspf-hello/src/main.rs), the
 installable template server described under [Editor setup](#editor-setup),
 with an end-to-end stdio test beside it. The
-[features, capabilities, and the workspace](./docs/guides/features-and-workspace.md)
-guide walks through each piece. To choose a Transport adapter, enable only
+[feature registration](https://meymchen.github.io/lspf/en/guides/features-and-workspace/)
+and [workspace state](https://meymchen.github.io/lspf/en/guides/workspace-state/)
+guides walk through each piece. To choose a Transport adapter, enable only
 its Cargo dependencies, or implement another message-framed channel, see
-[Choosing and implementing a Transport](./docs/guides/transports.md).
+[Choosing a Transport](https://meymchen.github.io/lspf/en/guides/transports/), then
+continue to [stdio and custom transports](https://meymchen.github.io/lspf/en/guides/stdio-and-custom-transports/)
+when the host owns a child process or a custom message-framed channel.
 To build the same server one step at a time, start with the
-[Server tutorial](./docs/tutorials/server.md), then use the
-[Client tutorial](./docs/tutorials/client.md) to drive it as a supervised
+[Server tutorial](https://meymchen.github.io/lspf/en/tutorials/server/), then use the
+[Client tutorial](https://meymchen.github.io/lspf/en/tutorials/client/) to drive it as a supervised
 stdio child. For custom Client Transports and reverse handlers, follow the
-[Client adoption guide](./docs/guides/client-adoption.md).
+[Client adoption guide](https://meymchen.github.io/lspf/en/guides/client-adoption/).
 Runnable servers for individual LSP features are indexed in
 [`crates/lspf/examples/README.md`](./crates/lspf/examples/README.md).
 
@@ -147,7 +149,7 @@ Runnable servers for individual LSP features are indexed in
 
 ```toml
 [dependencies]
-lspf = "0.11.0"
+lspf = "1.0.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -182,9 +184,9 @@ also uses them internally.
 - **Safe concurrent dispatch.** Requests and notifications run with a
   configurable concurrency limit (64 by default); `$/cancelRequest`
   propagates through a `CancellationToken`.
-- **Protocol details handled for you.** Lifecycle ordering, JSON-RPC
-  framing, text synchronization, and UTF-8/UTF-32/UTF-16 position negotiation
-  are built in.
+- **Protocol details handled for you.** Lifecycle ordering, JSON-RPC framing,
+  text synchronization, and UTF-8/UTF-32/UTF-16 position negotiation are built
+  in.
 - **First-party and custom transports.** `stdio`, single-client TCP,
   single-client WebSocket, and WASM worker-channel adapters are provided;
   implement the public `Transport` traits to embed lspf in tests or another
@@ -222,60 +224,24 @@ the docs.
 
 ## Architecture
 
-The full design lives next to the code:
+The [project documentation](https://meymchen.github.io/lspf/en/) covers
+features, transports, testing, operations, and both endpoint tutorials. The
+repository keeps the material needed to maintain those contracts:
 
-- [`CONTEXT.md`](./CONTEXT.md) — domain language and shared vocabulary.
-- [`docs/adr/`](./docs/adr/) — architecture decision records covering
-  the async-only runtime, the typed Router and capability catalog, the
-  protocol engine and outbound request broker, the cancellation model, the
-  transport shape, the `Layer`/`Service` stack, position encoding, and more.
-  ADRs describe architectural direction as well as shipped behavior; an
-  accepted ADR does not by itself mean the feature has been implemented.
-- [`docs/guides/features-and-workspace.md`](./docs/guides/features-and-workspace.md)
-  — how to register features, where capabilities come from, who owns the
-  workspace, documents, and notebooks, how Commands dispatch, and how
-  `FileProvider` configuration works. Every example in it compiles as a
-  doctest.
-- [`docs/guides/outgoing-client.md`](./docs/guides/outgoing-client.md)
-  — the server-to-client helper surface: notifications, window and workspace
-  requests, dynamic registration, workspace refreshes, work-done progress,
-  and partial-result reporting, with a full helper reference. Every example
-  compiles as a doctest.
-- [`docs/guides/client-adoption.md`](./docs/guides/client-adoption.md) — how
-  to connect the Client over a custom Transport or supervised stdio child,
-  register reverse handlers, set deadlines, handle failures, and shut down
-  cleanly. Both walkthroughs compile as doctests.
-- [`docs/guides/transports.md`](./docs/guides/transports.md) — Transport
-  selection and target/feature matrices, buildable native and WASM examples,
-  and the custom Transport contract.
-- [`docs/guides/testing.md`](./docs/guides/testing.md) — in-memory peers,
-  ordered wire capture, deterministic deadlines, and reusable Server and
-  Client lifecycle journeys for external tests, plus the repository's
-  deterministic protocol-session concurrency model.
-- [`docs/guides/errors-and-cancellation.md`](./docs/guides/errors-and-cancellation.md)
-  — which error type owns each failure, how handler errors map to LSP, and how
-  to cancel async, blocking, outbound, and stale document work.
-- [`docs/guides/operations.md`](./docs/guides/operations.md) — resource-policy
-  defaults and tuning, observability, deployment ownership, orderly shutdown,
-  known limitations, and production troubleshooting.
-- [`docs/tutorials/server.md`](./docs/tutorials/server.md) and
-  [`docs/tutorials/client.md`](./docs/tutorials/client.md) — two clean-consumer
-  Cargo projects that CI builds and runs together across a real stdio process
-  boundary.
-- [`docs/public-interface.md`](./docs/public-interface.md) — the frozen public
-  interface, item by item: what each export is for, the target and feature
-  selection it is available under, the crates whose types appear in frozen
-  signatures, what the crate exposes without freezing, and the capabilities
-  this release deliberately defers.
-- [`SECURITY.md`](./SECURITY.md) — supported Rust versions, hosts, targets,
-  Cargo feature combinations, release compatibility, deprecation, and private
-  vulnerability reporting.
+- [`CONTEXT.md`](./CONTEXT.md) defines the domain language.
+- [`docs/adr/`](./docs/adr/) records architecture decisions.
+- [`docs/public-interface.md`](./docs/public-interface.md) freezes the 1.0
+  public interface.
+- [`SECURITY.md`](./SECURITY.md) defines supported platforms, compatibility,
+  and vulnerability reporting.
+
+See [`CONTRIBUTING.md`](./CONTRIBUTING.md) before changing these boundaries.
 
 ## Current scope
 
 The [support contract](./SECURITY.md) is authoritative for maintained Rust
 versions, hosts, targets, and Cargo feature combinations. The
-[operations guide](./docs/guides/operations.md#known-limitations) records the
+[operations guide](https://meymchen.github.io/lspf/en/guides/operations/#known-limitations) records the
 deployment and application responsibilities that lspf deliberately leaves to
 its host.
 
@@ -292,17 +258,15 @@ Available today:
   `textDocument/rangesFormatting`.
 - Lifecycle hooks through shutdown and exit, incremental or full text-document
   synchronization, and post-mutation document hooks.
-- *(unreleased)* Notebook document synchronization across
+- Notebook document synchronization across
   `notebookDocument/didOpen`, `didChange`, `didSave`, and `didClose`, with
   notebook structure read through `ctx.notebooks()` and cell text through the
   same `ctx.documents()` view as any other document.
 - The multi-root `Workspace`, latest configuration settings, and
   `FileProvider`-backed unopened-file lookup.
 - Typed server-to-client notifications and correlated requests through
-  `ClientHandle`. The seven workspace refresh requests are all stable
-  *(unreleased: `workspace/foldingRange/refresh` and
-  `workspace/textDocumentContent/refresh`)*.
-- *(unreleased)* Partial-result reporting: a handler for a request that carries
+  `ClientHandle`, including all seven stable workspace refresh requests.
+- Partial-result reporting: a handler for a request that carries
   a `partialResultToken` reports typed chunks through `ctx.partial_results()`
   under the connection's outbound budget.
 - Concurrent dispatch, bounded concurrency, request cancellation, and
@@ -313,7 +277,7 @@ Available today:
 
 Transport-specific examples reuse one shared handler module, demonstrating
 that business logic does not fork between native and WASM hosts. See the
-[Transport guide](./docs/guides/transports.md#buildable-examples-and-shared-handlers)
+[Transport guide](https://meymchen.github.io/lspf/en/guides/transports/#buildable-examples-and-shared-handlers)
 for native TCP, native WebSocket, and browser/Node worker-channel build
 commands.
 
@@ -348,7 +312,7 @@ journeys live in
 This repository is a Cargo workspace with three members:
 
 - [`crates/lspf`](./crates/lspf) — the framework library you depend on
-  (`lspf = "0.11.0"`).
+  (`lspf = "1.0.0"`).
 - [`crates/lspf-hello`](./crates/lspf-hello) — an installable **template
   server**. It builds a `lspf-hello` binary that speaks LSP over stdio: it
   answers hover and completion (with resolve), dispatches four Commands for
@@ -390,113 +354,8 @@ then add this to your `settings.json`:
 Open any plain-text (`.txt`) file and you should see the
 "lspf saw this document open" diagnostic on line 1.
 
-> During framework development you can skip the install and use the bundled
-> [`tools/vscode-test-client`](./tools/vscode-test-client) instead, which
-> launches the freshly built binary from `target/`.
-
-#### Repository development
-
-Open the repository root in VS Code and install the recommended rust-analyzer
-and CodeLLDB extensions. The checked-in `.vscode` configuration provides:
-
-- `Debug LSP client (Extension Host)`, the default end-to-end path. It builds
-  `lspf-hello`, installs missing test-client dependencies from the lock file,
-  compiles the client, and opens an Extension Development Host. Open a `.txt`
-  file there to exercise the server.
-- `Run LSP example client (select example)`, which builds the stdio examples,
-  asks which one to run, and opens an Extension Development Host backed by that
-  example's real process.
-- `Attach to running LSP server/example`, which attaches CodeLLDB to the
-  process started by either client configuration.
-- build, quick-test, full workspace test, and example run tasks. The quick test
-  is `cargo test -p lspf-hello`; the full task matches the main CI test command.
-
-To debug an example, first run `Run LSP example client (select example)` and
-choose an example such as `hover`. Open a `.txt` file in the new Extension
-Development Host. Back in the repository window, run
-`Attach to running LSP server/example`, select the process named after the
-example, and set breakpoints in `crates/lspf/examples/<name>.rs`. Editor actions
-now travel through the real stdio connection and stop in the Rust handler.
-
-Every Extension Host debug configuration defaults to `RUST_LOG=lspf=trace` and
-`LSPF_LOG_FORMAT=json` unless the environment already has a value, and
-`lspf-hello` and the examples read that variable the same way: each stderr line
-is one JSON event with its event fields and current span. Set
-`LSPF_LOG_FORMAT=text` before launching VS Code for the plain-text format
-instead, one line of `elapsed level span_names: message fields`. The text
-format prints span names without their fields, because the events below repeat
-every span field they need. Run and test tasks leave both variables unchanged.
-
-At `lspf=trace`, the framework emits five stable event shapes. Field names do
-not change between inbound and outbound traffic:
-
-| `message` | Fields |
-| --- | --- |
-| `rpc message` | `connection_id`, `direction`, `kind`, and, when present, `method` and `request_id` |
-| `resource budget changed` | `connection_id`, `resource`, `resource_action`, `resource_current`; bounded resources also include `resource_limit`, byte budgets include `resource_bytes` and `resource_bytes_limit`, and `pending_requests` includes `direction`, `kind`, `method`, `request_id`, and optional `deadline_ms` |
-| `deadline changed` | `connection_id`, `direction`, `kind`, `method`, `request_id`, `deadline`, `deadline_action`, `deadline_ms`, `deadline_elapsed_ms` |
-| `request completed` | `connection_id`, `direction`, `kind`, `method`, `request_id`, `latency_ms`, `completion` |
-| `connection closed` | `connection_id`, `close_cause` |
-
-`direction` is `inbound` or `outbound`. Resource names are
-`inbound_requests`, `outbound_queue`, `documents`, `notebooks`, and
-`pending_requests`.
-Resource actions are `admit`, `release`, `update`, `reject`, and `rollback`.
-Deadline names are `handler` and `outbound_request`; deadline actions are
-`armed`, `completed`, `cancelled`, and `expired`. Completion values are
-`success`, `error`, `cancelled`, `deadline_expired`, `rejected`, and
-`connection_closed`; close causes are `exit`, `reader_eof`, `reader_failed`,
-`writer_failed`, and `initialize_failed`. Optional fields are absent rather
-than set to a sentinel value.
-
-Request and notification spans carry the same `connection_id`, `direction`,
-`kind`, `method`, and optional `request_id` fields. Request spans also retain
-the older debug-formatted `id` field for compatibility. Events emitted by a
-handler therefore inherit the connection and call identity through their
-current span.
-
-The default events never record request parameters, response results,
-Document text, or a serialized wire envelope. Applications may add their own
-events inside handlers, but should treat those payloads as sensitive too.
-
-For metrics or alerting that should not depend on tracing output, register one
-connection error hook on the server:
-
-```rust
-struct State;
-
-let _server = lspf::Server::builder(State)
-    .on_error(|failure| {
-        eprintln!(
-            "connection {}: {:?}",
-            failure.context.connection_id,
-            failure.category,
-        );
-    })
-    .build()
-    .expect("server configuration is valid");
-```
-
-`ConnectionFailureCategory` distinguishes framing, protocol, Transport,
-panic-isolation, overload, and close failures. The context contains the
-connection ID and, when known, direction, method, and request ID. It never
-contains parameters, results, document text, wire data, panic payloads, or
-underlying error messages. Numeric request IDs retain their value;
-peer-controlled string IDs are exposed only as `ConnectionRequestId::String`,
-with their contents redacted. Method names are included only when they are
-framework-owned, registered, or locally declared by a typed outbound request;
-other peer-controlled method names are omitted. Each failure is reported at its
-source. A panic in the hook is caught and logged; it cannot suppress a response
-or interrupt the connection's cleanup. The hook observes connection failures
-outside the user Layer chain, which still wraps user dispatch only.
-
-After the server initializes, `vscode-languageclient` automatically registers
-the four Commands advertised through `executeCommandProvider`. The extension
-manifest supplies their titles under the `lspf hello` category in the Command
-Palette. Middleware adds the active editor's URI for `Read Active File` and
-`Run Outgoing Helper Journey`, then writes results to the `lspf-hello commands`
-output channel. The outgoing journey exercises `workspace/applyEdit`, so it
-inserts a comment at the start of the active document.
+For repository debugging, use the bundled VS Code client and checked-in editor
+tasks described in [`CONTRIBUTING.md`](./CONTRIBUTING.md#debug-a-server).
 
 ### Zed
 
@@ -510,14 +369,6 @@ This repository does not yet ship a Zed extension. See Zed's
 to create a development extension that registers `lspf-hello`, or use the
 VS Code test client above for the repository's supported editor smoke-test
 path.
-
-For repository development, the checked-in `.zed/tasks.json` has build, quick
-test, full workspace test, and `hover` example tasks. The
-`Attach to running LSP server/example` entry in `.zed/debug.json` opens Zed's
-process picker and attaches CodeLLDB to a live server. Start that process from
-the VS Code test client above, another LSP client, or a local Zed language
-extension before attaching. These Zed files support Rust debugging; they do
-not register `lspf-hello` as a Zed language server.
 
 ### Troubleshooting
 
@@ -541,48 +392,9 @@ not register `lspf-hello` as a Zed language server.
 
 ## Contributing
 
-Issues live on the [GitHub tracker](https://github.com/meymchen/lspf/issues).
-
-Before opening a PR, please skim:
-
-- [`CONTEXT.md`](./CONTEXT.md) — make sure the change respects the
-  project's vocabulary.
-- The relevant `docs/adr/*.md` — if the change revisits a decision,
-  either justify the deviation in the PR description or write a new
-  ADR.
-
-Install the repository's pre-commit and commit-message hooks with
-[prek](https://prek.j178.dev/):
-
-```bash
-prek install
-```
-
-The hooks run `cargo fmt --check` and Clippy for staged Rust changes. To check
-all tracked Rust files without creating a commit, run `prek run --all-files`.
-
-Lint all Markdown with the repository's shared configuration (Node.js 24):
-
-```bash
-npx --yes markdownlint-cli2@0.22.1
-```
-
-Most mechanical Markdown issues can be fixed locally before reviewing the
-result:
-
-```bash
-npx --yes markdownlint-cli2@0.22.1 --fix
-```
-
-To generate a local HTML coverage report, run:
-
-```bash
-cargo install cargo-llvm-cov --version 0.9.0 --locked
-cargo coverage
-```
-
-Then open `target/coverage/html/index.html`. CI also uploads the
-report as an artifact on every pull request and `main` push.
+Read [`CONTRIBUTING.md`](./CONTRIBUTING.md) for setup, project context, tests,
+documentation rules, debugging, and pull request conventions. Issues live on
+the [GitHub tracker](https://github.com/meymchen/lspf/issues).
 
 ## License
 

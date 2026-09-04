@@ -224,31 +224,43 @@ mod markdown {
     #[doc = include_str!("../../../README.md")]
     pub struct Readme;
 
-    #[doc = include_str!("../../../docs/guides/features-and-workspace.md")]
+    #[doc = include_str!("../../../website/src/content/docs/en/guides/features-and-workspace.md")]
     pub struct FeaturesAndWorkspaceGuide;
 
-    #[doc = include_str!("../../../docs/guides/outgoing-client.md")]
+    #[doc = include_str!("../../../website/src/content/docs/en/guides/workspace-state.md")]
+    pub struct WorkspaceStateGuide;
+
+    #[doc = include_str!("../../../website/src/content/docs/en/guides/outgoing-client.md")]
     pub struct OutgoingClientGuide;
 
-    #[doc = include_str!("../../../docs/guides/client-adoption.md")]
+    #[doc = include_str!("../../../website/src/content/docs/en/guides/progress-and-custom-messages.md")]
+    pub struct ProgressAndCustomMessagesGuide;
+
+    #[doc = include_str!("../../../website/src/content/docs/en/guides/client-adoption.md")]
     pub struct ClientAdoptionGuide;
 
-    #[doc = include_str!("../../../docs/guides/transports.md")]
+    #[doc = include_str!("../../../website/src/content/docs/en/guides/transports.md")]
     pub struct TransportsGuide;
 
-    #[doc = include_str!("../../../docs/guides/testing.md")]
+    #[doc = include_str!("../../../website/src/content/docs/en/guides/stdio-and-custom-transports.md")]
+    pub struct StdioAndCustomTransportsGuide;
+
+    #[doc = include_str!("../../../website/src/content/docs/en/guides/testing.md")]
     pub struct TestingGuide;
 
-    #[doc = include_str!("../../../docs/guides/errors-and-cancellation.md")]
+    #[doc = include_str!("../../../website/src/content/docs/en/guides/errors-and-cancellation.md")]
     pub struct ErrorsAndCancellationGuide;
 
-    #[doc = include_str!("../../../docs/guides/operations.md")]
+    #[doc = include_str!("../../../website/src/content/docs/en/guides/operations.md")]
     pub struct OperationsGuide;
 
-    #[doc = include_str!("../../../docs/tutorials/server.md")]
+    #[doc = include_str!("../../../website/src/content/docs/en/guides/deployment-and-troubleshooting.md")]
+    pub struct DeploymentAndTroubleshootingGuide;
+
+    #[doc = include_str!("../../../website/src/content/docs/en/tutorials/server.md")]
     pub struct ServerTutorial;
 
-    #[doc = include_str!("../../../docs/tutorials/client.md")]
+    #[doc = include_str!("../../../website/src/content/docs/en/tutorials/client.md")]
     pub struct ClientTutorial;
 }
 

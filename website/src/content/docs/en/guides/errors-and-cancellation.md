@@ -1,4 +1,7 @@
-# Errors, cancellation, and blocking work
+---
+title: Handle errors and cancellation
+description: Map failures, cancellation, deadlines, and blocking work to the right owner.
+---
 
 lspf reports failures at the boundary that owns them. A bad registration is a
 `BuildError`; a handler chooses an `LspError` response; typed peer operations
@@ -155,7 +158,7 @@ runtime's shared pool is too broad for the workload. lspf's inbound budget
 limits admitted protocol requests, not the threads or child processes an
 application creates inside those handlers.
 
-The runnable [`blocking_work` example](../../crates/lspf/examples/blocking_work.rs)
+The runnable [`blocking_work` example](https://github.com/meymchen/lspf/blob/main/crates/lspf/examples/blocking_work.rs)
 shows blocking work alongside an unrelated completion request.
 
 ## Observe failures without exposing payloads

@@ -1,4 +1,7 @@
-# Choosing and implementing a Transport
+---
+title: Choose a transport
+description: Select stdio, TCP, WebSocket, or worker-channel for the host environment.
+---
 
 A `Server` owns one LSP connection. A Transport is the message-framed channel
 that carries that connection's JSON-RPC envelopes. Choose the Transport from
@@ -26,7 +29,7 @@ different Transport should not carry the stdio dependency graph.
 
 ```toml
 [dependencies]
-lspf = { version = "0.11.0", default-features = false, features = ["tcp"] }
+lspf = { version = "1.0.0", default-features = false, features = ["tcp"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -73,24 +76,24 @@ commands.
 ## Buildable examples and shared handlers
 
 The examples keep every handler in
-[`examples/shared/mod.rs`](../../crates/lspf/examples/shared/mod.rs). The
+[`examples/shared/mod.rs`](https://github.com/meymchen/lspf/blob/main/crates/lspf/examples/shared/mod.rs). The
 same `hover`, `completion`, `shared/ping`, and `didOpen` hook names,
 parameters, and return shapes are registered for every host. Only the last
 serving call differs:
 
-- [`shared_server.rs`](../../crates/lspf/examples/shared_server.rs) serves the
+- [`shared_server.rs`](https://github.com/meymchen/lspf/blob/main/crates/lspf/examples/shared_server.rs) serves the
   shared handler set over stdio and also compiles as a runtime-only WASM
   example.
-- [`native_tcp.rs`](../../crates/lspf/examples/native_tcp.rs) serves it over
+- [`native_tcp.rs`](https://github.com/meymchen/lspf/blob/main/crates/lspf/examples/native_tcp.rs) serves it over
   one TCP connection.
-- [`native_websocket.rs`](../../crates/lspf/examples/native_websocket.rs)
+- [`native_websocket.rs`](https://github.com/meymchen/lspf/blob/main/crates/lspf/examples/native_websocket.rs)
   serves it over one WebSocket connection.
-- [`worker_channel.rs`](../../crates/lspf/examples/worker_channel.rs) exports
+- [`worker_channel.rs`](https://github.com/meymchen/lspf/blob/main/crates/lspf/examples/worker_channel.rs) exports
   a wasm-bindgen `serve(MessagePort)` function for browser and Node Workers.
   Its
-  [`browser`](../../crates/lspf/examples/worker_channel_hosts/browser/package.json)
+  [`browser`](https://github.com/meymchen/lspf/tree/main/crates/lspf/examples/worker_channel_hosts/browser)
   and
-  [`node`](../../crates/lspf/examples/worker_channel_hosts/node/package.json)
+  [`node`](https://github.com/meymchen/lspf/tree/main/crates/lspf/examples/worker_channel_hosts/node)
   host packages compile that Rust export, generate the appropriate JavaScript
   glue, and validate the host files.
 
@@ -105,15 +108,15 @@ cargo check -p lspf --example native_websocket \
 
 To drive either socket example from a real editor, run the VS Code launch
 configuration `Run LSP example client over a socket (select transport)`. The
-[test client](../../tools/vscode-test-client/README.md) starts the example and
-connects its language client to the bound port, so the adapter is exercised by
-the editor rather than by a script. Zed launches every language server as a
-command over stdio and offers no socket option, so it cannot connect to these
-two examples.
+[test client](https://github.com/meymchen/lspf/tree/main/tools/vscode-test-client)
+starts the example and connects its language client to the bound port, so the
+adapter is exercised by the editor rather than by a script. Zed launches every
+language server as a command over stdio and offers no socket option, so it
+cannot connect to these two examples.
 
 For an unattended check, the
-[transport probe](../../tools/lsp-transport-probe/README.md) builds, serves, and
-asserts one full LSP session per transport:
+[transport probe](https://github.com/meymchen/lspf/tree/main/tools/lsp-transport-probe)
+builds, serves, and asserts one full LSP session per transport:
 
 ```bash
 node tools/lsp-transport-probe/main.mjs both
@@ -152,7 +155,7 @@ wasm-bindgen --target web \
 ```
 
 Serve the
-[`browser` directory](../../crates/lspf/examples/worker_channel_hosts/browser/index.html)
+[`browser` directory](https://github.com/meymchen/lspf/tree/main/crates/lspf/examples/worker_channel_hosts/browser)
 from an HTTP server and open `index.html`. `main.mjs` creates the channel and
 transfers one endpoint; its exported `lspPort` belongs to the LSP client. The
 module Worker initializes the generated web binding and passes the transferred
@@ -176,9 +179,9 @@ wasm-bindgen --target nodejs \
   target/wasm32-unknown-unknown/debug/examples/worker_channel.wasm
 ```
 
-[`main.cjs`](../../crates/lspf/examples/worker_channel_hosts/node/main.cjs)
+[`main.cjs`](https://github.com/meymchen/lspf/blob/main/crates/lspf/examples/worker_channel_hosts/node/main.cjs)
 creates a `worker_threads.MessageChannel`, transfers the server port to
-[`worker.cjs`](../../crates/lspf/examples/worker_channel_hosts/node/worker.cjs),
+[`worker.cjs`](https://github.com/meymchen/lspf/blob/main/crates/lspf/examples/worker_channel_hosts/node/worker.cjs),
 and uses the client port to complete initialize, initialized, shutdown, and
 exit. The smoke command fails unless the Worker returns a successful
 `Outcome`.
@@ -186,94 +189,4 @@ exit. The smoke command fails unless the Worker returns a successful
 The JavaScript host owns Worker creation and termination. The lspf adapter
 starts and closes only the supplied port.
 
-## Stdio rules
-
-Stdio is available only with the `stdio` feature on a native target. It is a
-binary I/O channel: lspf reads stdin and writes stdout as bytes using the LSP
-`Content-Length: N\r\n\r\n` framing contract. Do not print human-readable
-output to stdout; configure `tracing` and every other log sink to write only
-to stderr.
-
-`lspf::stdio(server).serve().await` returns an `Outcome`. It never terminates
-the process. The binary decides whether to call `outcome.code()`, report an
-error, restart, or perform other cleanup. Reader EOF, peer closure, protocol
-`exit`, and fatal initialization all go through that same outcome path.
-
-### Launching a language-server child
-
-A native Client can own an arbitrary command as one supervised stdio child.
-`spawn` replaces all three standard-stream settings with pipes, connects and
-initializes the Client, drives incoming protocol traffic, and drains stderr
-concurrently:
-
-```rust,no_run
-use lspf::types::ClientCapabilities;
-use lspf::Client;
-use tokio::process::Command;
-
-# async fn run() -> Result<(), lspf::ChildError> {
-let command = Command::new("rust-analyzer");
-let child = Client::builder(ClientCapabilities::default())
-    .spawn(command)
-    .await?;
-let server = child.server();
-
-// Send typed requests and notifications through `server` while the child is live.
-let output = child.shutdown().await?;
-assert!(output.status().success());
-# Ok(())
-# }
-```
-
-`shutdown` sends the LSP `shutdown` request and `exit` notification, then
-reaps the process. A child that does not exit is escalated through a bounded
-wait, terminate, another bounded wait, and kill. `wait` instead observes a
-server that exits by itself. Both return the protocol `Outcome`, OS exit
-status, and the first 64 KiB of stderr; stderr continues draining after that
-capture limit. Dropping a live `ChildConnection` transfers its resources to a
-reaper thread and schedules graceful protocol cleanup on the current Tokio
-runtime. The thread's synchronous terminate-kill-reap path continues even if
-that runtime stops. If no runtime is current when Drop runs, it performs the
-same process cleanup synchronously.
-
-## Implementing a custom Transport
-
-Implement `Transport` as two independently owned halves:
-
-- `TransportReader::recv` yields exactly one complete, decoded `RawMessage`
-  per call. It must not expose partial bytes or combine envelopes.
-- `TransportWriter::send` encodes exactly one `RawMessage`. Calls arrive on
-  one writer task and must retain their call order.
-- Reads and writes may proceed concurrently because `Transport::split`
-  transfers each half to its own protocol-engine task.
-- `TransportWriter::shutdown` consumes the writer. Flush any already accepted
-  output, send a protocol-specific close when one exists, and release the
-  underlying channel.
-
-The adapter owns wire framing and JSON-RPC envelope conversion. A byte-stream
-adapter usually adds and strips `Content-Length`; an already message-framed
-channel maps one channel message to one `RawMessage`. Enforce a finite message
-size before allocating or sending large bodies.
-
-Preserve ordering in each direction. Do not spawn a task per send, reorder
-responses around notifications, or deliver messages received after a close.
-Return `TransportError::Closed` for ordinary EOF, peer close, or a write to a
-gone peer. Use `Malformed` for invalid framing or envelope data,
-`OversizedMessage` for a size limit, `Io` when the I/O source is meaningful,
-and `Serde` for JSON conversion. The first close cause observed by the engine
-wins; a custom adapter should not retry or reconnect behind that boundary.
-
-Call `server.serve(custom_transport)` after constructing the adapter. The
-caller supplies any wrapping below it. For example, TLS certificate policy,
-mTLS, ALPN, and rotation belong to the application: accept and authenticate a
-TLS stream first, then implement the message-framed Transport over that
-stream. lspf does not add TLS implicitly.
-
-## Transport scope
-
-The built-in Transport surface does not provide TLS configuration, multi-client
-serving, WebSocket client mode, reconnect, CLI Transport selection,
-notebook/client frameworks, or shared-memory WASM. These are deployment or
-client-framework policies rather than behavior hidden inside one `Server`
-connection. Build them outside lspf or implement a custom Transport where the
-message-framed contract is sufficient.
+Continue with [Stdio and custom transports](../stdio-and-custom-transports/) for process ownership, framing rules, and embedded hosts.

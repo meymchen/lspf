@@ -1,7 +1,10 @@
-# Tutorial: drive a language server
+---
+title: Drive a language server
+description: Build a native LSP client that launches and controls a server over stdio.
+---
 
 This tutorial builds a native LSP client for the server from the
-[Server tutorial](./server.md). The client launches that server as a supervised
+[Server tutorial](../server/). The client launches that server as a supervised
 stdio child, receives diagnostics, sends typed notifications and requests, and
 shuts the process down cleanly.
 
@@ -27,7 +30,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-lspf = "0.11.0"
+lspf = "1.0.0"
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 ```
@@ -217,11 +220,12 @@ client's environment to have the child emit lspf protocol events on stderr.
 
 ## Where to go next
 
-- [Client adoption](../guides/client-adoption.md) covers custom Transports,
+- [Client adoption](../../guides/client-adoption/) covers custom Transports,
   reverse requests, deadlines, early exits, and connection ownership.
-- [Protocol testing](../guides/testing.md) replaces the child process with a
+- [Protocol testing](../../guides/testing/) replaces the child process with a
   deterministic in-memory peer.
-- [Errors and cancellation](../guides/errors-and-cancellation.md) maps the
+- [Errors and cancellation](../../guides/errors-and-cancellation/) maps the
   endpoint error types and cancellation paths.
-- [Operating a server](../guides/operations.md) covers budgets, observability,
-  deployment, and troubleshooting.
+- [Resource and observability policies](../../guides/operations/) covers budgets
+  and telemetry; [deployment and troubleshooting](../../guides/deployment-and-troubleshooting/)
+  covers process topology, shutdown, and failure diagnosis.
