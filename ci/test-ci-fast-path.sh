@@ -96,7 +96,7 @@ jq -e '
     and $job.if == "${{ github.event_name == '\''pull_request'\'' }}"
     and $job.permissions == {"contents": "read"}
     and ($job.steps | any(
-      .uses == "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
+      .uses == "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
       and .with["fetch-depth"] == 0
       and .with["persist-credentials"] == false
     ))

@@ -77,7 +77,7 @@ write_workflow '{}' '' $'    steps:\n      - uses: actions/checkout@v6'
 assert_failure "mutable Action 'actions/checkout@v6'" 'a mutable Action reference'
 
 write_policy '{"contents":"read"}'
-write_workflow 'contents: read' '' $'    steps:\n      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803'
+write_workflow 'contents: read' '' $'    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'
 bash "$repo_root/ci/check-workflow-security.sh" "$workflow_dir" "$policy_file"
 
 write_policy '{}'

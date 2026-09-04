@@ -53,7 +53,7 @@ jobs:
       pending: ${{ steps.release.outputs.pending }}
       version: ${{ steps.release.outputs.version }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -92,7 +92,7 @@ jobs:
     outputs:
       matrix: ${{ steps.matrix.outputs.value }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - id: matrix
         run: echo "value=$(bash ci/native-feature-command.sh matrix)" >> "$GITHUB_OUTPUT"
 
@@ -103,7 +103,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -123,8 +123,8 @@ jobs:
       contents: read
     needs: release-context
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: DavidAnson/markdownlint-cli2-action@ded1f9488f68a970bc66ea5619e13e9b52e601cd # v23.2.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: DavidAnson/markdownlint-cli2-action@21c1be1b93ad9ed58fa840aacc3f279cde2a72ff # v24.2.0
         with:
           globs: "**/*.md"
       # The changelog is the one markdown file markdownlint skips, because
@@ -143,7 +143,7 @@ jobs:
       contents: read
     needs: release-context
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - run: bash ci/test-run-fuzz.sh
 
   fmt:
@@ -154,7 +154,7 @@ jobs:
       contents: read
     needs: release-context
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup-rust
         with:
           components: rustfmt
@@ -193,7 +193,7 @@ jobs:
       contents: read
     needs: release-context
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup-rust
         with:
           targets: wasm32-unknown-unknown
@@ -204,7 +204,7 @@ jobs:
         run: bash ci/check-public-api.sh
       - name: Upload machine-readable compatibility report
         if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: public-api-compatibility-report
           path: target/public-api-compatibility/report.json
@@ -228,7 +228,7 @@ jobs:
     env:
       RUSTUP_TOOLCHAIN: "1.98.0"
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup-rust
         with:
           toolchain: 1.98.0
@@ -248,7 +248,7 @@ jobs:
     env:
       RUSTUP_TOOLCHAIN: "1.98.0"
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup-rust
         with:
           toolchain: 1.98.0
@@ -263,7 +263,7 @@ jobs:
       contents: read
     needs: release-context
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Test the interface freeze gate behavior
         run: bash ci/test-check-public-interface.sh
       - name: Compare the frozen inventory with the crate
@@ -282,7 +282,7 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.feature-matrix.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup-rust
         with:
           components: clippy
@@ -299,7 +299,7 @@ jobs:
       contents: read
     needs: release-context
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup-rust
       - run: bash ci/test-check-editor-validation.sh
       - run: bash ci/native-feature-command.sh test-workspace
@@ -333,7 +333,7 @@ jobs:
           - name: macOS (Apple Silicon)
             os: macos-latest
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup-rust
       - name: Initialize, typed request, shutdown, and exit
         run: cargo test -p lspf-hello --test e2e -- --nocapture
@@ -346,11 +346,11 @@ jobs:
       contents: read
     needs: release-context
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup-rust
         with:
           targets: wasm32-unknown-unknown
-          tools: wasm-bindgen-cli@0.2.126
+          tools: wasm-bindgen-cli@0.2.127
       # The pre-0.5 compile spike (ADR 0020): the protocol kernel must compile
       # for wasm32 without enabling the Tokio runtime.
       - run: cargo check -p lspf --target wasm32-unknown-unknown --no-default-features --features wasm --locked
@@ -371,12 +371,12 @@ jobs:
       contents: read
     needs: release-context
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup-rust
         with:
           toolchain: 1.98.0
           components: llvm-tools-preview
-          tools: cargo-llvm-cov@0.6.21
+          tools: cargo-llvm-cov@0.9.0
       - name: Test the test-coverage gate behavior
         run: bash ci/test-check-test-coverage.sh
       - name: Exercise the whole workspace
@@ -392,7 +392,7 @@ jobs:
         run: bash ci/check-test-coverage.sh
       - name: Upload test-coverage reports
         if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: test-coverage-report
           path: |
@@ -412,7 +412,7 @@ jobs:
       contents: read
     needs: release-context
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup-rust
       - name: Test performance benchmark contract
         run: bash ci/test-performance-benchmark.sh
@@ -425,7 +425,7 @@ jobs:
           "$RUNNER_TEMP/performance-baseline"
       - name: Retain performance baseline
         if: ${{ always() }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: reproducible-performance-baseline
           path: ${{ runner.temp }}/performance-baseline
@@ -453,7 +453,7 @@ jobs:
           - reconnect
           - shutdown
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup-rust
       - name: Test soak runner contract
         run: bash ci/test-run-soak-journeys.sh
@@ -476,7 +476,7 @@ jobs:
           "$RUNNER_TEMP/bounded-memory-soak"
       - name: Retain bounded-memory soak artifacts
         if: ${{ always() }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: bounded-memory-soak-${{ matrix.scenario }}
           path: ${{ runner.temp }}/bounded-memory-soak
@@ -491,7 +491,7 @@ jobs:
       contents: read
     needs: release-context
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup-rust
       - name: Run revision-locked Gate B evidence
         run: >-
@@ -501,7 +501,7 @@ jobs:
           "$RUNNER_TEMP/gate-b-evidence"
       - name: Retain Gate B bounded-resource evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: gate-b-bounded-resource-evidence
           path: ${{ runner.temp }}/gate-b-evidence
@@ -516,7 +516,7 @@ jobs:
       contents: read
     needs: release-context
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup-rust
       - name: Run revision-locked Gate C evidence
         run: >-
@@ -526,7 +526,7 @@ jobs:
           "$RUNNER_TEMP/gate-c-evidence"
       - name: Retain Gate C endpoint evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: gate-c-endpoint-evidence
           path: ${{ runner.temp }}/gate-c-evidence
@@ -559,7 +559,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Require every applicable pre-merge check
         env:
           MERGE_READY_JOB_RESULTS: ${{ toJSON(needs) }}
@@ -590,7 +590,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Assemble revision-locked Gate A evidence
         env:
           GATE_A_JOB_RESULTS: ${{ toJSON(needs) }}
@@ -601,7 +601,7 @@ jobs:
           target/gate-a-evidence
       - name: Retain Gate A release evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: gate-a-release-evidence
           path: target/gate-a-evidence
@@ -620,7 +620,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup-rust
         with:
           toolchain: nightly
@@ -635,7 +635,7 @@ jobs:
           "$RUNNER_TEMP/gate-d-candidate-evidence"
       - name: Retain Gate D candidate evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: gate-d-candidate-evidence
           path: ${{ runner.temp }}/gate-d-candidate-evidence
@@ -663,7 +663,7 @@ jobs:
       id-token: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -684,7 +684,7 @@ jobs:
         id: artifacts
         run: bash ci/prepare-release-artifacts.sh "$GITHUB_SHA" "$RUNNER_TEMP/release-artifacts"
       - name: Generate crate SBOM
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0
         with:
           file: ${{ steps.artifacts.outputs.crate }}
           format: spdx-json
@@ -737,7 +737,7 @@ jobs:
           "$GITHUB_SHA"
           "${{ steps.artifacts.outputs.directory }}"
       - name: Retain verified release candidate
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: lspf-${{ steps.artifacts.outputs.version }}-release-candidate
           path: ${{ steps.artifacts.outputs.directory }}
@@ -762,7 +762,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -787,7 +787,7 @@ jobs:
           "$RUNNER_TEMP/gate-e-evidence"
       - name: Retain Gate E candidate validation evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: gate-e-candidate-validation-evidence
           path: ${{ runner.temp }}/gate-e-evidence
@@ -814,7 +814,7 @@ jobs:
       id-token: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -873,7 +873,7 @@ jobs:
           "$GITHUB_SHA"
           "$RUNNER_TEMP/release-record"
       - name: Retain the release record
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: lspf-${{ needs.release-context.outputs.version }}-release-record
           path: ${{ runner.temp }}/release-record
@@ -904,7 +904,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Install the workflow policy YAML parser
         uses: dcarbone/install-yq-action@4075b4dca348d74bd83f2bf82d30f25d7c54539b # v1.3.1
         with:
@@ -927,7 +927,7 @@ jobs:
       cancel-in-progress: false
     steps:
       - name: Checkout repository
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -953,12 +953,12 @@ jobs:
       - name: Generate a token whose pushes trigger workflows
         id: app-token
         if: ${{ vars.RELEASE_PLZ_APP_ID != '' }}
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         with:
           app-id: ${{ vars.RELEASE_PLZ_APP_ID }}
           private-key: ${{ secrets.RELEASE_PLZ_APP_PRIVATE_KEY }}
       - name: Run release-plz
-        uses: release-plz/action@2eb1d8bcb770b4c48ccfaad919734b38b51958c9 # v0.5
+        uses: release-plz/action@b5543c19b03be9bd48852d20ca89f478b7723260 # v0.5
         with:
           command: release-pr
         env:

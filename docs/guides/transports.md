@@ -135,7 +135,7 @@ Install the wasm-bindgen CLI version matching `Cargo.lock`, then build the
 checked-in browser host from the repository root:
 
 ```bash
-cargo install wasm-bindgen-cli --version 0.2.126 --locked
+cargo install wasm-bindgen-cli --version 0.2.127 --locked
 npm --prefix crates/lspf/examples/worker_channel_hosts/browser run build
 ```
 
