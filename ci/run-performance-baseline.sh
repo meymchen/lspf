@@ -121,12 +121,15 @@ jq --slurpfile budget "$budget" '
 ' "$raw_results" >"$output_dir/results.json"
 
 jq -r '
+  # A measurement that happens to be whole reads as `6 ms`, not `6.0 ms`, so
+  # the table does not mix `6.0` with the counts it renders beside them.
+  def plain: if . == floor then (floor | tostring) else tostring end;
   def rendered_budget:
-    if .comparison == "minimum" then "at least " + (.budget | tostring)
-    else (.budget | tostring) + " " + .unit
+    if .comparison == "minimum" then "at least " + (.budget | plain)
+    else (.budget | plain) + " " + .unit
     end;
   def rendered_actual:
-    (.actual | tostring) +
+    (.actual | plain) +
     (if .unit == "count" then "" else " " + .unit end);
   "# Reproducible performance baseline\n",
   "Revision: `" + .revision + "`",
