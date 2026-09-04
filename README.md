@@ -3,6 +3,7 @@
 [![crates.io](https://img.shields.io/crates/v/lspf.svg)](https://crates.io/crates/lspf)
 [![docs.rs](https://docs.rs/lspf/badge.svg)](https://docs.rs/lspf)
 [![License: MIT OR Apache-2.0](https://img.shields.io/crates/l/lspf)](#license)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/meymchen/lspf)
 
 A Rust framework for building extensible LSP (Language Server Protocol) language servers.
 

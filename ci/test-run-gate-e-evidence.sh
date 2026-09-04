@@ -7,6 +7,14 @@ source ci/release-candidate-test-helpers.sh
 test_root="$(mktemp -d)"
 trap 'rm -rf "$test_root"' EXIT
 
+# `git commit-tree` refuses to write a commit without a committer identity, and
+# a CI runner has none configured. Supply one for this process so the fixture
+# does not depend on the machine's git configuration.
+export GIT_AUTHOR_NAME='Gate E fixture'
+export GIT_AUTHOR_EMAIL='gate-e@fixture.invalid'
+export GIT_COMMITTER_NAME='Gate E fixture'
+export GIT_COMMITTER_EMAIL='gate-e@fixture.invalid'
+
 # Gate E reconstructs its revision with `git archive`, so the fixture revision
 # must be a real commit object. Writing one from the working tree through a
 # throwaway index keeps the test on the sources being changed without touching
