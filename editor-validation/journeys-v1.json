@@ -73,8 +73,12 @@
   },
   "humanUxObservations": {
     "kind": "human",
-    "status": "pending",
-    "records": [],
+    "status": "recorded",
+    "evidence": "editor-validation/observations/2026-09-04.md",
+    "records": [
+      "2026-09-04 on Windows 11: Visual Studio Code 1.136.1, Neovim 0.12.5, Zed 1.18.0.",
+      "Per-editor journey observations and the revision they were taken against are archived in editor-validation/observations/2026-09-04.md."
+    ],
     "instructions": "Run editor-validation/run-human-journeys.sh to record editor version, duration, each journey observation, and any UX-only finding without copying automated assertions into this section."
   },
   "frameworkGaps": {

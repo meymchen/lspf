@@ -255,7 +255,9 @@ mkdir -p "$(dirname "$OUTPUT_PATH")"
   printf '# Human editor observations\n\n'
   printf -- '- Revision: `%s`\n' "$REVISION"
   printf -- '- Operating system: %s\n' "$OPERATING_SYSTEM"
-  printf -- '- Installed server: `%s`\n' "$SERVER_PATH"
+  # The worksheet is archived in a public repository, so record the repository
+  # relative path rather than the operator's home directory.
+  printf -- '- Installed server: `%s`\n' "${SERVER_PATH#"$REPO_ROOT/"}"
   printf -- '- Framework gap issues: %s\n\n' "${FRAMEWORK_GAPS:-None observed}"
   for editor in VSCODE NEOVIM ZED; do
     case "$editor" in

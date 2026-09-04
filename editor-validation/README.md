@@ -109,6 +109,12 @@ an automated assertion into a UX observation. If a run exposes a framework
 gap, open an issue first and add its URL to `frameworkGaps.tracked` in the JSON
 manifest.
 
+Finishing a run means archiving its worksheet under `observations/`, then
+setting `humanUxObservations.status` to `recorded` and pointing
+`humanUxObservations.evidence` at that file. The checker rejects `recorded`
+whenever the named worksheet is missing, because a release record that cites
+human evidence should link to something a later reader can open.
+
 The interactive wizard walks through all three editors and writes the record
 without mixing in automated assertions:
 
