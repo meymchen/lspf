@@ -3,9 +3,9 @@ import * as path from 'node:path';
 /**
  * Resolve the language server binary selected for this debug session.
  *
- * The binary is produced by `cargo build -p lspf-hello` and lands under
- * `target/debug/` as `lspf-hello` (`lspf-hello.exe` on Windows) — the workspace
- * member, not the old `target/debug/examples/hello` example path.
+ * By default the binary is produced by `cargo build -p lspf-markdown` and
+ * lands under `target/debug/` as `lspf-markdown` (`lspf-markdown.exe` on
+ * Windows).
  *
  * @param repoRoot Absolute path to the lspf repository root.
  * @param platform Platform used to select the executable suffix.
@@ -37,5 +37,5 @@ export function resolveServerBinary(
         );
     }
 
-    return path.join(repoRoot, 'target', 'debug', `lspf-hello${suffix}`);
+    return path.join(repoRoot, 'target', 'debug', `lspf-markdown${suffix}`);
 }

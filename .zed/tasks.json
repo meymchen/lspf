@@ -1,14 +1,14 @@
 [
   {
-    "label": "build lspf-hello",
+    "label": "build lspf-markdown",
     "command": "cargo",
-    "args": ["build", "-p", "lspf-hello"],
+    "args": ["build", "-p", "lspf-markdown"],
     "cwd": "$ZED_WORKTREE_ROOT"
   },
   {
-    "label": "test lspf-hello (quick)",
+    "label": "test lspf-markdown (quick)",
     "command": "cargo",
-    "args": ["test", "-p", "lspf-hello"],
+    "args": ["test", "-p", "lspf-markdown"],
     "cwd": "$ZED_WORKTREE_ROOT"
   },
   {

@@ -10,12 +10,14 @@ capability registration, work-done progress, partial-result reporting, and the
 escape hatches for custom methods. Nothing here is handwritten JSON — every
 helper takes native [`lspf::types`] parameters and returns native results, and
 every wire shape is pinned by a fixture under
-`crates/lspf/tests/fixtures`. Every example here
-compiles as a doctest against the shipped crate, and the complete journey —
-configuration lookup, workspace edit, a custom outgoing request, dynamic
-registration, every stable refresh, and cancellable progress — runs as a real
-server in [`crates/lspf-hello`](https://github.com/meymchen/lspf/blob/main/crates/lspf-hello/src/main.rs) with an
-end-to-end stdio test beside it.
+`crates/lspf/tests/fixtures`. Every example here compiles as a doctest against
+the shipped crate. The complete journey — configuration lookup, workspace
+edit, custom outgoing requests, dynamic registration, every stable refresh,
+disconnect handling, and cancellable progress — is covered at the public
+interface by
+[`outgoing_requests.rs`](https://github.com/meymchen/lspf/blob/main/crates/lspf/tests/outgoing_requests.rs)
+and
+[`progress.rs`](https://github.com/meymchen/lspf/blob/main/crates/lspf/tests/progress.rs).
 
 ## Notifications
 

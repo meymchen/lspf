@@ -9,7 +9,6 @@ test('the installed reference server activates for Markdown documents', () => {
         name: 'lspf Markdown',
         language: 'markdown',
         outputChannel: 'lspf-markdown',
-        commandOutput: undefined,
     });
 });
 
@@ -21,23 +20,20 @@ test('each transport example gets its own channel and no command journey', () =>
         name: 'lspf TCP example',
         language: 'plaintext',
         outputChannel: 'lspf native_tcp',
-        commandOutput: undefined,
     });
     assert.deepEqual(serverProfile('C:/repo/target/debug/examples/native_websocket.exe'), {
         id: 'lspf-transport',
         name: 'lspf WebSocket example',
         language: 'plaintext',
         outputChannel: 'lspf native_websocket',
-        commandOutput: undefined,
     });
 });
 
-test('the default development server retains its plaintext command journey', () => {
-    assert.deepEqual(serverProfile('/repo/target/debug/lspf-hello'), {
-        id: 'lspf-hello',
-        name: 'lspf hello',
+test('a stdio example gets a plaintext profile', () => {
+    assert.deepEqual(serverProfile('/repo/target/debug/examples/hover'), {
+        id: 'lspf-example',
+        name: 'lspf hover example',
         language: 'plaintext',
-        outputChannel: 'lspf-hello',
-        commandOutput: 'lspf-hello commands',
+        outputChannel: 'lspf hover',
     });
 });

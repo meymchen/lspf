@@ -4,9 +4,9 @@ import * as path from 'node:path';
 
 import { resolveServerBinary } from '../src/serverPath.ts';
 
-test('resolves the lspf-hello workspace binary under target/debug on Unix', () => {
+test('resolves the Markdown reference server under target/debug on Unix', () => {
     const binary = resolveServerBinary('/repo', 'linux');
-    assert.equal(binary, path.join('/repo', 'target', 'debug', 'lspf-hello'));
+    assert.equal(binary, path.join('/repo', 'target', 'debug', 'lspf-markdown'));
 });
 
 test('resolves the packaged Markdown reference server selected by the journey', () => {
@@ -26,7 +26,7 @@ test('accepts an explicit installed Markdown server path', () => {
 
 test('uses the executable suffix on Windows', () => {
     const binary = resolveServerBinary('C:\\repo', 'win32');
-    assert.equal(path.basename(binary), 'lspf-hello.exe');
+    assert.equal(path.basename(binary), 'lspf-markdown.exe');
 });
 
 test('resolves a selected Cargo example binary', () => {
@@ -42,15 +42,7 @@ test('resolves a selected Cargo example binary', () => {
 
 test('rejects example names that could escape the Cargo examples directory', () => {
     assert.throws(
-        () => resolveServerBinary('/repo', 'linux', '../lspf-hello'),
+        () => resolveServerBinary('/repo', 'linux', '../hover'),
         /invalid LSPF_TEST_EXAMPLE/,
-    );
-});
-
-test('no longer points at the legacy examples/hello path', () => {
-    const binary = resolveServerBinary('/repo');
-    assert.ok(
-        !binary.includes(path.join('examples', 'hello')),
-        `expected the workspace binary, got the old example path: ${binary}`,
     );
 });

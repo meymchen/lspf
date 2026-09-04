@@ -1,10 +1,8 @@
 //! The log format every example server installs.
 //!
 //! An example is launched by an editor as often as by a shell, so it honours
-//! the same `LSPF_LOG_FORMAT` switch `lspf-hello` does: `json` writes one
-//! machine-readable event per line, anything else writes the compact text
-//! below. The two crates cannot share a module, so this file and
-//! `crates/lspf-hello/src/log_format.rs` are kept identical by hand.
+//! `LSPF_LOG_FORMAT`: `json` writes one machine-readable event per line, and
+//! any other value writes the compact text below.
 
 use std::fmt;
 use std::time::Instant;

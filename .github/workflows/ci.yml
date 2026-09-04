@@ -335,8 +335,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup-rust
-      - name: Initialize, typed request, shutdown, and exit
-        run: cargo test -p lspf-hello --test e2e -- --nocapture
+      - name: Exercise the packaged reference server over stdio
+        run: cargo test -p lspf-markdown --test packaged_editor_journey -- --nocapture
 
   wasm:
     name: wasm

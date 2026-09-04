@@ -6,7 +6,6 @@ import type {
     TransportKind,
 } from 'vscode-languageclient/node';
 
-import { serverCommandArguments } from './serverCommands.js';
 import { serverEnvironment } from './serverEnvironment.js';
 import { resolveServerBinary } from './serverPath.js';
 import { serverProfile } from './serverProfile.js';
@@ -18,7 +17,6 @@ import {
 } from './serverTransport.js';
 
 export interface ExtensionClient {
-    onRequest(method: string, handler: () => unknown): { dispose(): unknown };
     start(): Promise<void>;
     stop(): Thenable<void>;
 }
@@ -27,8 +25,6 @@ export interface ExtensionHost {
     readonly stdioTransport: TransportKind;
     createOutputChannel(name: string): OutputChannel;
     createFileSystemWatcher(glob: string): FileSystemWatcher;
-    activeDocumentUri(): string | undefined;
-    showErrorMessage(message: string): Thenable<unknown>;
     createLanguageClient(
         id: string,
         name: string,
@@ -78,12 +74,6 @@ export async function activateClient(
         serverOptions = session.serverOptions;
     }
 
-    const commandOutput = profile.commandOutput
-        ? host.createOutputChannel(profile.commandOutput)
-        : undefined;
-    if (commandOutput) {
-        context.subscriptions.push(commandOutput);
-    }
     const clientOptions: LanguageClientOptions = {
         documentSelector: [{ scheme: 'file', language: profile.language }],
         // Hand the client the channel the server's own output already goes to,
@@ -94,31 +84,6 @@ export async function activateClient(
         synchronize: {
             fileEvents: host.createFileSystemWatcher('**/*'),
         },
-        middleware: {
-            async executeCommand(command, args, next) {
-                if (!commandOutput) {
-                    return next(command, args);
-                }
-                try {
-                    const result = await next(
-                        command,
-                        serverCommandArguments(
-                            command,
-                            args,
-                            host.activeDocumentUri(),
-                        ),
-                    );
-                    const rendered = JSON.stringify(result, null, 2) ?? String(result);
-                    commandOutput.appendLine(`${command}\n${rendered}`);
-                    commandOutput.show(true);
-                    return result;
-                } catch (error) {
-                    const message = error instanceof Error ? error.message : String(error);
-                    await host.showErrorMessage(`lspf hello: ${message}`);
-                    return undefined;
-                }
-            },
-        },
     };
 
     const client = host.createLanguageClient(
@@ -127,11 +92,6 @@ export async function activateClient(
         serverOptions,
         clientOptions,
     );
-    if (profile.id === 'lspf-hello') {
-        context.subscriptions.push(
-            client.onRequest('lspf-hello/ping', () => 'pong'),
-        );
-    }
     await client.start();
     return client;
 }

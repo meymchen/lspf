@@ -1,7 +1,7 @@
 {
   "name": "lspf-test-client",
   "displayName": "lspf test client",
-  "description": "Spawns the lspf-hello binary as a language server for manual smoke testing.",
+  "description": "Runs lspf reference servers and examples through VS Code's language client.",
   "version": "0.1.0",
   "publisher": "lspf",
   "private": true,
@@ -14,30 +14,6 @@
     "onLanguage:plaintext",
     "onLanguage:markdown"
   ],
-  "contributes": {
-    "commands": [
-      {
-        "command": "lspf-hello.workspaceRoots",
-        "title": "Show Workspace Roots",
-        "category": "lspf hello"
-      },
-      {
-        "command": "lspf-hello.readFile",
-        "title": "Read Active File",
-        "category": "lspf hello"
-      },
-      {
-        "command": "lspf-hello.outgoingJourney",
-        "title": "Run Outgoing Helper Journey",
-        "category": "lspf hello"
-      },
-      {
-        "command": "lspf-hello.cancellableProgress",
-        "title": "Run Cancellable Progress",
-        "category": "lspf hello"
-      }
-    ]
-  },
   "scripts": {
     "prepare:debug": "node scripts/ensureDependencies.mts",
     "compile": "tsc -p ./",
