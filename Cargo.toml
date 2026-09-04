@@ -3,7 +3,7 @@ members = ["crates/lspf", "crates/lspf-hello", "crates/lspf-markdown"]
 resolver = "3"
 
 [workspace.package]
-version = "0.11.0"
+version = "1.0.0"
 edition = "2024"
 rust-version = "1.98"
 authors = ["Yuming Chen"]
@@ -13,7 +13,7 @@ repository = "https://github.com/meymchen/lspf"
 [workspace.dependencies]
 # Workspace consumers opt into exactly the stdio transport instead of
 # inheriting the crate's defaults, so no-default feature checks stay honest.
-lspf = { path = "crates/lspf", version = "0.11.0", default-features = false, features = ["stdio"] }
+lspf = { path = "crates/lspf", version = "1.0.0", default-features = false, features = ["stdio"] }
 bytes = "1"
 # The kernel's target-agnostic mpsc and oneshot channels (ADR 0020); they
 # compile on wasm32 without a Tokio runtime.

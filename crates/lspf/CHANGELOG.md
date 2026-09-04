@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0](https://github.com/meymchen/lspf/compare/v0.11.0...v1.0.0) - 2026-09-04
+
+### Added
+
+- Drive the socket transports from the VS Code test client ([#304](https://github.com/meymchen/lspf/pull/304))
+- [**breaking**] Freeze the 1.0 public interface ([#190](https://github.com/meymchen/lspf/pull/190)) ([#301](https://github.com/meymchen/lspf/pull/301))
+
+  Remove ServerBuilder::outbound_warning_threshold; configure max_outbound_messages through ServerBuilder::resource_policy instead.
+- *(soak)* Exercise notebooks and partial results ([#255](https://github.com/meymchen/lspf/pull/255)) ([#295](https://github.com/meymchen/lspf/pull/295))
+- Meter notebooks in resource policy ([#293](https://github.com/meymchen/lspf/pull/293))
+- Advertise notebook document sync capability ([#252](https://github.com/meymchen/lspf/pull/252)) ([#292](https://github.com/meymchen/lspf/pull/292))
+- Synchronise notebooks across the four lifecycle notifications ([#291](https://github.com/meymchen/lspf/pull/291))
+- Expose read-only notebook state views ([#250](https://github.com/meymchen/lspf/pull/250)) ([#290](https://github.com/meymchen/lspf/pull/290))
+- Stream partial results through outbound budget ([#288](https://github.com/meymchen/lspf/pull/288))
+- [**breaking**] Adopt client progress tokens and reserved errors ([#287](https://github.com/meymchen/lspf/pull/287))
+
+  LspError gains RequestFailed and ServerCancelled variants. Exhaustive matches must handle both.
+- *(client)* Stabilize LSP 3.18 refresh requests ([#283](https://github.com/meymchen/lspf/pull/283))
+
+### Changed
+
+- Baseline notebooks and partial results ([#296](https://github.com/meymchen/lspf/pull/296))
+- [**breaking**] Remove proposed feature ([#285](https://github.com/meymchen/lspf/pull/285))
+
+  * refactor!: remove proposed feature ([#245](https://github.com/meymchen/lspf/pull/245))
+
+  The proposed Cargo feature and lspf::proposed aliases are removed. Use the stable refresh request types from lspf::types and the stable ClientHandle refresh helpers instead.
+
+  * refactor(ci): centralize native feature commands
+
+  * fix(docs): separate tables from following prose
+
+### Fixed
+
+- Gate notebook sync on its advertised capability ([#300](https://github.com/meymchen/lspf/pull/300))
+
+### Other
+
+- Validate and publish the verified 1.0 candidate ([#305](https://github.com/meymchen/lspf/pull/305))
+- Complete adoption and operations guidance ([#302](https://github.com/meymchen/lspf/pull/302))
+- Document the 3.18 surface across README, guides, and changelog ([#260](https://github.com/meymchen/lspf/pull/260)) ([#299](https://github.com/meymchen/lspf/pull/299))
+- Declare LSP 3.18 boundary and audit API ([#258](https://github.com/meymchen/lspf/pull/258)) ([#259](https://github.com/meymchen/lspf/pull/259)) ([#298](https://github.com/meymchen/lspf/pull/298))
+- Fuzz notebook cell structural changes ([#294](https://github.com/meymchen/lspf/pull/294))
+- Verify LSP 3.18 type widenings ([#246](https://github.com/meymchen/lspf/pull/246)) ([#286](https://github.com/meymchen/lspf/pull/286))
+
 ## [0.11.0](https://github.com/meymchen/lspf/compare/v0.10.0...v0.11.0) - 2026-09-02
 
 ### Added
