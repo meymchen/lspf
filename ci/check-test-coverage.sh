@@ -9,7 +9,7 @@ source ci/test-coverage-cli.sh
 source ci/test-coverage-report.sh
 
 input_path=target/test-coverage/raw-summary.json
-baseline_path=ci/test-coverage-baseline.json
+baseline_path=ci/policy/test-coverage-baseline.json
 evidence_path=target/test-coverage/evidence.json
 summary_path=target/test-coverage/summary.json
 

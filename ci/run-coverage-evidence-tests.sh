@@ -8,7 +8,7 @@ source ci/test-coverage-schema.sh
 source ci/test-coverage-cli.sh
 source ci/test-coverage-report.sh
 
-baseline_path=ci/test-coverage-baseline.json
+baseline_path=ci/policy/test-coverage-baseline.json
 output_path=target/test-coverage/evidence.json
 
 usage() {

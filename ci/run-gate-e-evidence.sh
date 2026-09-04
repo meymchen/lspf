@@ -70,7 +70,7 @@ fi
 candidate_sha256="$(sha256sum "$candidate_crate" | awk '{print $1}')"
 # The register defaults to the revision-locked copy inside the reconstructed
 # worktree, so the gate reads the same disposition the release ships.
-blocker_register="${blocker_register:-$tree/ci/release-blockers-v1.json}"
+blocker_register="${blocker_register:-$tree/ci/policy/release-blockers-v1.json}"
 server_binary="$work/install/bin/lspf-markdown"
 if [[ ${OS:-} == Windows_NT ]]; then
     server_binary="$server_binary.exe"
@@ -252,7 +252,7 @@ jq -n \
       sources: [
         source("ci/run-gate-e-evidence.sh"),
         source("ci/check-release-blockers.sh"),
-        source("ci/release-blockers-v1.json"),
+        source("ci/policy/release-blockers-v1.json"),
         source("editor-validation/journeys-v1.json"),
         source("crates/lspf-markdown/tests/packaged_editor_journey.rs")
       ],
@@ -281,7 +281,7 @@ jq -n \
           ["release-blocker-register"])
       ],
       blockerRegister: {
-        source: source("ci/release-blockers-v1.json"),
+        source: source("ci/policy/release-blockers-v1.json"),
         result: run("release-blocker-register").result,
         recorded: ($register[0].blockers | length),
         acceptedFrameworkP0P1: [

@@ -44,7 +44,7 @@ bash ci/check-public-api.sh
 ```
 
 Copy the printed `approval candidate:` record into
-`ci/public-api-breaking-approvals.json` after reviewing the findings.
+`ci/policy/public-api-breaking-approvals.json` after reviewing the findings.
 
 ## Make a focused change
 

@@ -7,7 +7,7 @@ set -euo pipefail
 # being silently absorbed into a passing gate.
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-register="${1:-$repo_root/ci/release-blockers-v1.json}"
+register="${1:-$repo_root/ci/policy/release-blockers-v1.json}"
 editor_manifest="${2:-$repo_root/editor-validation/journeys-v1.json}"
 
 for file in "$register" "$editor_manifest"; do

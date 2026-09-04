@@ -26,7 +26,7 @@ jobs:
       # The npm license checks below parse the lockfile with jq and never reach
       # the network, so they need neither Node nor npm.
       - name: Test npm license policy diagnostics
-        run: bash ci/test-check-npm-licenses.sh
+        run: bash ci/tests/unit/check-npm-licenses.sh
       - name: Audit npm dependency licenses
         run: bash ci/check-npm-licenses.sh
       - name: Install the workflow policy YAML parser
@@ -35,50 +35,50 @@ jobs:
           version: v4.53.6
           force: true
       - name: Test workflow policy diagnostics
-        run: bash ci/test-check-workflow-security.sh
+        run: bash ci/tests/unit/check-workflow-security.sh
       - name: Test release artifact workflow contract
-        run: bash ci/test-release-artifacts-workflow.sh
+        run: bash ci/tests/workflow/release-artifacts.sh
       - name: Test release candidate preparation
-        run: bash ci/test-prepare-release-candidate.sh
+        run: bash ci/tests/unit/prepare-release-candidate.sh
       - name: Test release candidate verification
-        run: bash ci/test-check-release-candidate.sh
+        run: bash ci/tests/unit/check-release-candidate.sh
       - name: Test release blocker register diagnostics
-        run: bash ci/test-check-release-blockers.sh
+        run: bash ci/tests/unit/check-release-blockers.sh
       - name: Test Gate E candidate validation
-        run: bash ci/test-run-gate-e-evidence.sh
+        run: bash ci/tests/unit/run-gate-e-evidence.sh
       - name: Test the pre-publication repackaging comparison
-        run: bash ci/test-check-repackaged-candidate.sh
+        run: bash ci/tests/unit/check-repackaged-candidate.sh
       - name: Test release record preparation and verification
-        run: bash ci/test-prepare-release-record.sh
+        run: bash ci/tests/unit/prepare-release-record.sh
       - name: Test SonarCloud workflow contract
-        run: bash ci/test-sonarcloud-workflow.sh
+        run: bash ci/tests/workflow/sonarcloud.sh
       - name: Test CodeQL workflow contract
-        run: bash ci/test-codeql-workflow.sh
+        run: bash ci/tests/workflow/codeql.sh
       - name: Test Gate A evidence workflow contract
-        run: bash ci/test-gate-a-evidence-workflow.sh
+        run: bash ci/tests/workflow/gate-a-evidence.sh
       - name: Test Gate B evidence workflow contract
-        run: bash ci/test-gate-b-evidence-workflow.sh
+        run: bash ci/tests/workflow/gate-b-evidence.sh
       - name: Test Gate C evidence workflow contract
-        run: bash ci/test-gate-c-evidence-workflow.sh
+        run: bash ci/tests/workflow/gate-c-evidence.sh
       - name: Test Gate D evidence workflow contract
-        run: bash ci/test-gate-d-evidence-workflow.sh
+        run: bash ci/tests/workflow/gate-d-evidence.sh
       - name: Test Gate D evidence assembly
-        run: bash ci/test-run-gate-d-evidence.sh
+        run: bash ci/tests/unit/run-gate-d-evidence.sh
       - name: Test Gate E evidence workflow contract
-        run: bash ci/test-gate-e-evidence-workflow.sh
+        run: bash ci/tests/workflow/gate-e-evidence.sh
       - name: Test release publication workflow contract
-        run: bash ci/test-release-publication-workflow.sh
+        run: bash ci/tests/workflow/release-publication.sh
       - name: Test performance baseline workflow contract
-        run: bash ci/test-performance-baseline-workflow.sh
+        run: bash ci/tests/workflow/performance-baseline.sh
       - name: Test soak journey workflow contract
-        run: bash ci/test-soak-journey-workflow.sh
+        run: bash ci/tests/workflow/soak-journey.sh
       - name: Test CI pull-request fast-path contract
-        run: bash ci/test-ci-fast-path.sh
+        run: bash ci/tests/workflow/ci-fast-path.sh
       - name: Test CI change classification
-        run: bash ci/test-classify-ci-changes.sh
+        run: bash ci/tests/unit/classify-ci-changes.sh
       - name: Test release context detection
-        run: bash ci/test-detect-release-context.sh
+        run: bash ci/tests/unit/detect-release-context.sh
       - name: Test merge readiness aggregation
-        run: bash ci/test-check-merge-ready.sh
+        run: bash ci/tests/unit/check-merge-ready.sh
       - name: Enforce Action pins and minimal job permissions
         run: bash ci/check-workflow-security.sh

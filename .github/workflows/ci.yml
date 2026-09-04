@@ -108,7 +108,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Test commit message policy
-        run: bash ci/test-check-commit-messages.sh
+        run: bash ci/tests/unit/check-commit-messages.sh
       - name: Check pull request commit messages
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -131,7 +131,7 @@ jobs:
       # release-plz writes it. Its structure is still load-bearing for a
       # release, so it is checked here rather than left unchecked.
       - name: Test changelog policy
-        run: bash ci/test-check-changelog.sh
+        run: bash ci/tests/unit/check-changelog.sh
       - name: Check the changelog
         run: bash ci/check-changelog.sh
 
@@ -144,7 +144,7 @@ jobs:
     needs: release-context
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - run: bash ci/test-run-fuzz.sh
+      - run: bash ci/tests/unit/run-fuzz.sh
 
   fmt:
     name: fmt
@@ -199,7 +199,7 @@ jobs:
           targets: wasm32-unknown-unknown
           tools: cargo-semver-checks@0.50.0
       - name: Test compatibility gate behavior
-        run: bash ci/test-check-public-api.sh
+        run: bash ci/tests/unit/check-public-api.sh
       - name: Compare supported public API surfaces
         run: bash ci/check-public-api.sh
       - name: Upload machine-readable compatibility report
@@ -265,7 +265,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Test the interface freeze gate behavior
-        run: bash ci/test-check-public-interface.sh
+        run: bash ci/tests/unit/check-public-interface.sh
       - name: Compare the frozen inventory with the crate
         run: bash ci/check-public-interface.sh
 
@@ -301,7 +301,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup-rust
-      - run: bash ci/test-check-editor-validation.sh
+      - run: bash ci/tests/unit/check-editor-validation.sh
       - run: bash ci/native-feature-command.sh test-workspace
       - run: bash ci/native-feature-command.sh test-workspace-docs
       # The fuzz drivers' fast regressions. `fuzzing` is deliberately outside
@@ -378,7 +378,7 @@ jobs:
           components: llvm-tools-preview
           tools: cargo-llvm-cov@0.9.0
       - name: Test the test-coverage gate behavior
-        run: bash ci/test-check-test-coverage.sh
+        run: bash ci/tests/unit/check-test-coverage.sh
       - name: Exercise the whole workspace
         run: bash ci/native-feature-command.sh coverage-workspace
       - name: Generate human- and machine-readable reports
@@ -415,9 +415,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup-rust
       - name: Test performance benchmark contract
-        run: bash ci/test-performance-benchmark.sh
+        run: bash ci/tests/system/performance-benchmark.sh
       - name: Test performance regression gate behavior
-        run: bash ci/test-run-performance-baseline.sh
+        run: bash ci/tests/unit/run-performance-baseline.sh
       - name: Run revision-locked performance baseline
         run: >-
           bash ci/run-performance-baseline.sh
@@ -456,9 +456,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/setup-rust
       - name: Test soak runner contract
-        run: bash ci/test-run-soak-journeys.sh
+        run: bash ci/tests/unit/run-soak-journeys.sh
       - name: Test soak workload contract
-        run: bash ci/test-soak-journeys.sh
+        run: bash ci/tests/system/soak-journeys.sh
       - name: Select soak scenario
         env:
           SOAK_SCENARIO: ${{ matrix.scenario }}

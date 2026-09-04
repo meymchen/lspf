@@ -8,7 +8,7 @@ source ci/supported-feature-matrix.sh
 
 readonly CRATE_NAME=lspf
 readonly MANIFEST_PATH=crates/lspf/Cargo.toml
-readonly APPROVALS_PATH=ci/public-api-breaking-approvals.json
+readonly APPROVALS_PATH=ci/policy/public-api-breaking-approvals.json
 
 report_path=target/public-api-compatibility/report.json
 baseline_version=${LSPF_API_BASELINE_VERSION:-}

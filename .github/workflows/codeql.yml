@@ -9,7 +9,7 @@ name: CodeQL
 # consistency and summary queries then have to walk. Measured on the default
 # setup, resolving manifests took 51s of a 2m05s extraction while the repository's
 # own 55k lines took 3.5s. Excluding the two auxiliary workspaces is the change
-# that pays for this file existing; `ci/test-codeql-workflow.sh` holds it in place.
+# that pays for this file existing; `ci/tests/workflow/codeql.sh` holds it in place.
 on:
   push:
     branches: [main]
