@@ -130,13 +130,14 @@ impl Document {
             }
             PositionEncoding::Utf32 => {
                 let character = position.character as usize;
-                line_text
+                let line_content = line_text.trim_end_matches(['\r', '\n']);
+                line_content
                     .char_indices()
                     .nth(character)
                     .map(|(byte_idx, _)| line_start_byte + byte_idx)
                     .or_else(|| {
-                        (character == line_text.chars().count())
-                            .then_some(line_start_byte + line_text.len())
+                        (character == line_content.chars().count())
+                            .then_some(line_start_byte + line_content.len())
                     })
             }
         }
@@ -866,8 +867,8 @@ mod tests {
         let (docs, u) = opened("file:///unicode.txt", "héllo😋");
         docs.set_position_encoding(PositionEncoding::Utf32);
 
-        // 'l' starts at code-point offset 3 and the emoji at offset 5.
-        assert_eq!(docs.position_to_offset(&u, at(0, 3)), Some(3));
+        // The second 'l' starts at code-point offset 3 and the emoji at offset 5.
+        assert_eq!(docs.position_to_offset(&u, at(0, 3)), Some(4));
         assert_eq!(docs.position_to_offset(&u, at(0, 5)), Some(6));
         assert_eq!(docs.offset_to_position(&u, 6), Some(at(0, 5)));
         assert_eq!(docs.position_to_offset(&u, at(0, 6)), Some(10));
@@ -1001,6 +1002,11 @@ mod tests {
             assert_eq!(docs.position_to_offset(&u, at(1, 1)), Some(4));
             assert_eq!(docs.position_to_offset(&u, at(2, 0)), Some(5));
         }
+
+        docs.set_position_encoding(PositionEncoding::Utf32);
+        assert_eq!(docs.position_to_offset(&u, at(0, 2)), None);
+        assert_eq!(docs.position_to_offset(&u, at(0, 3)), None);
+        assert_eq!(docs.position_to_offset(&u, at(1, 2)), None);
     }
 
     #[test]
@@ -1160,16 +1166,13 @@ mod tests {
     }
 
     #[test]
-    fn negotiation_falls_back_to_utf16_for_utf16_only_and_unsupported_offers() {
-        for offered in [PositionEncodingKind::UTF16] {
-            let docs = Documents::new();
-            assert_eq!(
-                docs.negotiate_position_encoding(&offering(vec![offered.clone()])),
-                PositionEncodingKind::UTF16,
-                "offering only {offered:?} leaves the LSP-mandatory default"
-            );
-            assert_eq!(docs.position_encoding(), PositionEncoding::Utf16);
-        }
+    fn negotiation_keeps_utf16_for_a_utf16_only_offer() {
+        let docs = Documents::new();
+        assert_eq!(
+            docs.negotiate_position_encoding(&offering(vec![PositionEncodingKind::UTF16])),
+            PositionEncodingKind::UTF16
+        );
+        assert_eq!(docs.position_encoding(), PositionEncoding::Utf16);
     }
 
     #[test]
