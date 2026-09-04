@@ -12,7 +12,7 @@ job="$(jq -c '.jobs["gate-e-evidence"]' <<<"$ci_json")"
 
 jq -e '
   .name == "Gate E candidate validation evidence"
-  and .if == "${{ github.event_name == '\''push'\'' && needs.release-context.outputs.authorized == '\''true'\'' && needs.release-context.outputs.version == '\''1.0.0'\'' }}"
+  and .if == "${{ github.event_name == '\''push'\'' && needs.release-context.outputs.authorized == '\''true'\'' }}"
   and (.needs | sort) == ["release-candidate", "release-context"]
   and .["runs-on"] == "ubuntu-latest"
   and .permissions == {"actions": "read", "contents": "read"}

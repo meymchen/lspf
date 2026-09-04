@@ -70,6 +70,32 @@ do
     ' <<<"$ci_json" >/dev/null
 done
 
+# Every job on the release path is authorized by the merged release-plz pull
+# request, never by the version that request happens to carry. Pinning one of
+# them to a literal version retires it silently for every later release: the
+# jobs simply stop appearing, and `release-publish` stopping means nothing gets
+# published at all. Assert the shape rather than an exact string, because
+# `gate-d-candidate-evidence` legitimately adds `!cancelled()` so a failing fuzz
+# leg still reaches its evidence artifact.
+for job in gate-d-fuzz-matrix gate-d-fuzz-target gate-d-candidate-evidence \
+    release-candidate gate-e-evidence release-publish
+do
+    jq -e --arg job "$job" '
+      .jobs[$job].if as $condition
+      | ($condition | contains("github.event_name == '\''push'\''"))
+      and ($condition
+        | contains("needs.release-context.outputs.authorized == '\''true'\''"))
+      and ($condition | contains("needs.release-context.outputs.version") | not)
+      and (
+        if (.jobs[$job].needs | type) == "array" then
+          (.jobs[$job].needs | index("release-context")) != null
+        else
+          .jobs[$job].needs == "release-context"
+        end
+      )
+    ' <<<"$ci_json" >/dev/null
+done
+
 jq -e '
   .jobs["release-context"] as $job
   | $job.name == "release context"

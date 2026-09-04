@@ -24,7 +24,12 @@
       "gate-a-evidence": { "contents": "read" },
       "gate-b-evidence": { "contents": "read" },
       "gate-c-evidence": { "contents": "read" },
-      "gate-d-candidate-evidence": { "contents": "read" },
+      "gate-d-fuzz-matrix": { "contents": "read" },
+      "gate-d-fuzz-target": { "contents": "read" },
+      "gate-d-candidate-evidence": {
+        "actions": "read",
+        "contents": "read"
+      },
       "merge-ready": { "contents": "read" },
       "release-candidate": {
         "actions": "read",
