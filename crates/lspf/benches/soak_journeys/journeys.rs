@@ -5,7 +5,9 @@ use std::time::Duration;
 
 use lspf::types::notification::{Notification, WorkDoneProgressCancel};
 use lspf::types::request::Request;
-use lspf::types::{DocumentSymbolOptions, Uri};
+use lspf::types::{
+    DocumentSymbolOptions, NotebookDocumentFilterWithNotebook, NotebookDocumentSyncOptions, Uri,
+};
 use lspf::{Outcome, RawMessage, Server};
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
@@ -187,6 +189,12 @@ async fn notebook_journey(
 ) -> SoakResult<ScenarioMeasurement> {
     let server = Server::builder(context.counts().as_ref().clone())
         .resource_policy(workload.limits.policy())
+        // Notebook built-ins are reachable only once a server opts in
+        // (ADR 0034), so this journey advertises the capability it exercises.
+        .notebook_document_sync(NotebookDocumentSyncOptions::new(
+            vec![NotebookDocumentFilterWithNotebook::new("jupyter-notebook".into(), None).into()],
+            Some(true),
+        ))
         .request::<DocumentProbe, _, _>(document_probe)
         .build()?;
     let mut connection = ActiveConnection::start(server, Arc::clone(context.counts())).await?;

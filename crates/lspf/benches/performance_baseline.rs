@@ -13,7 +13,8 @@ use lspf::types::notification::Notification;
 use lspf::types::request::Request;
 use lspf::types::{
     DocumentSymbolOptions, DocumentSymbolParams, DocumentSymbolPartialResponse,
-    DocumentSymbolRequest, DocumentSymbolResponse, Uri,
+    DocumentSymbolRequest, DocumentSymbolResponse, NotebookDocumentFilterWithNotebook,
+    NotebookDocumentSyncOptions, Uri,
 };
 use lspf::{
     CancellationToken, ClientError, LspError, RawMessage, RequestId, ResourcePolicy, Server,
@@ -384,10 +385,23 @@ fn validate_manifest(manifest: &WorkloadManifest) -> BenchmarkResult<()> {
     Ok(())
 }
 
+/// The notebook sync capability this benchmark advertises.
+///
+/// Notebook built-ins are reachable only once a server opts in (ADR 0034), so
+/// a harness that measures notebook editing has to advertise the capability
+/// the same way a real server does.
+fn notebook_sync_options() -> NotebookDocumentSyncOptions {
+    NotebookDocumentSyncOptions::new(
+        vec![NotebookDocumentFilterWithNotebook::new("jupyter-notebook".into(), None).into()],
+        Some(true),
+    )
+}
+
 async fn measure_notebook_editing(
     workload: &NotebookEditingWorkload,
 ) -> BenchmarkResult<NotebookEditingMeasurement> {
     let server = Server::builder(())
+        .notebook_document_sync(notebook_sync_options())
         .request::<DocumentProbe, _, _>(document_probe)
         .build()?;
     let mut journey = ServerJourney::start(server).await?;
