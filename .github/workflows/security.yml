@@ -18,6 +18,13 @@ jobs:
         uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
         with:
           command: check advisories licenses
+      # Without this the npm steps below run on whatever npm the runner image
+      # happens to ship, which is how a registry-side rejection of
+      # `--package-lock-only` arrived without any dependency changing.
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: tools/vscode-test-client/.nvmrc
       - name: Audit npm dependency advisories
         run: npm audit --package-lock-only --audit-level=low --prefix tools/vscode-test-client
       - name: Test npm license policy diagnostics
