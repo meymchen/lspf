@@ -973,7 +973,9 @@ jobs:
           RELEASE_VERSION: ${{ needs.release-context.outputs.version }}
         run: |
           record="$RUNNER_TEMP/release-record"
-          archive="$RUNNER_TEMP/lspf-$RELEASE_VERSION-release-record.tar.gz"
+          # The release body links this asset by name, so take the name from the
+          # record that wrote the link instead of spelling it out a second time.
+          archive="$RUNNER_TEMP/$(jq -r '.recordArchive' "$record/release-record.json")"
           tar -czf "$archive" -C "$record" .
           gh release create "$RELEASE_TAG" \
             --target "$GITHUB_SHA" \

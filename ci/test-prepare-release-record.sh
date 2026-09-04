@@ -65,23 +65,34 @@ record="$test_root/record"
 bash ci/prepare-release-record.sh \
     "$revision" "$candidate" "$gate_e" "$published" "$record" >/dev/null
 
+docs_sha256="$(sha256sum "$candidate/lspf-1.0.0-docs.tar.gz" | awk '{print $1}')"
+
 jq -e \
     --arg revision "$revision" \
-    --arg sha256 "$candidate_sha256" '
-      .schemaVersion == 1
+    --arg sha256 "$candidate_sha256" \
+    --arg docs_sha256 "$docs_sha256" '
+      .schemaVersion == 2
       and .revision == $revision
       and .release == "lspf-1.0.0"
       and .tag == "v1.0.0"
+      and .recordArchive == "lspf-1.0.0-release-record.tar.gz"
       and ([.gates[].gate] == ["A", "B", "C", "D", "E"])
       and all(.gates[]; .result == "success")
       and .candidate.sha256 == $sha256
       and .publishedCrate.sha256 == $sha256
       and .publishedCrate.matchesCandidate == true
       and .publishedCrate.archive == "published/lspf-1.0.0.crate"
+      and .documentation == "https://docs.rs/lspf/1.0.0"
       and .archived.provenance == "candidate/provenance.jsonl"
       and .archived.sbom == "candidate/lspf-1.0.0.spdx.json"
       and .archived.sbomAttestation == "candidate/sbom-attestation.jsonl"
-      and .archived.documentation == "candidate/lspf-1.0.0-docs.tar.gz"
+      and (.archived | has("documentation") | not)
+      and .archived.omitted == [{
+        path: "candidate/lspf-1.0.0-docs.tar.gz",
+        sha256: $docs_sha256,
+        reason: "The rendered documentation is built and hosted from the published crate.",
+        url: "https://docs.rs/lspf/1.0.0"
+      }]
       and (.archived.changelogs | sort)
         == ["candidate/CHANGELOG.md", "candidate/lspf-CHANGELOG.md"]
       and (.archived.policies | index("policies/SECURITY.md")) != null
@@ -89,9 +100,24 @@ jq -e \
       and (.humanJudgments | length > 0)
     ' "$record/release-record.json" >/dev/null
 
+# The omitted artifact is gone, and the candidate's sealed list still names it.
+[[ ! -e $record/candidate/lspf-1.0.0-docs.tar.gz ]]
+grep -F 'lspf-1.0.0-docs.tar.gz' "$record/candidate/SHA256SUMS" >/dev/null
+
 grep -F 'Matches the validated candidate: **true**' "$record/release-record.md" \
     >/dev/null
-grep -F -- '- Gate E: `success`' "$record/release-record.md" >/dev/null
+grep -F -- '| E | `success` |' "$record/release-record.md" >/dev/null
+
+# This rendering doubles as the GitHub release body, where a relative link
+# resolves against the repository and lands on a path that does not exist there.
+# Every link it carries must be absolute.
+if grep -oE '\]\([^)]*\)' "$record/release-record.md" \
+    | grep -vE '^\]\(https://' >"$test_root/relative-links"
+then
+    echo 'test failure: the release record body carries a relative link' >&2
+    cat "$test_root/relative-links" >&2
+    exit 1
+fi
 
 bash ci/check-release-record.sh "$revision" "$record" >/dev/null
 echo 'Successful release record preparation and verification confirmed'
@@ -146,6 +172,45 @@ fi
 grep -F 'Gate E evidence is missing, malformed, failing, or names another revision' \
     "$test_root/failing.output" >/dev/null
 echo 'Failing Gate E rejection verified'
+
+# An omission is a promise the artifact is absent, not a licence to carry a
+# substituted one under the same name.
+restored="$test_root/restored-record"
+cp -R "$record" "$restored"
+printf 'not the documentation the candidate sealed\n' \
+    >"$restored/candidate/lspf-1.0.0-docs.tar.gz"
+if bash ci/check-release-record.sh "$revision" "$restored" \
+    >"$test_root/restored.output" 2>&1
+then
+    echo 'test failure: a substituted omitted artifact passed verification' >&2
+    exit 1
+fi
+grep -F 'declared omitted from the release record is present' \
+    "$test_root/restored.output" >/dev/null
+
+# A candidate artifact the sealed list names, absent and undeclared, must not
+# pass: an omission has to be stated, not merely happen.
+undeclared="$test_root/undeclared-record"
+cp -R "$record" "$undeclared"
+printf '%s  dropped-without-saying-so.json\n' \
+    0000000000000000000000000000000000000000000000000000000000000000 \
+    >>"$undeclared/candidate/SHA256SUMS"
+(
+    cd "$undeclared"
+    find . -type f ! -path ./SHA256SUMS -print0 \
+        | sort -z \
+        | xargs -0 sha256sum \
+        >SHA256SUMS
+)
+if bash ci/check-release-record.sh "$revision" "$undeclared" \
+    >"$test_root/undeclared.output" 2>&1
+then
+    echo 'test failure: an undeclared missing candidate artifact passed verification' >&2
+    exit 1
+fi
+grep -F 'absent from the release record and not declared omitted' \
+    "$test_root/undeclared.output" >/dev/null
+echo 'Release record omission accounting verified'
 
 # Tampering after assembly must be caught by the record's own hash list.
 printf 'appended after the record was sealed\n' \

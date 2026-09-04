@@ -271,10 +271,9 @@ second time.
 
 What survives the release is the release record: one archive holding the
 candidate bundle, the crate the registry served, provenance, the SBOM and its
-attestation, the documentation archive, both changelogs, the policies that were
-in force at the release revision, and Gate A through E evidence. Both hash
-lists are self-verifying, so a later reader can check the archive without
-trusting the job that produced it:
+attestation, both changelogs, the policies that were in force at the release
+revision, and Gate A through E evidence. Both hash lists are self-verifying, so
+a later reader can check the archive without trusting the job that produced it:
 
 ```bash
 gh run download RUN_ID \
@@ -283,6 +282,14 @@ gh run download RUN_ID \
 revision="$(jq -r .revision target/downloaded-release-record/release-record.json)"
 bash ci/check-release-record.sh "$revision" target/downloaded-release-record
 ```
+
+The candidate sealed its own hash list before the record chose what to carry,
+so that list can name an artifact the archive leaves out. The rendered
+documentation is the one such artifact: docs.rs builds and hosts it from the
+published crate. `release-record.json` declares each omission with the hash the
+candidate sealed, and verification rejects a record that drops a candidate
+artifact without declaring it, or that carries a different file under a name it
+declared omitted.
 
 The release record proves that the published crate is the validated candidate.
 It does not prove that publishing was the right decision; the maintainer
