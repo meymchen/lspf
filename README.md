@@ -5,26 +5,162 @@
 [![License: MIT OR Apache-2.0](https://img.shields.io/crates/l/lspf)](#license)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/meymchen/lspf)
 
-A Rust framework for building extensible LSP (Language Server Protocol) language servers.
+Build language capabilities in Rust for IDEs and AI agents.
+LSPF provides the Language Server Protocol runtime for both servers and clients.
 
-[Project documentation](https://lspf.dev) ·
-[简体中文文档](https://lspf.dev/zh-cn/)
+[Docs](https://lspf.dev) · [crates.io](https://crates.io/crates/lspf) ·
+[API](https://docs.rs/lspf) · [Examples](./crates/lspf/examples/README.md) ·
+[简体中文](https://lspf.dev/zh-cn/)
 
-`lspf` is **async-only** and designed so a developer can stand up a working
-language server in very little code. You register typed handlers on a
-`Server`, hand it to a transport, and the framework owns the protocol:
-lifecycle, document synchronization, cancellation, bounded concurrency,
-`tracing` spans, and typed server-to-client traffic through `ClientHandle`.
+- Complete stable LSP 3.18 feature catalog, with capabilities generated from registrations.
+- Framework-owned documents, workspace state, and position encoding negotiation.
+- Cancellation, bounded concurrency, and partial results.
+- stdio, TCP, WebSocket, WASM worker channels, and custom transports.
+- Typed Client calls and supervised language-server processes for IDE and Agent hosts.
 
-> **Status:** the current published release is **1.0.0**, with a frozen public
-> interface. It includes the complete stable LSP 3.18 inbound feature catalog,
-> UTF-8/UTF-32/UTF-16 position negotiation, notebook synchronization,
-> partial-result reporting, all seven workspace refresh requests, typed
-> Commands, and the multi-root `Workspace`. Native stdio, TCP, WebSocket, and
-> WASM worker-channel transports are available. See the
-> [package changelog](./crates/lspf/CHANGELOG.md) for release history.
+Try a working server: [run the Markdown demo in Neovim](./docs/editors/neovim.md),
+[VS Code](./docs/editors/vscode.md), or [Zed](./docs/editors/zed.md).
+To build your own, start with the example below.
+
+## Minimal example
+
+A hover handler that reads the document managed by LSPF. Save this as
+`src/main.rs` with the [dependencies below](#install), then run `cargo build`.
+
+```rust,no_run
+use std::sync::Arc;
+use lspf::types::{Hover, HoverContents, HoverParams, MarkupContent, MarkupKind};
+use lspf::{CancellationToken, LspError, Server, ServerContext};
+
+async fn hover(
+    _state: Arc<()>,
+    ctx: ServerContext,
+    params: HoverParams,
+    _cancel: CancellationToken,
+) -> Result<Option<Hover>, LspError> {
+    let uri = params.text_document_position_params.text_document.uri;
+    Ok(ctx.documents().get(&uri).map(|doc| Hover {
+        contents: HoverContents::MarkupContent(MarkupContent {
+            kind: MarkupKind::PlainText,
+            value: format!("{} words", doc.text().split_whitespace().count()),
+        }),
+        range: None,
+    }))
+}
+
+#[tokio::main]
+async fn main() -> lspf::Result<()> {
+    let server = Server::builder(())
+        .feature(lspf::features::hover(), hover)
+        .build()
+        .expect("valid registrations");
+    let outcome = lspf::stdio(server).serve().await?;
+    std::process::exit(outcome.code());
+}
+```
+
+Point your editor's LSP command at `target/debug/my-language-server`.
+Opening a document and hovering returns its word count; LSPF handles
+initialization, synchronization, and shutdown. The
+[server tutorial](https://lspf.dev/tutorials/server) adds diagnostics and commands.
+
+## See it work in 30 seconds
+
+![Neovim running lspf-markdown: a missing local link diagnostic, hover with the target heading, and go to definition](./docs/assets/lspf-markdown-demo.gif)
+
+`lspf-markdown` checks local Markdown links, shows their resolved targets on
+hover, and jumps to target headings. This is a real Neovim session using the
+in-tree server over stdio. [Replay or record the demo](./docs/demo.md).
+
+```bash
+git clone https://github.com/meymchen/lspf.git
+cd lspf
+cargo install --path crates/lspf-markdown --locked
+nvim --clean -u editor-validation/neovim/init.lua editor-validation/fixture/readme.md
+```
+
+Requires Rust 1.98+, Neovim 0.11+, and Cargo's bin directory on `PATH`.
+Compilation happens before the 30-second demo. Put the cursor inside
+`missing.md` to inspect the diagnostic, then inside `guide.md` for hover and
+definition. The [Neovim quick start](./docs/editors/neovim.md) includes explicit
+commands and a small configuration you can adapt to your own server.
+
+## Why LSPF?
+
+### Let the framework own the protocol runtime
+
+Register the language operations your application needs with
+`.feature(lspf::features::hover(), hover)` or
+`.feature(lspf::features::completion(options), complete)`, as in the
+[expanded example below](#quick-start).
+
+LSPF owns initialize, shutdown and exit, JSON-RPC dispatch, document
+synchronization, workspace state, and UTF-8/UTF-16/UTF-32 position negotiation.
+It also provides cancellation tokens, bounded concurrent dispatch,
+request-scoped partial results, typed server-to-client requests, and transport
+adapters. Handlers access this state through `ServerContext`.
+
+Documents are updated before document hooks run. Capabilities come from the
+same registrations that dispatch requests; conflicting registrations fail
+at build time. Your application owns parsing, indexing, analysis, and the
+policy for using those results.
+
+### Extend language capabilities for IDEs and agents
+
+A definition handler can power an editor's navigation action or an agent's
+source lookup through LSP. Diagnostics can appear in an editor or feed an
+automated edit-and-check loop. Implement the operation once in a server and
+expose it to hosts that speak the protocol.
+
+LSPF also supplies the Client endpoint. An IDE or Agent host can launch a
+language server as a supervised stdio child, receive diagnostics, and issue
+typed requests through `ServerHandle`:
+
+```rust,no_run
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let child = lspf::Client::builder(lspf::types::ClientCapabilities::default())
+        .spawn(tokio::process::Command::new("lspf-markdown"))
+        .await?;
+    let _server = child.server();
+    // Send document notifications and typed requests through `_server`.
+    // Keep `child` alive while the host uses the connection.
+    let output = child.shutdown().await?;
+    assert!(output.status().success());
+    Ok(())
+}
+```
+
+The [Client tutorial](https://lspf.dev/tutorials/client) is a runnable host that
+opens a document, receives diagnostics, requests hover, and executes a command.
+Use it as the starting point for an Agent's code tools. The host owns document
+contents and versions, tool schemas, model integration, and decisions about
+applying edits. LSPF supplies the typed protocol connection and process lifecycle.
+
+### Keep language logic independent of the host
+
+Use stdio for a local editor or Agent process, TCP or WebSocket for a native
+connection, or worker channels in a WASM host. The
+[transport examples](./crates/lspf/examples/README.md#transport-examples)
+reuse shared handlers. Custom `Transport` implementations can connect an
+embedded host or a test peer to the same protocol engine.
 
 ## Quick start
+
+Create a binary crate:
+
+```bash
+cargo new my-language-server
+cd my-language-server
+```
+
+Add the dependencies under [Install](#install), then paste the minimal example
+into `src/main.rs` and run `cargo build`. Launch the resulting executable
+through an LSP client; it waits for protocol messages on stdin. Write logs to
+stderr because stdout carries the protocol.
+
+The expanded example below adds completion, a workspace command, disk access,
+and tracing.
 
 ```rust,no_run
 use std::sync::Arc;
@@ -150,47 +286,32 @@ Runnable servers for individual LSP features are indexed in
 ```toml
 [dependencies]
 lspf = "1.0.0"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "process"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ```
 
-The crate requires Rust 1.98 or newer. The quickstart uses the default `stdio`
+The crate requires Rust 1.98 or newer. The minimal example needs only `lspf` and `tokio`; the expanded example also uses the tracing dependencies. Both examples use the default `stdio`
 feature; select a different feature set for another Transport.
 
-List every crate your application names directly. In this example, `tokio`,
-`tracing`, and `tracing-subscriber` are direct dependencies even though lspf
-also uses them internally.
+List every crate your application names directly. Tokio's `process` feature
+is included for the Client example. The expanded server uses
+`tracing-subscriber` to configure framework logs on stderr.
 
-## Why lspf
+## Editor quick starts
 
-- **Async-first.** The framework is `async fn` end to end; no `tower::Layer`
-  interop, no sync escape hatch.
-- **Smallest viable server.** Register your handlers on `Server::builder`,
-  hand the built `Server` to `lspf::stdio(...)`, and you have a working LSP
-  server.
-- **Framework-owned document state.** Incremental text changes are applied
-  to the concurrency-safe, rope-backed `Documents` the framework owns before
-  your hook runs; handlers read them through a `DocumentsView` that has no
-  mutation operation.
-- **A multi-root `Workspace`.** Client announcements — folders, root URI,
-  configuration, trace level — live in one cloneable handle, mutated only by
-  the protocol and read through `ServerContext`; unopened files resolve through a
-  configurable `FileProvider`.
-- **Capabilities that cannot drift.** `ServerCapabilities` are generated from
-  the same registrations that dispatch, so what the server advertises is what
-  it serves; conflicting registrations are build errors, never silent
-  last-write-wins.
-- **Safe concurrent dispatch.** Requests and notifications run with a
-  configurable concurrency limit (64 by default); `$/cancelRequest`
-  propagates through a `CancellationToken`.
-- **Protocol details handled for you.** Lifecycle ordering, JSON-RPC framing,
-  text synchronization, and UTF-8/UTF-32/UTF-16 position negotiation are built
-  in.
-- **First-party and custom transports.** `stdio`, single-client TCP,
-  single-client WebSocket, and WASM worker-channel adapters are provided;
-  implement the public `Transport` traits to embed lspf in tests or another
-  message channel.
+All three guides use the same `lspf-markdown` executable and fixture:
+
+- [Neovim](./docs/editors/neovim.md): built-in LSP, no plugin required.
+- [VS Code](./docs/editors/vscode.md): the bundled language-client extension.
+- [Zed](./docs/editors/zed.md): the bundled development extension.
+
+For a new server and VS Code extension, use the
+[`lspf-vscode-extension-template`](https://github.com/meymchen/lspf-vscode-extension-template).
+For individual protocol operations, browse the
+[runnable examples](./crates/lspf/examples/README.md).
+The [editor validation journeys](./editor-validation/README.md) record the
+shared protocol checks and editor observations.
 
 ## Concepts
 
@@ -239,6 +360,8 @@ See [`CONTRIBUTING.md`](./CONTRIBUTING.md) before changing these boundaries.
 
 ## Current scope
 
+See the [package changelog](./crates/lspf/CHANGELOG.md) for release history.
+
 The [support contract](./SECURITY.md) is authoritative for maintained Rust
 versions, hosts, targets, and Cargo feature combinations. The
 [operations guide](https://lspf.dev/guides/operations#known-limitations) records the
@@ -272,89 +395,6 @@ Available today:
 - Concurrent dispatch, bounded concurrency, request cancellation, and
   `tracing` spans.
 - Rope-backed documents with UTF-8/UTF-32/UTF-16 position negotiation.
-
-## Examples
-
-Transport-specific examples reuse one shared handler module, demonstrating
-that business logic does not fork between native and WASM hosts. See the
-[Transport guide](https://lspf.dev/guides/transports#buildable-examples-and-shared-handlers)
-for native TCP, native WebSocket, and browser/Node worker-channel build
-commands.
-
-Generate a new Rust language server plus VS Code extension from the dedicated
-template repository:
-
-```bash
-cargo generate --git https://github.com/meymchen/lspf-vscode-extension-template
-```
-
-You can also use GitHub's **Use this template** action or clone the repository
-directly. Keeping that starter outside this workspace lets it carry standalone
-project metadata, release automation, and editor packaging without coupling
-those choices to the framework repository.
-
-For a maintained, task-focused server rather than a template, install the
-first-party Markdown link server:
-
-```bash
-cargo install --path crates/lspf-markdown
-```
-
-The resulting `lspf-markdown` binary diagnoses missing local link targets after
-open and incremental edits, describes resolved targets on hover, and navigates
-definitions to the target document's first heading. Its public-Transport test
-journeys live in
-[`crates/lspf-markdown/tests/server_journey.rs`](./crates/lspf-markdown/tests/server_journey.rs).
-
-## Editor setup
-
-This repository is a Cargo workspace with two members:
-
-- [`crates/lspf`](./crates/lspf) — the framework library you depend on
-  (`lspf = "1.0.0"`).
-- [`crates/lspf-markdown`](./crates/lspf-markdown) — the installable
-  **reference server**. It builds the `lspf-markdown` stdio binary and applies
-  the framework's public document, workspace, feature, client, and testing
-  interfaces to real Markdown link behavior.
-
-Use [`lspf-vscode-extension-template`](https://github.com/meymchen/lspf-vscode-extension-template)
-to create a new project. Keep `lspf-markdown` for framework development and
-integration validation: unlike a starter, it implements one concrete domain
-and must keep working as `lspf` evolves.
-
-### Install the reference server
-
-```bash
-cargo install --path crates/lspf-markdown
-```
-
-This installs the `lspf-markdown` binary into Cargo's bin directory
-(`~/.cargo/bin` by default). Make sure that directory is on your `PATH` so
-your editor can launch the server by name.
-
-### Editor validation
-
-The bundled VS Code test client now launches `lspf-markdown` by default. The
-same installed binary is also exercised by the checked-in Neovim and Zed
-adapters. Follow [`editor-validation/README.md`](./editor-validation/README.md)
-for the reproducible three-editor journey, or use the VS Code tasks described
-in [`CONTRIBUTING.md`](./CONTRIBUTING.md#debug-a-server).
-
-### Troubleshooting
-
-- **`lspf-markdown` not found / "command not found".** The binary isn't on your
-  `PATH`. Confirm `which lspf-markdown` resolves; if not, add `~/.cargo/bin` to
-  your `PATH`, or use an absolute path in the editor configuration.
-- **The server doesn't start or an expected feature is unavailable.** Make
-  sure you ran `cargo install --path crates/lspf-markdown` after your latest
-  changes, and that your editor client routes Markdown files to this server.
-- **Edited the config but nothing changed.** Editors read LSP settings at
-  startup — reload the window after editing `settings.json` (VS Code:
-  *Developer: Reload Window*; Zed: reopen the workspace).
-- **A direct run appears stuck.** `lspf-markdown` and the framework examples
-  speak LSP over stdio. Use one of the VS Code client configurations to start
-  the process, then attach CodeLLDB from VS Code or Zed. Use the quick test
-  task for an automated check.
 
 ## Contributing
 

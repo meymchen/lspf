@@ -1,13 +1,13 @@
 ---
-title: lspf——专注语言能力，而非协议胶水代码
-description: 使用 Rust 构建类型安全、全异步的 LSP 服务器与客户端。
+title: lspf：立足 IDE，扩展至 Agent 的语言工具框架
+description: 用 Rust 为 IDE 构建语言服务器，再通过类型化 LSP 客户端将语言能力扩展到 Agent 工具。
 layout: home
 editLink: false
 lastUpdated: false
 hero:
   name: lspf
-  text: 专注语言能力，而非协议胶水代码。
-  tagline: 一个类型安全、全异步的 Rust 框架，负责 LSP 生命周期、文档、能力声明、取消机制与传输层，让你专注于语言功能。
+  text: 立足 IDE，<br>扩展至 Agent。
+  tagline: 从编辑器每天依赖的语言功能出发。用类型化 Rust 服务器接入 IDE，再通过同一套语言服务器协议，将语言能力扩展到 Agent 工具。
   actions:
     - theme: brand
       text: 开始构建
@@ -16,19 +16,26 @@ hero:
       theme: alt
       link: https://github.com/meymchen/lspf
 features:
-  - icon: 🧩
-    title: 从处理器到协议线都类型安全
+  - title: 从处理器到协议线都类型安全
     details: 使用 Rust 类型注册协议功能。lspf 从同一份注册信息推导能力声明，让行为与元数据始终一致。
-  - icon: 📄
-    title: 内置协议状态管理
+  - title: 内置协议状态管理
     details: 通过处理器收到的上下文读取已同步文档、笔记本、工作区根目录、配置和客户端连接。
-  - icon: 🚀
-    title: 异步、有界、可取消
+  - title: 异步、有界、可取消
     details: 在有限资源策略下并发处理请求，并用取消令牌停止工作；API 从一开始就面向生产环境的资源所有权。
-  - icon: 🔌
-    title: 选择合适的传输层
+  - title: 选择合适的传输层
     details: 可直接使用 stdio、TCP、WebSocket 或浏览器与 Node Worker；也可以实现公开的消息帧传输 trait。
 ---
+
+## 以 IDE 为基础，向 Agent 扩展
+
+从 IDE 开始：在 lspf 服务器中实现悬停、补全、诊断等语言功能。框架负责 LSP 生命周期、文档同步、能力声明与取消，处理器负责语言分析。
+
+再通过 lspf 的类型化 `Client` 扩展这份基础：Agent 宿主可以连接语言服务器，复用它的 LSP 功能。工具选择、模型调用以及是否应用编辑的决策，仍由宿主应用负责。
+
+<!-- markdownlint-disable-next-line MD033 -->
+<ArchitectureFlow />
+
+[探索服务器架构](./concepts) · [构建客户端连接](./guides/client-adoption)
 
 ## 小而清晰的 API 边界
 

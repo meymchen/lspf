@@ -3,8 +3,34 @@ title: Core concepts
 description: Learn the ownership and dispatch model behind lspf.
 ---
 
+<!-- markdownlint-disable-next-line MD025 -->
+# Core concepts
+
 lspf draws a firm line between application state and per-connection protocol state.
 Understanding that boundary makes the rest of the API predictable.
+
+## Message paths and ownership
+
+<!-- markdownlint-disable-next-line MD033 -->
+<ArchitectureFlow />
+
+The protocol engine handles lifecycle, cancellation, and synchronized state.
+User Layers wrap user dispatch; they cannot intercept protocol-owned mutations.
+For document notifications, the engine applies the change first, then dispatches
+any registered post-mutation hook through the Service stack.
+
+The fixed stack runs from panic isolation to tracing, bounded concurrency, user
+Layers, and finally the Router service. The last registered user Layer is the
+outermost user Layer. The Router freezes during initialization, after static and
+initialize-conditional registrations have been combined.
+
+The connection's private protocol session owns request correlation, resource
+admission, deadlines, the outbound queue, and task cleanup. `ServerContext` exposes
+read views and typed handles; your `Arc<State>` holds application-owned data.
+
+These paths correspond to [`ProtocolEngine::dispatch`](https://github.com/meymchen/lspf/blob/main/crates/lspf/src/engine.rs),
+[`build_service_stack`](https://github.com/meymchen/lspf/blob/main/crates/lspf/src/service.rs),
+and the private [`ProtocolSession`](https://github.com/meymchen/lspf/blob/main/crates/lspf/src/session.rs).
 
 ## Server and handlers
 
@@ -52,6 +78,8 @@ document access together. A configurable `FileProvider` resolves unopened resour
 
 ## Concurrency and cancellation
 
-Requests and notifications run concurrently under a finite resource policy. Incoming
-`$/cancelRequest` messages signal the request's `CancellationToken`; dropping a future
-also stops async work naturally. Keep blocking work separately bounded.
+User request and notification handlers run concurrently under a finite resource
+policy. Protocol-owned document mutations run in the read loop before their hooks.
+Incoming `$/cancelRequest` messages signal the request's `CancellationToken`.
+Cancellation can stop async work, but does not roll back side effects or stop
+already-started blocking tasks. Keep blocking work separately bounded.

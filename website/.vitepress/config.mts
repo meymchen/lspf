@@ -35,6 +35,7 @@ const englishSidebar: DefaultTheme.SidebarItem[] = [
       { text: 'Choose a transport', link: '/guides/transports' },
       { text: 'Stdio & custom transports', link: '/guides/stdio-and-custom-transports' },
       { text: 'Build an LSP client', link: '/guides/client-adoption' },
+      { text: 'Agents with LSP support', link: '/guides/agents' },
     ],
   },
   {
@@ -85,6 +86,7 @@ const chineseSidebar: DefaultTheme.SidebarItem[] = [
       { text: '选择传输层', link: '/zh-cn/guides/transports' },
       { text: 'Stdio 与自定义传输层', link: '/zh-cn/guides/stdio-and-custom-transports' },
       { text: '构建 LSP 客户端', link: '/zh-cn/guides/client-adoption' },
+      { text: '支持 LSP 的 Agent', link: '/zh-cn/guides/agents' },
     ],
   },
   {
@@ -159,7 +161,7 @@ const sharedThemeConfig: DefaultTheme.Config = {
 
 export default defineConfig({
   title: 'lspf',
-  description: 'A Rust framework for building extensible language servers.',
+  description: 'Language servers for IDEs and typed LSP clients for agent tools, built in Rust.',
   base: '/',
   srcDir: 'src/content/docs',
   srcExclude: ['_README.md'],
@@ -172,7 +174,7 @@ export default defineConfig({
   },
   head: [
     ['link', { rel: 'icon', href: '/favicon.svg', type: 'image/svg+xml' }],
-    ['meta', { name: 'theme-color', content: '#0b0f14' }],
+    ['meta', { name: 'theme-color', content: '#0c131c' }],
     ['meta', { property: 'og:type', content: 'website' }],
     ['meta', { property: 'og:site_name', content: 'lspf documentation' }],
   ],
@@ -180,6 +182,14 @@ export default defineConfig({
     root: {
       label: 'English',
       lang: 'en',
+      themeConfig: {
+        nav: [
+          { text: 'Architecture', link: '/concepts' },
+          { text: 'Guides', link: '/getting-started' },
+          { text: 'Examples', link: '/examples' },
+          { text: 'Agents', link: '/guides/agents' },
+        ],
+      },
     },
     'zh-cn': {
       label: '简体中文',
@@ -187,6 +197,12 @@ export default defineConfig({
       link: '/zh-cn/',
       themeConfig: {
         sidebar: chineseSidebar,
+        nav: [
+          { text: '架构', link: '/zh-cn/concepts' },
+          { text: '指南', link: '/zh-cn/getting-started' },
+          { text: '示例', link: '/zh-cn/examples' },
+          { text: 'Agent', link: '/zh-cn/guides/agents' },
+        ],
         editLink: { pattern: editPattern, text: '在 GitHub 上编辑此页' },
         lastUpdated: {
           text: '最后更新于',

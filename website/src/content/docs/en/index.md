@@ -1,13 +1,13 @@
 ---
-title: lspf — Language servers, without the protocol plumbing
-description: Build typed, async Language Server Protocol servers and clients in Rust.
+title: lspf — Language tooling for IDEs and agents
+description: Build language servers for IDEs in Rust, then extend LSP language capabilities to agent tools with typed clients.
 layout: home
 editLink: false
 lastUpdated: false
 hero:
   name: lspf
-  text: Language servers, without the protocol plumbing.
-  tagline: A typed, async Rust framework that owns the LSP lifecycle, documents, capabilities, cancellation, and transport — so you can focus on language features.
+  text: Built for IDEs.<br>Extended to agents.
+  tagline: Build the language features your editor depends on. Use typed Rust servers for IDE integration, then connect agent tools through the same Language Server Protocol.
   actions:
     - theme: brand
       text: Start building
@@ -16,19 +16,31 @@ hero:
       theme: alt
       link: https://github.com/meymchen/lspf
 features:
-  - icon: 🧩
-    title: Typed from handler to wire
+  - title: Typed from handler to wire
     details: Register protocol features with their Rust types. lspf derives advertised capabilities from those same registrations, keeping behavior and metadata aligned.
-  - icon: 📄
-    title: Protocol state included
+  - title: Protocol state included
     details: Read synchronized documents, notebooks, workspace roots, configuration, and the client connection through the context supplied to each handler.
-  - icon: 🚀
-    title: Async, bounded, cancellable
+  - title: Async, bounded, cancellable
     details: Serve concurrent requests with finite resource policies and cancellation tokens, using an async-first API designed for production ownership.
-  - icon: 🔌
-    title: Bring the right transport
+  - title: Bring the right transport
     details: Start with stdio, TCP, WebSocket, or browser and Node workers. Implement the public message-framed transport traits when your host needs something else.
 ---
+
+## IDE foundations, with room for agents
+
+Start with the IDE: implement hover, completion, diagnostics, and other language
+features in a lspf server. The framework manages the LSP lifecycle, synchronized
+documents, capability advertisement, and cancellation while your handlers supply
+language analysis.
+
+Extend that foundation with lspf's typed `Client`: an agent host can connect to a
+language server and reuse its LSP features. Tool selection, model calls, and decisions
+about applying edits remain in the host application.
+
+<!-- markdownlint-disable-next-line MD033 -->
+<ArchitectureFlow />
+
+[Explore the server architecture](./concepts) · [Build a client connection](./guides/client-adoption)
 
 ## A small API with a clear boundary
 
