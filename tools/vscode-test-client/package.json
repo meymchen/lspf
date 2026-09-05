@@ -12,7 +12,8 @@
   "main": "./out/extension.js",
   "activationEvents": [
     "onLanguage:plaintext",
-    "onLanguage:markdown"
+    "onLanguage:markdown",
+    "onNotebook:jupyter-notebook"
   ],
   "scripts": {
     "prepare:debug": "node scripts/ensureDependencies.mts",

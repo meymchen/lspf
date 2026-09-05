@@ -147,6 +147,10 @@ name = "links"
 required-features = ["stdio"]
 
 [[example]]
+name = "notebooks"
+required-features = ["stdio"]
+
+[[example]]
 name = "publish_diagnostics"
 required-features = ["stdio"]
 

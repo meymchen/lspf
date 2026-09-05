@@ -1296,6 +1296,63 @@ async fn a_refused_change_restores_every_cell_it_had_already_edited() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_refused_change_restores_repeated_edits_to_the_same_cell() {
+    let seen: Log = Arc::default();
+    let server = observing_server_with_policy(
+        &seen,
+        ResourcePolicy {
+            max_document_bytes: 20,
+            ..ResourcePolicy::default()
+        },
+    );
+    let outbox = drive(
+        server,
+        vec![
+            initialize_request(1),
+            notebook_did_open(
+                1,
+                vec![CELL_ONE, CELL_TWO],
+                vec![(CELL_ONE, "one"), (CELL_TWO, "two")],
+            ),
+            notification(
+                "notebookDocument/didChange",
+                json!({
+                    "notebookDocument": { "uri": NOTEBOOK, "version": 2 },
+                    "change": { "cells": { "textContent": [
+                        {
+                            "document": { "uri": CELL_ONE, "version": 2 },
+                            "changes": [{ "text": "first" }]
+                        },
+                        {
+                            "document": { "uri": CELL_ONE, "version": 3 },
+                            "changes": [{ "text": "second" }]
+                        },
+                        {
+                            "document": { "uri": CELL_TWO, "version": 2 },
+                            "changes": [{ "text": "far beyond the budget" }]
+                        }
+                    ] } }
+                }),
+            ),
+            probe_request(2),
+        ],
+    )
+    .await;
+
+    let refused = probed(&outbox, 2);
+    assert_eq!(texts(&refused), [Some("one"), Some("two"), None]);
+    assert_eq!(refused.notebook.as_ref().map(|n| n.version), Some(1));
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec![Seen::Open {
+            cells: vec![CELL_ONE.to_string(), CELL_TWO.to_string()],
+            version: 1,
+        }],
+        "a rejected batch never reaches its hook"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_out_of_range_splice_reports_an_inbound_protocol_failure() {
     let failures = Arc::new(Mutex::new(Vec::<ConnectionFailure>::new()));
     let recorded = Arc::clone(&failures);

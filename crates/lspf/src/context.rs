@@ -179,8 +179,9 @@ mod tests {
 
     use futures_channel::mpsc::UnboundedReceiver;
     use gen_lsp_types::{
-        DocumentSymbolPartialResponse, DocumentSymbolRequest, InitializeParams, NotebookCell,
-        NotebookCellKind, NotebookDocument, ProgressToken, TextDocumentItem, Uri,
+        DidOpenNotebookDocumentParams, DocumentSymbolPartialResponse, DocumentSymbolRequest,
+        InitializeParams, NotebookCell, NotebookCellKind, NotebookDocument, ProgressToken,
+        TextDocumentItem, Uri,
     };
 
     use super::*;
@@ -203,7 +204,7 @@ mod tests {
     fn context_with_notebooks() -> (ServerContext, Documents, Notebooks) {
         let (out_tx, _out_rx) = OutboundQueue::bounded(usize::MAX, usize::MAX);
         let documents = Documents::new();
-        let notebooks = Notebooks::new();
+        let notebooks = Notebooks::new(documents.clone());
         let workspace = Workspace::from_params_with_notebooks(
             &InitializeParams::default(),
             documents.clone(),
@@ -265,16 +266,31 @@ mod tests {
         let notebook_uri = Uri::from_str("file:///analysis.ipynb").unwrap();
         let first_cell_uri = Uri::from_str("file:///analysis.ipynb#cell-1").unwrap();
         let second_cell_uri = Uri::from_str("file:///analysis.ipynb#cell-2").unwrap();
-        notebooks.open(NotebookDocument::new(
-            notebook_uri.clone(),
-            "jupyter-notebook".into(),
-            3,
-            None,
-            vec![
-                NotebookCell::new(NotebookCellKind::Markup, first_cell_uri.clone(), None, None),
-                NotebookCell::new(NotebookCellKind::Code, second_cell_uri.clone(), None, None),
-            ],
-        ));
+        notebooks
+            .open(DidOpenNotebookDocumentParams::new(
+                NotebookDocument::new(
+                    notebook_uri.clone(),
+                    "jupyter-notebook".into(),
+                    3,
+                    None,
+                    vec![
+                        NotebookCell::new(
+                            NotebookCellKind::Markup,
+                            first_cell_uri.clone(),
+                            None,
+                            None,
+                        ),
+                        NotebookCell::new(
+                            NotebookCellKind::Code,
+                            second_cell_uri.clone(),
+                            None,
+                            None,
+                        ),
+                    ],
+                ),
+                Vec::new(),
+            ))
+            .unwrap();
         let notebook = ctx
             .notebooks()
             .get(&notebook_uri)
@@ -300,18 +316,23 @@ mod tests {
         let notebook_uri = Uri::from_str("file:///analysis.ipynb").unwrap();
         let cell_uri = Uri::from_str("file:///analysis.ipynb#cell-1").unwrap();
         let unknown_uri = Uri::from_str("file:///other.ipynb#cell-1").unwrap();
-        notebooks.open(NotebookDocument::new(
-            notebook_uri.clone(),
-            "jupyter-notebook".into(),
-            3,
-            None,
-            vec![NotebookCell::new(
-                NotebookCellKind::Code,
-                cell_uri.clone(),
-                None,
-                None,
-            )],
-        ));
+        notebooks
+            .open(DidOpenNotebookDocumentParams::new(
+                NotebookDocument::new(
+                    notebook_uri.clone(),
+                    "jupyter-notebook".into(),
+                    3,
+                    None,
+                    vec![NotebookCell::new(
+                        NotebookCellKind::Code,
+                        cell_uri.clone(),
+                        None,
+                        None,
+                    )],
+                ),
+                Vec::new(),
+            ))
+            .unwrap();
         assert_eq!(
             ctx.notebooks()
                 .notebook_for_cell(&cell_uri)
@@ -324,29 +345,31 @@ mod tests {
 
     #[test]
     fn notebook_cell_text_is_read_through_the_documents_view() {
-        let (ctx, documents, notebooks) = context_with_notebooks();
+        let (ctx, _documents, notebooks) = context_with_notebooks();
         let notebook_uri = Uri::from_str("file:///analysis.ipynb").unwrap();
         let cell_uri = Uri::from_str("file:///analysis.ipynb#cell-1").unwrap();
-        notebooks.open(NotebookDocument::new(
-            notebook_uri.clone(),
-            "jupyter-notebook".into(),
-            3,
-            None,
-            vec![NotebookCell::new(
-                NotebookCellKind::Code,
-                cell_uri.clone(),
-                None,
-                None,
-            )],
-        ));
-        documents
-            .open(TextDocumentItem {
-                uri: cell_uri.clone(),
-                language_id: "python".into(),
-                version: 7,
-                text: "print('one text engine')".into(),
-            })
-            .expect("the default policy accepts the cell document");
+        notebooks
+            .open(DidOpenNotebookDocumentParams::new(
+                NotebookDocument::new(
+                    notebook_uri.clone(),
+                    "jupyter-notebook".into(),
+                    3,
+                    None,
+                    vec![NotebookCell::new(
+                        NotebookCellKind::Code,
+                        cell_uri.clone(),
+                        None,
+                        None,
+                    )],
+                ),
+                vec![TextDocumentItem {
+                    uri: cell_uri.clone(),
+                    language_id: "python".into(),
+                    version: 7,
+                    text: "print('one text engine')".into(),
+                }],
+            ))
+            .expect("the default policy accepts the notebook and cell Document");
         let notebook = ctx
             .notebooks()
             .get(&notebook_uri)

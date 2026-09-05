@@ -149,6 +149,13 @@ identity key keeps it (ADR 0035).
 _Avoid_: Cell document (it obscures the distinction between notebook metadata
 and the cell's [[Document]] text).
 
+**Notebook synchronization**:
+The protocol-owned process that keeps a [[Notebook]] and its cell
+[[Document]]s in step with notebook lifecycle notifications. A successful
+mutation precedes its user hook; a rejected mutation preserves the previously
+accepted state.
+_Avoid_: Notebook text engine (cell text belongs to [[Documents]]).
+
 **Workspace**:
 The cloneable handle to the connection's workspace state, exposed
 through [[ServerContext]] (ADR 0017). The Server protocol engine establishes it from
