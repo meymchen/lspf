@@ -78,5 +78,5 @@ node tools/lsp-transport-probe/main.mjs both
 
 `shared_server` serves the same handlers over stdio on native targets and also
 checks the runtime-only WASM path. `worker_channel` exports a server for a
-browser or Node Worker. The [Transport guide](https://meymchen.github.io/lspf/en/guides/transports/)
+browser or Node Worker. The [Transport guide](https://lspf.dev/guides/transports)
 contains the WASM build and host commands.

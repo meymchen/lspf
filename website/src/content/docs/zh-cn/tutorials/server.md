@@ -102,7 +102,7 @@ async fn main() -> lspf::Result<()> {
 
 ## 8．从终端驱动
 
-先构建服务器和[客户端教程](../client/)中的客户端，再把服务器可执行文件的绝对路径传给客户端：
+先构建服务器和[客户端教程](client)中的客户端，再把服务器可执行文件的绝对路径传给客户端：
 
 ```console
 cargo run -- /absolute/path/to/lspf-tutorial-server
@@ -116,7 +116,7 @@ cargo run -- /absolute/path/to/lspf-tutorial-server
 
 ## 下一步
 
-- [功能注册](../../guides/features-and-workspace/)介绍更多功能描述符；[工作区状态](../../guides/workspace-state/)介绍文档、笔记本和文件提供器。
-- [调用编辑器](../../guides/outgoing-client/)介绍诊断、配置、刷新和工作区编辑；[进度与自定义消息](../../guides/progress-and-custom-messages/)介绍长时间运行的工作和协议扩展。
-- [错误与取消](../../guides/errors-and-cancellation/)介绍可见错误、取消令牌和阻塞工作。
-- [资源与可观测性策略](../../guides/operations/)介绍资源预算和遥测；[部署与故障排查](../../guides/deployment-and-troubleshooting/)介绍关闭策略和进程拓扑。
+- [功能注册](../guides/features-and-workspace)介绍更多功能描述符；[工作区状态](../guides/workspace-state)介绍文档、笔记本和文件提供器。
+- [调用编辑器](../guides/outgoing-client)介绍诊断、配置、刷新和工作区编辑；[进度与自定义消息](../guides/progress-and-custom-messages)介绍长时间运行的工作和协议扩展。
+- [错误与取消](../guides/errors-and-cancellation)介绍可见错误、取消令牌和阻塞工作。
+- [资源与可观测性策略](../guides/operations)介绍资源预算和遥测；[部署与故障排查](../guides/deployment-and-troubleshooting)介绍关闭策略和进程拓扑。

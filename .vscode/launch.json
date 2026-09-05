@@ -47,6 +47,16 @@
       "preLaunchTask": "prepare VS Code LSP socket example"
     },
     {
+      "name": "Debug website (Firefox)",
+      "type": "firefox",
+      "request": "launch",
+      "reAttach": true,
+      "tmpDir": "${env:HOME}/snap/firefox/common",
+      "url": "http://127.0.0.1:5173/",
+      "webRoot": "${workspaceFolder}/website",
+      "preLaunchTask": "dev website"
+    },
+    {
       "name": "Attach to running LSP server/example",
       "type": "lldb",
       "request": "attach",

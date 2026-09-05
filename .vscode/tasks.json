@@ -111,6 +111,32 @@
       }
     },
     {
+      "label": "dev website",
+      "type": "npm",
+      "script": "dev",
+      "path": "website",
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "vitepress",
+        "pattern": {
+          "regexp": "^$"
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^\\s*>\\s+vitepress dev",
+          "endsPattern": "^\\s*➜\\s+Local:\\s+http://127\\.0\\.0\\.1:5173/\\s*$"
+        }
+      },
+      "presentation": {
+        "reveal": "silent",
+        "panel": "dedicated",
+        "group": "website"
+      },
+      "runOptions": {
+        "instanceLimit": 1
+      }
+    },
+    {
       "label": "prepare VS Code reference server",
       "dependsOrder": "sequence",
       "dependsOn": [

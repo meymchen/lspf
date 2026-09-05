@@ -74,13 +74,13 @@ for (const locale of locales) {
   }));
 
   for (const [path, source] of files) {
-    const sourceRoute = path.replace(/\.(?:md|mdx)$/, '');
-    const currentRoute = sourceRoute === 'index' ? '' : sourceRoute.replace(/\/index$/, '');
+    const sourceDirectory = posix.dirname(path);
     for (const match of source.matchAll(/\]\(([^\s)]+)(?:\s+"[^"]*")?\)/g)) {
       const destination = match[1];
       if (/^(?:[a-z][a-z+.-]*:|\/|#)/i.test(destination)) continue;
-      const target = posix.normalize(posix.join(currentRoute, destination.split('#')[0]))
+      const target = posix.normalize(posix.join(sourceDirectory, destination.split('#')[0]))
         .replace(/^\.\//, '')
+        .replace(/\.(?:md|mdx)$/, '')
         .replace(/\/$/, '');
       if (target && !routes.has(target)) {
         errors.push(`${path}: ${locale} local link has no page: ${destination}`);

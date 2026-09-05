@@ -7,8 +7,8 @@
 
 A Rust framework for building extensible LSP (Language Server Protocol) language servers.
 
-[Project documentation](https://meymchen.github.io/lspf/en/) ·
-[简体中文文档](https://meymchen.github.io/lspf/zh-cn/)
+[Project documentation](https://lspf.dev) ·
+[简体中文文档](https://lspf.dev/zh-cn/)
 
 `lspf` is **async-only** and designed so a developer can stand up a working
 language server in very little code. You register typed handlers on a
@@ -130,18 +130,18 @@ server and VS Code extension, start from
 The framework's public feature, workspace, client, and stdio seams are covered
 by the `crates/lspf` integration tests and the in-tree `lspf-markdown`
 reference server. The
-[feature registration](https://meymchen.github.io/lspf/en/guides/features-and-workspace/)
-and [workspace state](https://meymchen.github.io/lspf/en/guides/workspace-state/)
+[feature registration](https://lspf.dev/guides/features-and-workspace)
+and [workspace state](https://lspf.dev/guides/workspace-state)
 guides walk through each piece. To choose a Transport adapter, enable only
 its Cargo dependencies, or implement another message-framed channel, see
-[Choosing a Transport](https://meymchen.github.io/lspf/en/guides/transports/), then
-continue to [stdio and custom transports](https://meymchen.github.io/lspf/en/guides/stdio-and-custom-transports/)
+[Choosing a Transport](https://lspf.dev/guides/transports), then
+continue to [stdio and custom transports](https://lspf.dev/guides/stdio-and-custom-transports)
 when the host owns a child process or a custom message-framed channel.
 To build the same server one step at a time, start with the
-[Server tutorial](https://meymchen.github.io/lspf/en/tutorials/server/), then use the
-[Client tutorial](https://meymchen.github.io/lspf/en/tutorials/client/) to drive it as a supervised
+[Server tutorial](https://lspf.dev/tutorials/server), then use the
+[Client tutorial](https://lspf.dev/tutorials/client) to drive it as a supervised
 stdio child. For custom Client Transports and reverse handlers, follow the
-[Client adoption guide](https://meymchen.github.io/lspf/en/guides/client-adoption/).
+[Client adoption guide](https://lspf.dev/guides/client-adoption).
 Runnable servers for individual LSP features are indexed in
 [`crates/lspf/examples/README.md`](./crates/lspf/examples/README.md).
 
@@ -224,7 +224,7 @@ the docs.
 
 ## Architecture
 
-The [project documentation](https://meymchen.github.io/lspf/en/) covers
+The [project documentation](https://lspf.dev) covers
 features, transports, testing, operations, and both endpoint tutorials. The
 repository keeps the material needed to maintain those contracts:
 
@@ -241,7 +241,7 @@ See [`CONTRIBUTING.md`](./CONTRIBUTING.md) before changing these boundaries.
 
 The [support contract](./SECURITY.md) is authoritative for maintained Rust
 versions, hosts, targets, and Cargo feature combinations. The
-[operations guide](https://meymchen.github.io/lspf/en/guides/operations/#known-limitations) records the
+[operations guide](https://lspf.dev/guides/operations#known-limitations) records the
 deployment and application responsibilities that lspf deliberately leaves to
 its host.
 
@@ -277,7 +277,7 @@ Available today:
 
 Transport-specific examples reuse one shared handler module, demonstrating
 that business logic does not fork between native and WASM hosts. See the
-[Transport guide](https://meymchen.github.io/lspf/en/guides/transports/#buildable-examples-and-shared-handlers)
+[Transport guide](https://lspf.dev/guides/transports#buildable-examples-and-shared-handlers)
 for native TCP, native WebSocket, and browser/Node worker-channel build
 commands.
 

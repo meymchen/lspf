@@ -57,4 +57,4 @@ cargo check -p lspf --example native_websocket --no-default-features --features 
 node tools/lsp-transport-probe/main.mjs both
 ```
 
-[传输指南](../guides/transports/)介绍原生套接字以及浏览器或 Node Worker，其中包含构建和宿主命令。
+[传输指南](guides/transports)介绍原生套接字以及浏览器或 Node Worker，其中包含构建和宿主命令。

@@ -83,4 +83,4 @@ finishes.
 For API availability, use the [frozen public interface](https://github.com/meymchen/lspf/blob/main/docs/public-interface.md)
 and warning-free [docs.rs reference](https://docs.rs/lspf/latest/lspf/). For a
 reproducible protocol failure, start with the in-memory journeys in the
-[testing guide](../testing/).
+[testing guide](testing).

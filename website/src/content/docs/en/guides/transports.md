@@ -189,4 +189,4 @@ exit. The smoke command fails unless the Worker returns a successful
 The JavaScript host owns Worker creation and termination. The lspf adapter
 starts and closes only the supplied port.
 
-Continue with [Stdio and custom transports](../stdio-and-custom-transports/) for process ownership, framing rules, and embedded hosts.
+Continue with [Stdio and custom transports](stdio-and-custom-transports) for process ownership, framing rules, and embedded hosts.

@@ -1,8 +1,6 @@
 ---
 title: Getting started
 description: Install lspf and run your first typed stdio language server.
-sidebar:
-  order: 1
 ---
 
 `lspf` is an async Rust framework for implementing Language Server Protocol servers and
@@ -66,7 +64,7 @@ keep synchronized.
 
 ## Next steps
 
-- Follow [Build a language server](../tutorials/server/) for a complete server with
+- Follow [Build a language server](tutorials/server) for a complete server with
   document synchronization, diagnostics, and a command.
-- Read [Core concepts](../concepts/) for lspf's ownership model.
+- Read [Core concepts](concepts) for lspf's ownership model.
 - Browse the complete, versioned API on [docs.rs](https://docs.rs/lspf).

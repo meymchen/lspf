@@ -67,5 +67,5 @@ For an unattended check of both adapters, run:
 node tools/lsp-transport-probe/main.mjs both
 ```
 
-The [transport guide](../guides/transports/) covers native sockets and browser or Node
+The [transport guide](guides/transports) covers native sockets and browser or Node
 workers, including build and host commands.

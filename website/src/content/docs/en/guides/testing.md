@@ -60,7 +60,7 @@ runtime. Call `advance` after the message that arms the deadline has appeared
 at the scripted peer; the clock jump then makes the timeout deterministic.
 
 For process-boundary coverage, `ci/check-tutorials.sh` extracts the complete
-[Server](../../tutorials/server/) and [Client](../../tutorials/client/) tutorial
+[Server](../tutorials/server) and [Client](../tutorials/client) tutorial
 programs into separate Cargo projects, builds them against the packaged lspf
 crate, and runs the Client against the Server. Use an in-memory journey for
 precise protocol assertions and virtual time; keep at least one supervised

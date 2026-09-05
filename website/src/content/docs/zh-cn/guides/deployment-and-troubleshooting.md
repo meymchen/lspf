@@ -56,4 +56,4 @@ description: 选择进程拓扑、明确关闭所有权并诊断端点故障。
 | TCP 或 WebSocket 只能服务一个对端 | 这是第一方构建器的约定。请在应用自行管理的 accept 循环中创建端点。 |
 | WASM 构建选择了 stdio、TCP 或 WebSocket | 禁用默认功能，并为自定义 Transport 选择 `wasm`，或为 `MessagePort` 选择 `worker-channel`。 |
 
-确认 API 可用性时，请查阅[冻结的公共接口](https://github.com/meymchen/lspf/blob/main/docs/public-interface.md)和无警告的 [docs.rs 参考](https://docs.rs/lspf/latest/lspf/)。要复现协议故障，可以先使用[测试指南](../testing/)中的内存流程。
+确认 API 可用性时，请查阅[冻结的公共接口](https://github.com/meymchen/lspf/blob/main/docs/public-interface.md)和无警告的 [docs.rs 参考](https://docs.rs/lspf/latest/lspf/)。要复现协议故障，可以先使用[测试指南](testing)中的内存流程。

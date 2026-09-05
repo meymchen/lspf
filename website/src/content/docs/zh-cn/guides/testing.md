@@ -47,7 +47,7 @@ assert_eq!(traffic[1].direction(), WireDirection::EndpointToPeer);
 
 `VirtualClock::pause` 控制 lspf 为请求和处理器截止时间使用的同一个 Tokio 时钟。它必须在当前线程 Tokio 运行时内创建。先等待脚本对端收到会启动截止时间的消息，再调用 `advance`；时钟跳变会让超时测试保持确定性。
 
-需要覆盖进程边界时，`ci/check-tutorials.sh` 会把完整的[服务端](../../tutorials/server/)和[客户端](../../tutorials/client/)教程程序提取到两个独立 Cargo 项目中，以打包后的 lspf crate 构建它们，再让客户端实际驱动服务器。需要精确协议断言和虚拟时间时使用内存 journey；如果要验证进程启动、消息分帧、标准错误或进程回收，至少保留一条受监管的 stdio journey。
+需要覆盖进程边界时，`ci/check-tutorials.sh` 会把完整的[服务端](../tutorials/server)和[客户端](../tutorials/client)教程程序提取到两个独立 Cargo 项目中，以打包后的 lspf crate 构建它们，再让客户端实际驱动服务器。需要精确协议断言和虚拟时间时使用内存 journey；如果要验证进程启动、消息分帧、标准错误或进程回收，至少保留一条受监管的 stdio journey。
 
 ## 仓库并发模型
 

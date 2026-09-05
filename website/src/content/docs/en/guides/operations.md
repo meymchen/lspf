@@ -95,7 +95,7 @@ limit around expensive jobs. The inbound request budget prevents unbounded
 protocol admission; it does not limit the runtime's blocking pool, subprocesses,
 database connections, or memory held in application state.
 
-The [errors and cancellation guide](../errors-and-cancellation/) has a
+The [errors and cancellation guide](errors-and-cancellation) has a
 cancellation-aware blocking example.
 
 ## Emit useful, payload-free telemetry
@@ -160,4 +160,4 @@ The default tracing events have the same payload rule. Application events can
 still leak source text, paths, request arguments, or remote messages, so review
 those fields before sending logs to a shared backend.
 
-Continue with [Deploy and troubleshoot endpoints](../deployment-and-troubleshooting/) for process topology, shutdown, limitations, and failure diagnosis.
+Continue with [Deploy and troubleshoot endpoints](deployment-and-troubleshooting) for process topology, shutdown, limitations, and failure diagnosis.
