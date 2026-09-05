@@ -15,6 +15,11 @@ Configure an LSP client to launch `lspf-markdown` for the `markdown` language
 ID. HTTP and other remote links are left to their owning clients; relative,
 root-relative, and `file:` targets are resolved locally.
 
+To try it in an editor, follow the [Neovim quick start](../../docs/editors/neovim.md),
+[VS Code quick start](../../docs/editors/vscode.md), or
+[Zed quick start](../../docs/editors/zed.md). The
+[30-second demo](../../docs/demo.md) uses the same fixture in Neovim.
+
 The integration tests drive the real server through `lspf::testing`'s public
 in-memory Transport seam:
 

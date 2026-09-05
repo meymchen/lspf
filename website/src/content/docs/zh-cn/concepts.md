@@ -3,7 +3,23 @@ title: 核心概念
 description: 理解 lspf 的所有权与分发模型。
 ---
 
+<!-- markdownlint-disable-next-line MD025 -->
+# 核心概念
+
 lspf 在应用状态与单连接协议状态之间划出明确边界。理解这条边界后，其余 API 就会变得直观。
+
+## 消息路径与所有权
+
+<!-- markdownlint-disable-next-line MD033 -->
+<ArchitectureFlow />
+
+协议引擎处理生命周期、取消与状态同步。用户 Layer 包裹用户分发流程，不能拦截协议内建的状态变更。对于文档通知，引擎先应用变更，再通过 Service 栈调用已注册的变更后钩子。
+
+固定栈由外到内依次为 panic 隔离、tracing、有界并发、用户 Layer 和 Router service。最后注册的用户 Layer 位于最外侧用户位置。Router 在初始化期间合并静态注册与初始化条件注册后冻结。
+
+连接私有的协议会话负责请求关联、资源准入、截止时间、出站队列与任务清理。`ServerContext` 提供只读视图与类型化句柄；`Arc<State>` 保存应用拥有的数据。
+
+这些路径对应 [`ProtocolEngine::dispatch`](https://github.com/meymchen/lspf/blob/main/crates/lspf/src/engine.rs)、[`build_service_stack`](https://github.com/meymchen/lspf/blob/main/crates/lspf/src/service.rs) 和私有的 [`ProtocolSession`](https://github.com/meymchen/lspf/blob/main/crates/lspf/src/session.rs) 实现。
 
 ## Server 与处理器
 
@@ -42,4 +58,4 @@ Server::builder(state)
 
 ## 并发与取消
 
-请求和通知会在有限资源策略下并发运行。收到 `$/cancelRequest` 后，框架会触发该请求的 `CancellationToken`；丢弃 future 也会自然停止异步工作。阻塞任务仍应单独设置并发上限。
+用户请求和通知处理器会在有限资源策略下并发运行。协议内建的文档变更在读取循环中执行，先于对应钩子。收到 `$/cancelRequest` 后，框架会触发该请求的 `CancellationToken`。取消可以停止异步工作，但不会回滚副作用，也不会停止已经启动的阻塞任务。阻塞任务仍应单独设置并发上限。
