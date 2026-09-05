@@ -77,6 +77,7 @@ jq -e '
     .name == "Tag the release and attach the record"
     and (.run | contains("gh release create"))
     and (.run | contains("--target \"$GITHUB_SHA\""))
+    and (.run | contains("--notes-file \"$record/release-notes.md\""))
     and .env.RELEASE_TAG
       == "v${{ needs.release-context.outputs.version }}")
 ' <<<"$job" >/dev/null
