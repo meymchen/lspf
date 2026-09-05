@@ -203,10 +203,8 @@ jq -n \
       }
   ' >"$record/release-record.json"
 
-# This rendering is both the file inside the archive and the body of the GitHub
-# release. A release body resolves a relative link against the repository, where
-# none of these paths exist, so every link here is absolute and every path
-# *inside* the archive is written as code rather than as a link.
+# Keep the detailed verification record in the archive. The GitHub release uses
+# release-notes.md below to present the changes to users.
 jq -r '
   def blob: .sourceRepository + "/blob/" + .tag + "/";
   . as $record
@@ -269,6 +267,43 @@ jq -r '
     + (if (.status // "") == "" then "not recorded" else "`" + .status + "`" end)
     + ".")
 ' "$record/release-record.json" >"$record/release-record.md"
+
+# Read the changelog sealed with the candidate, not the working tree. Match the
+# version literally so prerelease versions and similar version prefixes cannot
+# select another release. Preserve migration paragraphs and nested lists.
+changelog="$record/candidate/$crate_name-CHANGELOG.md"
+awk -v version="$crate_version" '
+    { sub(/\r$/, "") }
+    /^## / {
+        if (selected) exit
+        selected = index($0, "## [" version "]") == 1
+        if (selected) {
+            heading = $0
+            next
+        }
+    }
+    selected {
+        body = body $0 "\n"
+        if ($0 ~ /[^[:space:]]/ && $0 !~ /^#/) has_changes = 1
+    }
+    END {
+        if (!has_changes) {
+            print "changelog has no changes for release " version > "/dev/stderr"
+            exit 1
+        }
+        sub(/^[[:space:]]+/, "", body)
+        sub(/[[:space:]]+$/, "", body)
+        print body
+        if (heading ~ /^## \[[^]]+\]\(https?:\/\//) {
+            sub(/^## \[[^]]+\]\(/, "", heading)
+            sub(/\).*/, "", heading)
+            print "\n[Full changes](" heading ")"
+        }
+    }
+' "$changelog" >"$record/release-notes.md"
+printf '\n[Documentation](%s) · [Full changelog](%s/crates/%s/CHANGELOG.md) · [Verification record](%s)\n' \
+    "$docs_url" "$tag_url" "$crate_name" "$archive_url" \
+    >>"$record/release-notes.md"
 
 (
     cd "$record"

@@ -980,7 +980,7 @@ jobs:
           gh release create "$RELEASE_TAG" \
             --target "$GITHUB_SHA" \
             --title "lspf $RELEASE_VERSION" \
-            --notes-file "$record/release-record.md" \
+            --notes-file "$record/release-notes.md" \
             "$archive"
 
   # A normal main push only needs enough policy validation to protect the

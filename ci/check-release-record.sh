@@ -67,7 +67,8 @@ done < <(jq -r '
       .archived.policies[],
       .gates[].evidence,
       "release-record.json",
-      "release-record.md"
+      "release-record.md",
+      "release-notes.md"
     ][]
   ' "$record")
 

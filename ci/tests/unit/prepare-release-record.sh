@@ -11,6 +11,29 @@ revision="$(git rev-parse HEAD)"
 candidate="$test_root/candidate"
 evidence="$test_root/candidate-evidence"
 create_release_candidate_fixture "$revision" "$candidate" "$evidence"
+cat >"$candidate/lspf-CHANGELOG.md" <<'MARKDOWN'
+# Changelog
+
+## [Unreleased]
+
+- A future change.
+
+## [1.0.0](https://github.com/meymchen/lspf/compare/v0.11.0...v1.0.0) - 2026-09-04
+
+### Added
+
+- Synchronise notebooks.
+
+### Changed
+
+- [**breaking**] Rename a helper.
+
+  Migration: use `new_helper` instead of `old_helper`.
+
+## [0.11.0]
+
+- An older change.
+MARKDOWN
 bash ci/prepare-release-candidate.sh "$revision" "$candidate" "$evidence" \
     >/dev/null
 printf '{"fixture":"provenance"}\n' >"$candidate/provenance.jsonl"
@@ -108,9 +131,7 @@ grep -F 'Matches the validated candidate: **true**' "$record/release-record.md" 
     >/dev/null
 grep -F -- '| E | `success` |' "$record/release-record.md" >/dev/null
 
-# This rendering doubles as the GitHub release body, where a relative link
-# resolves against the repository and lands on a path that does not exist there.
-# Every link it carries must be absolute.
+# Archive links remain usable when reading the record outside the repository.
 if grep -oE '\]\([^)]*\)' "$record/release-record.md" \
     | grep -vE '^\]\(https://' >"$test_root/relative-links"
 then
@@ -119,8 +140,44 @@ then
     exit 1
 fi
 
+notes="$record/release-notes.md"
+grep -Fx '### Added' "$notes" >/dev/null
+grep -Fx -- '- Synchronise notebooks.' "$notes" >/dev/null
+grep -Fx '  Migration: use `new_helper` instead of `old_helper`.' "$notes" >/dev/null
+grep -Fx '[Full changes](https://github.com/meymchen/lspf/compare/v0.11.0...v1.0.0)' "$notes" >/dev/null
+grep -F '[Verification record](https://github.com/meymchen/lspf/releases/download/v1.0.0/lspf-1.0.0-release-record.tar.gz)' "$notes" >/dev/null
+grep -F '[Documentation](https://docs.rs/lspf/1.0.0)' "$notes" >/dev/null
+if grep -E 'future change|older change|Gate evidence|Archived policies|sha256:' "$notes"; then
+    echo 'test failure: release notes contain unrelated changes or verification details' >&2
+    exit 1
+fi
+
 bash ci/check-release-record.sh "$revision" "$record" >/dev/null
 echo 'Successful release record preparation and verification confirmed'
+
+# A missing or empty version entry must not publish notes for a nearby version
+# or leave behind a record that the workflow could publish.
+for invalid in missing empty; do
+    invalid_candidate="$test_root/$invalid-candidate"
+    cp -R "$candidate" "$invalid_candidate"
+    {
+        if [[ $invalid == empty ]]; then
+            printf '## [1.0.0]\n\n### Changed\n\n'
+        fi
+        printf '## [1.0.01]\n\n- A different version.\n'
+    } >"$invalid_candidate/lspf-CHANGELOG.md"
+    if bash ci/prepare-release-record.sh \
+        "$revision" "$invalid_candidate" "$gate_e" "$published" \
+        "$test_root/$invalid-record" >"$test_root/$invalid.output" 2>&1
+    then
+        echo "test failure: $invalid changelog entry produced release notes" >&2
+        exit 1
+    fi
+    grep -F 'changelog has no changes for release 1.0.0' \
+        "$test_root/$invalid.output" >/dev/null
+    [[ ! -e $test_root/$invalid-record ]]
+done
+echo 'Missing and empty release changes rejected'
 
 # A registry artifact that is not the validated candidate must never be recorded.
 divergent="$test_root/divergent.crate"
