@@ -31,6 +31,23 @@
       "preLaunchTask": "prepare VS Code LSP example"
     },
     {
+      "name": "Run Notebook example client",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--disable-extensions",
+        "--extensionDevelopmentPath=${workspaceFolder}/tools/vscode-test-client",
+        "${workspaceFolder}/crates/lspf/examples/notebooks/demo.ipynb"
+      ],
+      "env": {
+        "LSPF_TEST_EXAMPLE": "notebooks"
+      },
+      "outFiles": [
+        "${workspaceFolder}/tools/vscode-test-client/out/**/*.js"
+      ],
+      "preLaunchTask": "prepare VS Code LSP example"
+    },
+    {
       "name": "Run LSP example client over a socket (select transport)",
       "type": "extensionHost",
       "request": "launch",
@@ -85,6 +102,7 @@
         "goto",
         "inlay_hints",
         "links",
+        "notebooks",
         "publish_diagnostics",
         "pull_diagnostics",
         "rename",

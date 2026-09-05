@@ -37,6 +37,14 @@ stdio example, and the picker chooses the binary placed under
 `target/debug/examples/`. Open a `.txt` file in the Extension Development Host
 to send it real editor requests.
 
+For Notebook synchronization, select `Run Notebook example client`. This builds
+the examples and opens `crates/lspf/examples/notebooks/demo.ipynb` in the
+Extension Development Host. The general example picker also offers `notebooks`;
+open an `.ipynb` file when using that entry. VS Code's built-in Notebook support
+opens the file, and the client selects its cells across languages. Hover over a
+code cell, edit or rearrange cells, and save. The `lspf notebooks` output channel
+records open, change, save, and close hooks; no kernel is required.
+
 For Rust breakpoints, leave that Extension Development Host running. In the
 repository window, start `Attach to running LSP server/example` and choose the
 process whose name matches the selected example. CodeLLDB then debugs the same

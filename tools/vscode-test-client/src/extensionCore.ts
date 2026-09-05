@@ -75,7 +75,11 @@ export async function activateClient(
     }
 
     const clientOptions: LanguageClientOptions = {
-        documentSelector: [{ scheme: 'file', language: profile.language }],
+        // Cell documents use vscode-notebook-cell URIs. A notebook selector
+        // reaches those cells in every language; a file selector excludes them.
+        documentSelector: profile.notebookType
+            ? [{ notebook: profile.notebookType }]
+            : [{ scheme: 'file', language: profile.language }],
         // Hand the client the channel the server's own output already goes to,
         // rather than letting it create a second one under the same name.
         ...(serverOutput

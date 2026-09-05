@@ -149,10 +149,11 @@ impl Workspace {
         file_provider: SharedFileProvider,
         trace: SharedTrace,
     ) -> Self {
+        let notebooks = Notebooks::new(documents.clone());
         Self::from_params_with_stores_and_provider(
             params,
             documents,
-            Notebooks::default(),
+            notebooks,
             file_provider,
             trace,
         )

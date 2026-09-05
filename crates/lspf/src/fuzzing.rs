@@ -57,7 +57,7 @@ impl NotebookSplice {
     /// Whether the notebook layer accepts this splice.
     ///
     /// This is the property the seed corpus names with its `valid-` and
-    /// `malformed-` prefixes, and it mirrors the bound `Notebooks::plan_change`
+    /// `malformed-` prefixes, and it mirrors the bound `Notebooks::change`
     /// applies: the end of the deleted range decides, because `start` cannot
     /// exceed it.
     pub fn is_in_range(&self) -> bool {
@@ -352,12 +352,15 @@ pub fn notebook_cell_sync(data: &[u8]) {
     let notebook_uri = Uri::from_str("file:///fuzz.ipynb").expect("static URI parses");
     let notebooks = crate::notebooks::Notebooks::default();
     notebooks
-        .try_open(NotebookDocument::new(
-            notebook_uri.clone(),
-            "fuzz-notebook".into(),
-            1,
-            None,
-            initial.clone(),
+        .open(gen_lsp_types::DidOpenNotebookDocumentParams::new(
+            NotebookDocument::new(
+                notebook_uri.clone(),
+                "fuzz-notebook".into(),
+                1,
+                None,
+                initial.clone(),
+            ),
+            Vec::new(),
         ))
         .expect("one notebook fits the default notebook budget");
     let params = DidChangeNotebookDocumentParams::new(
@@ -380,14 +383,14 @@ pub fn notebook_cell_sync(data: &[u8]) {
         ),
     );
 
-    let outcome = notebooks.plan_change(&params);
+    let outcome = notebooks.change(params);
     assert_eq!(
         outcome.is_ok(),
         splice.is_in_range(),
         "the notebook layer disagreed with NotebookSplice::is_in_range"
     );
 
-    let Ok(planned) = outcome else {
+    let Ok(()) = outcome else {
         let unchanged = notebooks
             .view()
             .get(&notebook_uri)
@@ -400,6 +403,12 @@ pub fn notebook_cell_sync(data: &[u8]) {
         return;
     };
 
+    let updated = notebooks
+        .view()
+        .get(&notebook_uri)
+        .expect("the changed notebook stays open");
+    assert_eq!(updated.version(), 2);
+
     // The splice was accepted, so both ends are inside the cell array and the
     // arithmetic below cannot itself overflow or invert.
     let start = splice.start as usize;
@@ -411,19 +420,13 @@ pub fn notebook_cell_sync(data: &[u8]) {
         .cloned()
         .collect();
     assert_eq!(
-        planned.cells(),
+        updated.cells(),
         expected,
         "the accepted splice did not replace exactly the deleted range"
     );
 
-    notebooks.commit(planned.clone());
-    assert_eq!(
-        notebooks.view().get(&notebook_uri).as_ref(),
-        Some(&planned),
-        "the committed notebook differs from the accepted plan"
-    );
     let view = notebooks.view();
-    for committed in planned.cells() {
+    for committed in updated.cells() {
         assert_eq!(
             view.notebook_for_cell(&committed.document)
                 .as_ref()
@@ -436,7 +439,7 @@ pub fn notebook_cell_sync(data: &[u8]) {
     // byte of the same ASCII template, so no two spellings can normalize
     // together and comparing the `Uri`s decides membership the same way.
     for dropped in &initial {
-        let survives = planned
+        let survives = updated
             .cells()
             .iter()
             .any(|kept| kept.document == dropped.document);

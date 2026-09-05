@@ -12,6 +12,21 @@ test('the installed reference server activates for Markdown documents', () => {
     });
 });
 
+for (const binary of [
+    '/repo/target/debug/examples/notebooks',
+    'C:/repo/target/debug/examples/notebooks.exe',
+]) {
+    test(`the Notebook profile selects Jupyter cells for ${binary}`, () => {
+        assert.deepEqual(serverProfile(binary), {
+            id: 'lspf-notebooks',
+            name: 'lspf Notebook example',
+            language: 'plaintext',
+            outputChannel: 'lspf notebooks',
+            notebookType: 'jupyter-notebook',
+        });
+    });
+}
+
 // The socket examples serve the shared handler set, which advertises no
 // command and no reverse request, so their profile must enable neither.
 test('each transport example gets its own channel and no command journey', () => {

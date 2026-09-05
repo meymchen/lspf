@@ -53,6 +53,7 @@ afterEach(() => {
     delete process.env.LSPF_TEST_SERVER;
     delete process.env.LSPF_MARKDOWN_SERVER;
     delete process.env.LSPF_TEST_TRANSPORT;
+    delete process.env.LSPF_TEST_EXAMPLE;
     clientCalls.length = 0;
     channelNames.length = 0;
     started = false;
@@ -98,6 +99,24 @@ test('uses the Markdown reference server by default', async () => {
     ]);
     assert.equal(clientCalls[0].clientOptions.outputChannelName, 'lspf-markdown');
     assert.deepEqual(subscriptions, []);
+});
+
+test('the Notebook example selects notebook cells without a file scheme restriction', async () => {
+    process.env.LSPF_TEST_EXAMPLE = 'notebooks';
+    const activateClient = await loadActivateClient();
+    await activateClient(
+        { extensionPath: '/repo/tools/vscode-test-client', subscriptions: [] } as never,
+        host,
+    );
+
+    assert.equal(clientCalls[0].id, 'lspf-notebooks');
+    assert.deepEqual(clientCalls[0].clientOptions.documentSelector, [
+        { notebook: 'jupyter-notebook' },
+    ]);
+    assert.equal(clientCalls[0].clientOptions.outputChannelName, 'lspf notebooks');
+    assert.ok('command' in clientCalls[0].serverOptions);
+    assert.match(clientCalls[0].serverOptions.command, /examples[/\\]notebooks(?:\.exe)?$/);
+    assert.equal(started, true);
 });
 
 // Over a socket the client owns no server process, so it pipes no stderr into

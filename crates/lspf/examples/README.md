@@ -14,6 +14,7 @@ interaction stays visible.
 | `hover` | `textDocument/hover` |
 | `inlay_hints` | `textDocument/inlayHint`, `inlayHint/resolve` |
 | `links` | `textDocument/documentLink`, `documentLink/resolve` |
+| `notebooks` | Notebook open, change, save, and close hooks; hover over synchronized cell text |
 | `publish_diagnostics` | push diagnostics from document open and change hooks |
 | `pull_diagnostics` | document and workspace diagnostic requests |
 | `rename` | `textDocument/prepareRename`, `textDocument/rename` |
@@ -48,6 +49,34 @@ route before initialization, then uses `client/registerCapability` and
 `client/unregisterCapability` to control whether the client sends requests to
 that route. Local routes cannot be added or removed after initialization because
 the server router is frozen.
+
+## Notebook example
+
+`notebooks` advertises synchronization for `jupyter-notebook` notebooks,
+including save notifications. Its lifecycle hooks log the synchronized Notebook
+version and cell count through `window/logMessage`. Hover over a cell shows its
+Notebook and Document versions and its current text. Cell text comes from the
+same Documents view used by text-document handlers.
+
+In VS Code, select `Run Notebook example client` to build the server and open
+[`notebooks/demo.ipynb`](./notebooks/demo.ipynb) in an Extension Development Host.
+The general example picker also includes `notebooks`. Hover over a code cell,
+edit or rearrange cells, and save; the `lspf notebooks` output channel shows the
+lifecycle hooks. No kernel is needed. Attach to the `notebooks` process with
+`Attach to running LSP server/example` for Rust breakpoints.
+
+Other Notebook-aware LSP clients can launch it with
+`cargo run -p lspf --example notebooks`. To test without an editor, run:
+
+```console
+cargo test -p lspf --example notebooks --features testing --locked
+```
+
+The tests drive the example's real Server through `MemoryTransport`: capability
+advertisement, all four lifecycle hooks, UTF-16 incremental cell edits,
+fragment-distinct cell URIs, structural replacement, and rollback after a
+rejected batch. They run in the existing CI jobs that enable `testing` and use
+`--all-targets`.
 
 ## Transport examples
 
