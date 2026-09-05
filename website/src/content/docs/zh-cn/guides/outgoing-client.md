@@ -38,4 +38,4 @@ let values = ctx.client().configuration(params).await?;
 
 `refresh_code_lenses`、`refresh_diagnostics`、`refresh_inlay_hints`、`refresh_inline_values`、`refresh_semantic_tokens`、`refresh_folding_ranges` 和 `refresh_text_document_content` 会请求客户端重新拉取相应数据。只有客户端能力明确支持时才调用；这些方法不会主动重新计算或缓存结果。
 
-接下来阅读[报告进度与自定义消息](../progress-and-custom-messages/)，了解长时间运行的工作、分批结果和协议扩展。
+接下来阅读[报告进度与自定义消息](progress-and-custom-messages)，了解长时间运行的工作、分批结果和协议扩展。

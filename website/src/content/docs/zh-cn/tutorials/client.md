@@ -62,7 +62,7 @@ eprintln!("server exited with {:?}", result.status());
 
 等待诊断时应使用有限超时。通知只等待进入发送队列；请求会等待按 ID 关联的类型化响应。若任一步失败，仍要让唯一所有者回收子进程，不能只丢弃 `ServerHandle`。
 
-构建客户端与[服务器教程](../server/)中的项目后运行：
+构建客户端与[服务器教程](server)中的项目后运行：
 
 ```console
 cargo run -- /absolute/path/to/lspf-tutorial-server
@@ -72,7 +72,7 @@ cargo run -- /absolute/path/to/lspf-tutorial-server
 
 ## 下一步
 
-- [客户端接入](../../guides/client-adoption/)进一步介绍自定义 Transport、反向请求、截止时间、提前退出和连接所有权。
-- [协议测试](../../guides/testing/)使用确定性的内存对端替换子进程。
-- [错误与取消](../../guides/errors-and-cancellation/)说明端点错误类型和取消路径。
-- [资源与可观测性策略](../../guides/operations/)介绍预算与遥测；[部署与故障排查](../../guides/deployment-and-troubleshooting/)介绍进程拓扑、关闭与故障诊断。
+- [客户端接入](../guides/client-adoption)进一步介绍自定义 Transport、反向请求、截止时间、提前退出和连接所有权。
+- [协议测试](../guides/testing)使用确定性的内存对端替换子进程。
+- [错误与取消](../guides/errors-and-cancellation)说明端点错误类型和取消路径。
+- [资源与可观测性策略](../guides/operations)介绍预算与遥测；[部署与故障排查](../guides/deployment-and-troubleshooting)介绍进程拓扑、关闭与故障诊断。

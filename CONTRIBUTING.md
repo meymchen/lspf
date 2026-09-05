@@ -128,7 +128,7 @@ new Zed language server.
 
 Set `RUST_LOG=lspf=trace` for framework events. The example programs default to
 JSON on stderr; set `LSPF_LOG_FORMAT=text` for plain text. The
-[operations guide](https://meymchen.github.io/lspf/en/guides/operations/#emit-useful-payload-free-telemetry)
+[operations guide](https://lspf.dev/guides/operations#emit-useful-payload-free-telemetry)
 lists the event fields and redaction rules.
 
 ## Commit and open a pull request

@@ -187,7 +187,7 @@ fn line_range(number: usize, line: &str, encoding: PositionEncoding) -> Range {
 `ctx.client().notify::<PublishDiagnostics>(…)`. For the rest of the
 server-to-client surface, including window messages, workspace edits, progress,
 and refreshes, see the
-[outgoing client helpers](../../guides/outgoing-client/) guide.
+[outgoing client helpers](../guides/outgoing-client) guide.
 
 ## 5. Expose a Command
 
@@ -228,7 +228,7 @@ async fn count_words(
 Bad input from the editor is `invalid_params`; a well-formed request the
 server cannot satisfy is `invalid_request`. Both become JSON-RPC error
 responses with the codes LSP prescribes, and neither ends the connection. The
-[errors and cancellation](../../guides/errors-and-cancellation/) guide covers
+[errors and cancellation](../guides/errors-and-cancellation) guide covers
 the rest of the taxonomy.
 
 ## 6. Build the server and serve it
@@ -403,7 +403,7 @@ async fn main() -> lspf::Result<()> {
 
 ## 8. Drive it from a terminal
 
-Complete the sibling [Client tutorial](../client/), then run its client
+Complete the sibling [Client tutorial](client), then run its client
 against this server. The client waits for each response before it sends
 `shutdown`, so shutdown cannot cancel the hover request it is checking:
 
@@ -435,18 +435,18 @@ and move this tutorial's handlers into the generated server.
 
 ## Where to go next
 
-- [Drive this server from your own application](../client/): the Client
+- [Drive this server from your own application](client): the Client
   tutorial connects to the binary you just built.
-- [Feature registration](../../guides/features-and-workspace/) covers the rest
-  of the registration surface; [workspace state](../../guides/workspace-state/)
+- [Feature registration](../guides/features-and-workspace) covers the rest
+  of the registration surface; [workspace state](../guides/workspace-state)
   covers multi-root state, notebooks, and `FileProvider` configuration.
-- [Protocol testing](../../guides/testing/): run this server in-process
+- [Protocol testing](../guides/testing): run this server in-process
   against a scripted peer instead of a terminal.
-- [Errors and cancellation](../../guides/errors-and-cancellation/): what to
+- [Errors and cancellation](../guides/errors-and-cancellation): what to
   return, what cancels, and where blocking work goes.
-- [Resource and observability policies](../../guides/operations/): budgets,
+- [Resource and observability policies](../guides/operations): budgets,
   concurrency, and logging. Continue to
-  [deployment and troubleshooting](../../guides/deployment-and-troubleshooting/)
+  [deployment and troubleshooting](../guides/deployment-and-troubleshooting)
   for process topology and shutdown.
 
 [`BuildError`]: https://docs.rs/lspf/latest/lspf/enum.BuildError.html

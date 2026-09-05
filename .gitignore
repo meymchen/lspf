@@ -31,7 +31,7 @@ Desktop.ini
 # Documentation site build artifacts
 /website/node_modules/
 /website/dist/
-/website/.astro/
+/website/.vitepress/cache/
 
 # Scratch files
 .scratch/

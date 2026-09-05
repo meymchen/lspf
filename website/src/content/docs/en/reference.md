@@ -13,18 +13,18 @@ Use the versioned Rust API reference for exact signatures and feature availabili
 
 ## Task guides
 
-- [Errors and cancellation](../guides/errors-and-cancellation/)
-- [Register server features](../guides/features-and-workspace/)
-- [Manage workspace state](../guides/workspace-state/)
-- [Call the editor](../guides/outgoing-client/)
-- [Report progress and custom messages](../guides/progress-and-custom-messages/)
-- [Choose a transport](../guides/transports/)
-- [Use stdio and custom transports](../guides/stdio-and-custom-transports/)
-- [Build an LSP client](../guides/client-adoption/)
-- [Protocol testing](../guides/testing/)
-- [Resource and observability policies](../guides/operations/)
-- [Deployment and troubleshooting](../guides/deployment-and-troubleshooting/)
-- [Feature example servers](../examples/)
+- [Errors and cancellation](guides/errors-and-cancellation)
+- [Register server features](guides/features-and-workspace)
+- [Manage workspace state](guides/workspace-state)
+- [Call the editor](guides/outgoing-client)
+- [Report progress and custom messages](guides/progress-and-custom-messages)
+- [Choose a transport](guides/transports)
+- [Use stdio and custom transports](guides/stdio-and-custom-transports)
+- [Build an LSP client](guides/client-adoption)
+- [Protocol testing](guides/testing)
+- [Resource and observability policies](guides/operations)
+- [Deployment and troubleshooting](guides/deployment-and-troubleshooting)
+- [Feature example servers](examples)
 
 ## Architecture and support
 
@@ -33,7 +33,7 @@ Use the versioned Rust API reference for exact signatures and feature availabili
 - [Support and security policy](https://github.com/meymchen/lspf/blob/main/SECURITY.md)
 - [Release history](https://github.com/meymchen/lspf/blob/main/crates/lspf/CHANGELOG.md)
 
-:::note[Release awareness]
+::: info Release awareness
 The repository may contain APIs scheduled for the next release. Use the docs.rs page for
 the version in your `Cargo.lock` when you need the exact published surface.
 :::

@@ -69,4 +69,4 @@ WASM 示例使用 `--target wasm32-unknown-unknown --no-default-features`；运�
 
 运行 `npm --prefix crates/lspf/examples/worker_channel_hosts/node run build` 构建，再用同目录的 `run smoke` 验证。宿主用 `worker_threads.MessageChannel` 转移服务器端口，并在客户端端口完成 initialize、initialized、shutdown 和 exit。只有 Worker 返回成功 `Outcome`，smoke 命令才成功。
 
-接下来阅读[使用 stdio 与自定义传输层](../stdio-and-custom-transports/)，了解进程所有权、分帧规则和嵌入式宿主。
+接下来阅读[使用 stdio 与自定义传输层](stdio-and-custom-transports)，了解进程所有权、分帧规则和嵌入式宿主。

@@ -70,7 +70,7 @@ let server = Server::builder(State)
 
 所有处理器都是异步的。把阻塞库移到 `spawn_blocking`，在工作单元之间检查请求的 `CancellationToken`，并用应用自行管理的限制约束昂贵任务。入站请求预算可以防止协议层无限接纳请求，但不会限制运行时的阻塞线程池、子进程、数据库连接，也不会限制应用状态中持有的内存。
 
-[错误与取消指南](../errors-and-cancellation/)提供了可感知取消的阻塞工作示例。
+[错误与取消指南](errors-and-cancellation)提供了可感知取消的阻塞工作示例。
 
 ## 输出有用且不含载荷的遥测
 
@@ -110,4 +110,4 @@ let _server = lspf::Server::builder(State)
 
 默认追踪事件遵循同样的载荷规则。应用事件仍可能泄漏源文本、路径、请求参数或远端消息，因此把日志发送到共享后端前，应审查这些字段。
 
-接下来阅读[部署与排查端点](../deployment-and-troubleshooting/)，了解进程拓扑、关闭、限制与故障诊断。
+接下来阅读[部署与排查端点](deployment-and-troubleshooting)，了解进程拓扑、关闭、限制与故障诊断。

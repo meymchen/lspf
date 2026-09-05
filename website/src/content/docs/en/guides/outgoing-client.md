@@ -170,7 +170,7 @@ The last two are the LSP 3.18 additions. Both are stable now; they were briefly
 gated behind a `proposed` Cargo feature, which has since been removed along
 with the `lspf::proposed` aliases.
 
-Continue with [Progress and custom messages](../progress-and-custom-messages/) for long-running work, partial results, and protocol extensions.
+Continue with [Progress and custom messages](progress-and-custom-messages) for long-running work, partial results, and protocol extensions.
 
 [`ClientHandle`]: https://docs.rs/lspf/latest/lspf/struct.ClientHandle.html
 [`ServerContext`]: https://docs.rs/lspf/latest/lspf/struct.ServerContext.html

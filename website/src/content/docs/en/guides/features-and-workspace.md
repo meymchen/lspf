@@ -256,7 +256,7 @@ let server = Server::builder(State)
 The corresponding outgoing 3.18 additions — `workspace/foldingRange/refresh`
 and `workspace/textDocumentContent/refresh` — live on `ClientHandle` and are
 covered by the
-[outgoing client guide](../outgoing-client/#workspace-refresh).
+[outgoing client guide](outgoing-client#workspace-refresh).
 
 ## Automatic capability derivation and conflicts
 
@@ -340,7 +340,7 @@ let server = Server::builder(State)
 # }
 ```
 
-Continue with [Workspace state](../workspace-state/) to work with synchronized documents, notebooks, commands, and unopened files.
+Continue with [Workspace state](workspace-state) to work with synchronized documents, notebooks, commands, and unopened files.
 
 [`lspf::features`]: https://docs.rs/lspf/latest/lspf/features/
 [`lspf::types::request`]: https://docs.rs/lspf/latest/lspf/types/request/

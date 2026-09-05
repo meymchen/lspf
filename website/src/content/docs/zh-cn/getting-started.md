@@ -1,8 +1,6 @@
 ---
 title: 开始使用
 description: 安装 lspf，并运行一个类型安全的 stdio 语言服务器。
-sidebar:
-  order: 1
 ---
 
 `lspf` 是一个用于实现语言服务器协议（LSP）服务器与客户端的异步 Rust 框架。本指南会创建一个最小但实用的 stdio 服务器。
@@ -62,6 +60,6 @@ async fn main() -> lspf::Result<()> {
 
 ## 接下来
 
-- 跟随[构建语言服务器](../tutorials/server/)教程，加入文档同步、诊断和命令。
-- 阅读[核心概念](../concepts/)，理解 lspf 的所有权模型。
+- 跟随[构建语言服务器](tutorials/server)教程，加入文档同步、诊断和命令。
+- 阅读[核心概念](concepts)，理解 lspf 的所有权模型。
 - 在 [docs.rs](https://docs.rs/lspf) 查看完整且带版本的 API。

@@ -211,7 +211,7 @@ implicit behavior:
 - **No outgoing notebook method.** LSP defines notebook synchronization as
   client-to-server only, so the helper surface has nothing for it. Inbound
   notebook sync is a separate, supported surface — see
-  [Notebook synchronization](../workspace-state/#notebook-synchronization).
+  [Notebook synchronization](workspace-state#notebook-synchronization).
 - **No implicit progress end.** Dropping a [`ProgressHandle`] removes its
   token with a warning but sends nothing; only `end` ends a progress.
 

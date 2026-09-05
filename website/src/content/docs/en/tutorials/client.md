@@ -4,7 +4,7 @@ description: Build a native LSP client that launches and controls a server over 
 ---
 
 This tutorial builds a native LSP client for the server from the
-[Server tutorial](../server/). The client launches that server as a supervised
+[Server tutorial](server). The client launches that server as a supervised
 stdio child, receives diagnostics, sends typed notifications and requests, and
 shuts the process down cleanly.
 
@@ -220,12 +220,12 @@ client's environment to have the child emit lspf protocol events on stderr.
 
 ## Where to go next
 
-- [Client adoption](../../guides/client-adoption/) covers custom Transports,
+- [Client adoption](../guides/client-adoption) covers custom Transports,
   reverse requests, deadlines, early exits, and connection ownership.
-- [Protocol testing](../../guides/testing/) replaces the child process with a
+- [Protocol testing](../guides/testing) replaces the child process with a
   deterministic in-memory peer.
-- [Errors and cancellation](../../guides/errors-and-cancellation/) maps the
+- [Errors and cancellation](../guides/errors-and-cancellation) maps the
   endpoint error types and cancellation paths.
-- [Resource and observability policies](../../guides/operations/) covers budgets
-  and telemetry; [deployment and troubleshooting](../../guides/deployment-and-troubleshooting/)
+- [Resource and observability policies](../guides/operations) covers budgets
+  and telemetry; [deployment and troubleshooting](../guides/deployment-and-troubleshooting)
   covers process topology, shutdown, and failure diagnosis.
