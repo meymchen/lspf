@@ -68,6 +68,15 @@ tokio = { workspace = true, optional = true, features = ["rt-multi-thread", "io-
 # through the `websocket` feature and never resolved for Worker-hosted WASM.
 tokio-tungstenite = { workspace = true, optional = true }
 
+[lints]
+workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.4", optional = true, features = ["process"] }
+
+[target.'cfg(unix)'.dev-dependencies]
+signal-hook = { version = "0.4", default-features = false }
+
 [build-dependencies]
 serde_json.workspace = true
 
@@ -75,7 +84,7 @@ serde_json.workspace = true
 # Native stdio is the default experience: opting in also selects the Tokio
 # runtime that serves it (the 0.5 feature graph, ADR 0013).
 default = ["stdio"]
-stdio = ["runtime-tokio", "tokio-util/codec", "tokio/io-util", "tokio/process"]
+stdio = ["runtime-tokio", "tokio-util/codec", "tokio/io-util", "tokio/process", "dep:rustix"]
 tcp = ["runtime-tokio", "tokio-util/codec", "tokio/net"]
 websocket = ["runtime-tokio", "dep:tokio-tungstenite", "tokio/net"]
 runtime-tokio = ["dep:tokio"]
