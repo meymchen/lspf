@@ -433,23 +433,19 @@ async fn join_driver(
 
 #[cfg(unix)]
 fn terminate(child: &mut Child) -> io::Result<()> {
-    use std::os::raw::c_int;
-
-    unsafe extern "C" {
-        fn kill(pid: c_int, signal: c_int) -> c_int;
-    }
-    const SIGTERM: c_int = 15;
+    use rustix::process::{Pid, Signal, kill_process};
 
     let Some(pid) = child.id() else {
         return Ok(());
     };
-    // SAFETY: POSIX `kill` takes the live child PID returned by Tokio and the
-    // constant SIGTERM value; neither argument points to memory.
-    let signalled = unsafe { kill(pid as c_int, SIGTERM) } == 0;
-    if signalled || child.try_wait()?.is_some() {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
+    let pid = i32::try_from(pid)
+        .ok()
+        .and_then(Pid::from_raw)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid child PID"))?;
+    match kill_process(pid, Signal::TERM) {
+        Ok(()) => Ok(()),
+        Err(_) if child.try_wait()?.is_some() => Ok(()),
+        Err(error) => Err(error.into()),
     }
 }
 

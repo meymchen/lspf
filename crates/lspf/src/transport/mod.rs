@@ -1,6 +1,10 @@
 // Envelope helpers (ADR 0011) exist wherever a Transport adapter exists —
 // every adapter parses and serializes the same JSON-RPC envelopes.
-#[cfg(all(test, feature = "runtime-tokio", not(target_arch = "wasm32")))]
+#[cfg(all(
+    test,
+    any(feature = "stdio", feature = "tcp", feature = "websocket"),
+    not(target_arch = "wasm32")
+))]
 mod conformance_support {
     pub(crate) use crate::types::notification::Notification;
     pub(crate) use crate::types::request::Request;
@@ -11,7 +15,11 @@ mod conformance_support {
 }
 #[cfg(all(feature = "stdio", not(target_arch = "wasm32")))]
 mod child;
-#[cfg(all(test, feature = "runtime-tokio", not(target_arch = "wasm32")))]
+#[cfg(all(
+    test,
+    any(feature = "stdio", feature = "tcp", feature = "websocket"),
+    not(target_arch = "wasm32")
+))]
 mod conformance;
 // Outbound accounting always uses `envelope::serialize`; without a Transport
 // feature the inbound parser is intentionally dormant.

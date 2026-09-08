@@ -254,6 +254,7 @@ jobs:
           toolchain: 1.98.0
           targets: wasm32-unknown-unknown
       - run: bash ci/check-feature-contract.sh
+      - run: bash ci/tests/unit/check-safe-rust.sh
 
   public-interface:
     name: public interface
@@ -337,6 +338,20 @@ jobs:
       - uses: ./.github/actions/setup-rust
       - name: Exercise the packaged reference server over stdio
         run: cargo test -p lspf-markdown --test packaged_editor_journey -- --nocapture
+      - name: Check every supported native feature selection
+        shell: bash
+        run: |
+          source ci/supported-feature-matrix.sh
+          for features in "${NATIVE_FEATURE_SELECTIONS[@]}"; do
+            if [[ $features == none ]]; then
+              cargo check -p lspf --all-targets --locked --no-default-features
+            else
+              cargo check -p lspf --all-targets --locked --no-default-features --features "$features"
+            fi
+          done
+          cargo check -p lspf --all-targets --locked --features fuzzing
+      - name: Exercise child termination and reaping
+        run: cargo test -p lspf --locked --test stdio_child
 
   wasm:
     name: wasm
@@ -353,7 +368,7 @@ jobs:
           tools: wasm-bindgen-cli@0.2.127
       # The pre-0.5 compile spike (ADR 0020): the protocol kernel must compile
       # for wasm32 without enabling the Tokio runtime.
-      - run: cargo check -p lspf --target wasm32-unknown-unknown --no-default-features --features wasm --locked
+      - run: cargo check -p lspf --all-targets --target wasm32-unknown-unknown --no-default-features --features wasm --locked
       - run: cargo check -p lspf --target wasm32-unknown-unknown --no-default-features --features wasm --example shared_server --locked
       - run: cargo check -p lspf --target wasm32-unknown-unknown --no-default-features --features worker-channel --locked
       - run: cargo check -p lspf --target wasm32-unknown-unknown --no-default-features --features worker-channel --example worker_channel --locked

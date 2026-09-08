@@ -6,6 +6,7 @@
 //! The public protocol surface follows the stable LSP 3.18 specification.
 
 #![deny(missing_docs)]
+#![forbid(unsafe_code)]
 // A protocol-only feature row intentionally has no serving engine. The
 // public registration and protocol types remain useful there, while the
 // engine-owned internals are necessarily dormant until a Transport selects a

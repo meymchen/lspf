@@ -94,19 +94,15 @@ fn fixture_command(mode: &str) -> Command {
 
 #[cfg(unix)]
 fn ignore_terminate() {
-    use std::os::raw::c_int;
+    use std::sync::{Arc, atomic::AtomicBool};
 
-    unsafe extern "C" {
-        fn signal(signal: c_int, handler: usize) -> usize;
-    }
-    const SIGTERM: c_int = 15;
-    const SIG_IGN: usize = 1;
-
-    // SAFETY: POSIX `signal` receives the SIGTERM constant and the standard
-    // SIG_IGN sentinel; no pointers are dereferenced.
-    unsafe {
-        signal(SIGTERM, SIG_IGN);
-    }
+    // Keep a handler installed for this fixture's lifetime. Recording the
+    // signal suppresses its default exit action, forcing escalation to kill.
+    signal_hook::flag::register(
+        signal_hook::consts::SIGTERM,
+        Arc::new(AtomicBool::new(false)),
+    )
+    .expect("install SIGTERM handler");
 }
 
 #[cfg(windows)]
@@ -114,15 +110,13 @@ fn ignore_terminate() {}
 
 #[cfg(unix)]
 fn process_exists(pid: u32) -> bool {
-    use std::os::raw::c_int;
-
-    unsafe extern "C" {
-        fn kill(pid: c_int, signal: c_int) -> c_int;
+    let pid = rustix::process::Pid::from_raw(i32::try_from(pid).expect("child PID fits i32"))
+        .expect("child PID is nonzero");
+    match rustix::process::test_kill_process(pid) {
+        Ok(()) => true,
+        Err(rustix::io::Errno::SRCH) => false,
+        Err(error) => panic!("cannot inspect child PID: {error}"),
     }
-
-    // SAFETY: signal 0 performs existence/permission checking without sending
-    // a signal, and `pid` came from the spawned child.
-    unsafe { kill(pid as c_int, 0) == 0 }
 }
 
 #[cfg(unix)]
