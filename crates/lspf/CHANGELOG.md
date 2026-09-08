@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.2](https://github.com/meymchen/lspf/compare/v1.0.1...v1.0.2) - 2026-09-08
+
+### Changed
+
+- Forbid unsafe code throughout lspf ([#324](https://github.com/meymchen/lspf/pull/324))
+
 ## [1.0.1](https://github.com/meymchen/lspf/compare/v1.0.0...v1.0.1) - 2026-09-05
 
 ### Changed
