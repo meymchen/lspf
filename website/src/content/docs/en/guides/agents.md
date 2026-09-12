@@ -17,6 +17,7 @@ configuration. Follow the linked guide for the version you use.
 | Claude Code | Plugins register language servers for diagnostics and code navigation. | [LSP server configuration](https://code.claude.com/docs/en/plugins-reference#lsp-servers) · [Install code intelligence plugins](https://code.claude.com/docs/en/discover-plugins#code-intelligence) |
 | OpenCode | Built-in and custom language servers supply diagnostics to the agent. | [Enable and configure LSP](https://opencode.ai/docs/lsp/#configure) · [Custom LSP servers](https://opencode.ai/docs/lsp/#custom-lsp-servers) |
 | Crush | Language servers provide additional code context; custom servers can be registered in its configuration. | [LSP setup](https://github.com/charmbracelet/crush#lsps) · [Configuration reference](https://github.com/charmbracelet/crush/blob/main/docs/config/README.md#lsp) |
+| DeepSeek Harness | LSP arrives as plugins that give the agent semantic navigation; custom stdio servers are registered in the plugin's configuration. | [`dsh-lsp-stdio` README](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/lsp/lsp-stdio/README.md) · [Plugin config catalog](https://deepseek-harness.github.io/deepseek-harness/en/reference/config-catalog) |
 
 ### Claude Code
 
@@ -48,6 +49,38 @@ Use the [LSP configuration reference](https://github.com/charmbracelet/crush/blo
 and [configuration locations](https://github.com/charmbracelet/crush#configuration)
 when adding your server.
 
+### DeepSeek Harness
+
+Nothing is built in: mount `@deepseek-ai/dsh-lsp` for the capability,
+`@deepseek-ai/dsh-lsp-stdio` for stdio language servers, and
+`@deepseek-ai/dsh-tool-lsp` for the tool the model calls. The stdio provider
+reads through `@deepseek-ai/dsh-fs-local` and spawns through
+`@deepseek-ai/dsh-subprocess-local`. Register your server under `servers` with
+`command`, optional `args`, and an `extensionToLanguage` map:
+
+```yaml
+- name: '@deepseek-ai/dsh-fs-local'
+- name: '@deepseek-ai/dsh-subprocess-local'
+- name: '@deepseek-ai/dsh-lsp'
+- name: '@deepseek-ai/dsh-lsp-stdio'
+  config:
+    servers:
+      markdown:
+        command: lspf-markdown
+        extensionToLanguage:
+          '.md': markdown
+- name: '@deepseek-ai/dsh-tool-lsp'
+```
+
+The capability covers four read-only operations: go to definition, find
+references, go to implementation, and hover. It carries no diagnostics, no
+symbol lists, no mutations, and no generic JSON-RPC escape hatch, so a server
+whose value is its diagnostics has nothing to report here. One extension
+belongs to one provider, and two servers claiming `.md` fail registration. The
+harness is a developer preview that expects compatibility-breaking changes, so
+check the [config catalog](https://deepseek-harness.github.io/deepseek-harness/en/reference/config-catalog)
+for the version you run.
+
 ## Connect a server built with lspf
 
 Build a native stdio executable with the [server tutorial](../tutorials/server),
@@ -74,7 +107,7 @@ definition; whether those operations are exposed as tools depends on the agent.
 See the [reference server](https://github.com/meymchen/lspf/tree/main/crates/lspf-markdown)
 for its behavior and fixtures.
 
-Sources checked on September 5, 2026. This page records documented LSP support;
+Sources checked on September 12, 2026. This page records documented LSP support;
 these agents have not been tested against lspf as part of this guide.
 
 ## Build your own agent integration

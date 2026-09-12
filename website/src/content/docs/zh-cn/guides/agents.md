@@ -14,6 +14,7 @@ description: 查找已提供 LSP 集成的编程 Agent，并直达它们的官�
 | Claude Code | 通过插件注册语言服务器，提供诊断和代码导航。 | [LSP 服务器配置](https://code.claude.com/docs/en/plugins-reference#lsp-servers) · [安装代码智能插件](https://code.claude.com/docs/en/discover-plugins#code-intelligence) |
 | OpenCode | 通过内置或自定义语言服务器，为 Agent 提供诊断反馈。 | [启用与配置 LSP](https://opencode.ai/docs/lsp/#configure) · [自定义 LSP 服务器](https://opencode.ai/docs/lsp/#custom-lsp-servers) |
 | Crush | 通过语言服务器获取额外的代码上下文，支持在配置中注册自定义服务器。 | [LSP 接入说明](https://github.com/charmbracelet/crush#lsps) · [配置参考](https://github.com/charmbracelet/crush/blob/main/docs/config/README.md#lsp) |
+| DeepSeek Harness | LSP 以插件形式提供，为 Agent 提供语义导航；自定义 stdio 服务器在插件配置中注册。 | [`dsh-lsp-stdio` 说明](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/lsp/lsp-stdio/README.md) · [插件配置目录](https://deepseek-harness.github.io/deepseek-harness/en/reference/config-catalog) |
 
 ### Claude Code
 
@@ -28,6 +29,26 @@ Claude Code 的云端会话不会启动插件语言服务器，因此该环境�
 ### Crush
 
 当前官方文档使用 `crushrc` 中的 `lsp add` 注册服务器，可配置可执行程序、参数、文件类型和项目根目录标记。旧的 JSON 配置仍受支持，但已弃用。添加服务器时，请参阅 [LSP 配置参考](https://github.com/charmbracelet/crush/blob/main/docs/config/README.md#lsp)和[配置文件位置](https://github.com/charmbracelet/crush#configuration)。
+
+### DeepSeek Harness
+
+它不内置任何语言服务器：需要挂载 `@deepseek-ai/dsh-lsp` 提供能力、`@deepseek-ai/dsh-lsp-stdio` 启动 stdio 语言服务器、`@deepseek-ai/dsh-tool-lsp` 暴露模型调用的工具。stdio 插件通过 `@deepseek-ai/dsh-fs-local` 读取文件，通过 `@deepseek-ai/dsh-subprocess-local` 启动进程。在 `servers` 下注册服务器，填写 `command`、可选的 `args` 以及 `extensionToLanguage` 映射：
+
+```yaml
+- name: '@deepseek-ai/dsh-fs-local'
+- name: '@deepseek-ai/dsh-subprocess-local'
+- name: '@deepseek-ai/dsh-lsp'
+- name: '@deepseek-ai/dsh-lsp-stdio'
+  config:
+    servers:
+      markdown:
+        command: lspf-markdown
+        extensionToLanguage:
+          '.md': markdown
+- name: '@deepseek-ai/dsh-tool-lsp'
+```
+
+该能力只覆盖四个只读操作：定义跳转、查找引用、实现跳转和悬停。它不包含诊断、符号列表、修改类操作，也没有通用的 JSON-RPC 通道，因此以诊断为主要价值的服务器在这里无处呈现。一个扩展名只能归属一个插件实例，两个服务器同时声明 `.md` 会导致注册失败。该 Harness 处于开发者预览阶段，明确预告会有破坏兼容性的变更，请按所用版本查阅[插件配置目录](https://deepseek-harness.github.io/deepseek-harness/en/reference/config-catalog)。
 
 ## 接入使用 lspf 构建的服务器
 
@@ -48,7 +69,7 @@ cargo install --path crates/lspf-markdown --locked
 
 使用包含失效本地链接的 Markdown 文件，检查 Agent 是否收到诊断。参考服务器还实现了悬停和定义跳转；这些操作是否以工具形式提供，取决于 Agent。具体行为和测试样例见[参考服务器](https://github.com/meymchen/lspf/tree/main/crates/lspf-markdown)。
 
-资料核对日期为 2026 年 9 月 5 日。本页记录的是官方文档中的 LSP 支持情况，尚未针对这些 Agent 执行 lspf 集成测试。
+资料核对日期为 2026 年 9 月 12 日。本页记录的是官方文档中的 LSP 支持情况，尚未针对这些 Agent 执行 lspf 集成测试。
 
 ## 构建自己的 Agent 集成
 
