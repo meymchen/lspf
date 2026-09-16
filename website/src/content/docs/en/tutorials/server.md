@@ -429,9 +429,16 @@ stderr.
 `cargo install --path .` puts `lspf-tutorial-server` on your `PATH`. From
 there, any editor that can launch a generic LSP server over stdio can use it;
 configure that editor to run `lspf-tutorial-server` for plain-text documents.
-For a ready-made VS Code extension alongside the Rust server, start from
-[`lspf-vscode-extension-template`](https://github.com/meymchen/lspf-vscode-extension-template)
-and move this tutorial's handlers into the generated server.
+For a ready-made editor extension alongside the Rust server, start from one of
+the project templates and move this tutorial's handlers into the generated
+server. Each template's README covers generation, renaming, and the build and
+debug commands:
+
+- [`lspf-vscode-extension-template`](https://github.com/meymchen/lspf-vscode-extension-template):
+  a Rust server and a TypeScript VS Code extension that bundles it.
+- [`lspf-intellij-platform-plugin-template`](https://github.com/meymchen/lspf-intellij-platform-plugin-template):
+  a Rust server and an IntelliJ Platform plugin that bundles it. It needs a
+  JetBrains IDE 2026.2 or later.
 
 ## Where to go next
 

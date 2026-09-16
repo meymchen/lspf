@@ -3,6 +3,8 @@ title: 注册服务端功能
 description: 注册类型化 LSP 功能，并从同一份声明中推导能力。
 ---
 
+想要一个把服务器和编辑器扩展配好的项目起点，可以使用 [`lspf-vscode-extension-template`](https://github.com/meymchen/lspf-vscode-extension-template) 或 [`lspf-intellij-platform-plugin-template`](https://github.com/meymchen/lspf-intellij-platform-plugin-template)；生成方式与构建、调试命令都写在各自的 README 里。
+
 ## 功能注册
 
 功能描述符提供方法、参数与结果类型以及能力元数据。注册会把它连接到你的处理器：

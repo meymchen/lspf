@@ -261,8 +261,10 @@ async fn main() -> lspf::Result<()> {
 
 No handwritten `ServerCapabilities` and no framework change are involved:
 the capabilities come from the registrations themselves. For a ready-to-copy
-server and VS Code extension, start from
-[`lspf-vscode-extension-template`](https://github.com/meymchen/lspf-vscode-extension-template).
+server and editor extension, start from
+[`lspf-vscode-extension-template`](https://github.com/meymchen/lspf-vscode-extension-template)
+or
+[`lspf-intellij-platform-plugin-template`](https://github.com/meymchen/lspf-intellij-platform-plugin-template).
 The framework's public feature, workspace, client, and stdio seams are covered
 by the `crates/lspf` integration tests and the in-tree `lspf-markdown`
 reference server. The
@@ -306,8 +308,12 @@ All three guides use the same `lspf-markdown` executable and fixture:
 - [VS Code](./docs/editors/vscode.md): the bundled language-client extension.
 - [Zed](./docs/editors/zed.md): the bundled development extension.
 
-For a new server and VS Code extension, use the
-[`lspf-vscode-extension-template`](https://github.com/meymchen/lspf-vscode-extension-template).
+For a new server bundled into an editor extension, use
+[`lspf-vscode-extension-template`](https://github.com/meymchen/lspf-vscode-extension-template)
+or, for a JetBrains IDE 2026.2 or later,
+[`lspf-intellij-platform-plugin-template`](https://github.com/meymchen/lspf-intellij-platform-plugin-template).
+Each template's README covers generation, renaming, and the build and debug
+commands.
 For individual protocol operations, browse the
 [runnable examples](./crates/lspf/examples/README.md).
 The [editor validation journeys](./editor-validation/README.md) record the

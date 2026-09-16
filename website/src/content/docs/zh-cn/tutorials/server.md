@@ -114,6 +114,11 @@ cargo run -- /absolute/path/to/lspf-tutorial-server
 
 编辑器插件应以 stdio 子进程启动服务器，把服务器能力作为 initialize 响应读取，并把日志保留在 stderr。不要在服务器内部硬编码重启或 UI 策略；这些属于启动它的编辑器。调试时可设置 `RUST_LOG=lspf=trace`，但仍不能把日志写到 stdout。
 
+要连同 Rust 服务器一起得到一个现成的编辑器扩展，可以从项目模板开始，再把本教程的处理器搬进生成的服务器。生成、改名以及构建与调试命令都写在各自模板的 README 里：
+
+- [`lspf-vscode-extension-template`](https://github.com/meymchen/lspf-vscode-extension-template)：一个 Rust 服务器，外加打包它的 TypeScript VS Code 扩展。
+- [`lspf-intellij-platform-plugin-template`](https://github.com/meymchen/lspf-intellij-platform-plugin-template)：一个 Rust 服务器，外加打包它的 IntelliJ 平台插件。需要 2026.2 或更高版本的 JetBrains IDE。
+
 ## 下一步
 
 - [功能注册](../guides/features-and-workspace)介绍更多功能描述符；[工作区状态](../guides/workspace-state)介绍文档、笔记本和文件提供器。
