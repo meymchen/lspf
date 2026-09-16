@@ -12,8 +12,12 @@ crate. The public interfaces are exercised by the framework's
 while the
 [`lspf-markdown` reference server](https://github.com/meymchen/lspf/tree/main/crates/lspf-markdown)
 drives the same document, workspace, feature, and stdio boundaries with real
-Markdown behavior. For a project starter, use
-[`lspf-vscode-extension-template`](https://github.com/meymchen/lspf-vscode-extension-template).
+Markdown behavior. For a project starter that pairs a server with an editor
+extension, use
+[`lspf-vscode-extension-template`](https://github.com/meymchen/lspf-vscode-extension-template)
+or
+[`lspf-intellij-platform-plugin-template`](https://github.com/meymchen/lspf-intellij-platform-plugin-template);
+each README covers generation and the build and debug commands.
 
 ## Feature registration
 

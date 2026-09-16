@@ -67,4 +67,11 @@ keep synchronized.
 - Follow [Build a language server](tutorials/server) for a complete server with
   document synchronization, diagnostics, and a command.
 - Read [Core concepts](concepts) for lspf's ownership model.
+- Ship it as an editor extension by starting from
+  [`lspf-vscode-extension-template`](https://github.com/meymchen/lspf-vscode-extension-template)
+  or
+  [`lspf-intellij-platform-plugin-template`](https://github.com/meymchen/lspf-intellij-platform-plugin-template)
+  (JetBrains IDE 2026.2 or later). Both generate a Rust server next to an
+  extension that bundles it; their READMEs cover renaming and the build and
+  debug commands.
 - Browse the complete, versioned API on [docs.rs](https://docs.rs/lspf).

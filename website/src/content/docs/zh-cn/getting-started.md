@@ -62,4 +62,5 @@ async fn main() -> lspf::Result<()> {
 
 - 跟随[构建语言服务器](tutorials/server)教程，加入文档同步、诊断和命令。
 - 阅读[核心概念](concepts)，理解 lspf 的所有权模型。
+- 想把它做成编辑器扩展发布，可以从 [`lspf-vscode-extension-template`](https://github.com/meymchen/lspf-vscode-extension-template) 或 [`lspf-intellij-platform-plugin-template`](https://github.com/meymchen/lspf-intellij-platform-plugin-template)（需要 2026.2 或更高版本的 JetBrains IDE）开始。两者都会生成一个 Rust 服务器，外加一个把它打包进去的扩展；改名以及构建、调试命令都写在各自的 README 里。
 - 在 [docs.rs](https://docs.rs/lspf) 查看完整且带版本的 API。

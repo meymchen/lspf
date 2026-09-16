@@ -49,7 +49,10 @@ For your own language server, start with the
 [lspf VS Code extension template](https://github.com/meymchen/lspf-vscode-extension-template)
 and set its server command and language selector for your language. The
 [VS Code language server extension guide](https://code.visualstudio.com/api/language-extensions/language-server-extension-guide)
-explains how the client extension connects the editor to the server.
+explains how the client extension connects the editor to the server. To ship
+the same server as a JetBrains plugin instead, use the
+[lspf IntelliJ Platform plugin template](https://github.com/meymchen/lspf-intellij-platform-plugin-template),
+which needs a JetBrains IDE 2026.2 or later.
 
 ## If nothing happens
 
