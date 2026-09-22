@@ -44,6 +44,28 @@ pub enum PositionEncoding {
     Utf16,
 }
 
+impl PositionEncoding {
+    // Rope indexes can round down inside an encoded scalar. Round-trip the
+    // column so partial reads reject those positions instead of clamping them.
+    fn char_index(self, line: ropey::RopeSlice<'_>, column: u32) -> Option<usize> {
+        let index = match self {
+            Self::Utf8 => line.try_byte_to_char(column as usize).ok()?,
+            Self::Utf16 => line.try_utf16_cu_to_char(column as usize).ok()?,
+            Self::Utf32 => (column as usize <= line.len_chars()).then_some(column as usize)?,
+        };
+        (self.column(line, index)? == column).then_some(index)
+    }
+
+    fn column(self, line: ropey::RopeSlice<'_>, char_index: usize) -> Option<u32> {
+        let column = match self {
+            Self::Utf8 => line.char_to_byte(char_index),
+            Self::Utf16 => line.char_to_utf16_cu(char_index),
+            Self::Utf32 => char_index,
+        };
+        u32::try_from(column).ok()
+    }
+}
+
 /// A single tracked text document (ADR 0005).
 ///
 /// Backed by `ropey::Rope`, but `ropey` never leaks into the public API.
@@ -106,11 +128,7 @@ impl Document {
     /// The result borrows from this snapshot when possible, otherwise owns
     /// only the requested text. It does not retain a document-store lock.
     pub fn line(&self, line: u32) -> Option<Cow<'_, str>> {
-        let line = self.line_content(line)?;
-        Some(match line.as_str() {
-            Some(text) => Cow::Borrowed(text),
-            None => Cow::Owned(line.to_string()),
-        })
+        self.line_content(line).map(Cow::from)
     }
 
     /// Read a start-inclusive, end-exclusive LSP range from this snapshot.
@@ -126,9 +144,9 @@ impl Document {
     /// clamped or truncated. Both endpoints are checked against this snapshot.
     /// The result borrows when possible or owns only the selected fragment.
     pub fn text_in_range(&self, encoding: PositionEncoding, range: Range) -> Option<Cow<'_, str>> {
-        let start = self.content_offset(encoding, range.start)?;
-        let end = self.content_offset(encoding, range.end)?;
-        (start <= end).then(|| self.text_fragment(start, end))
+        let start = self.content_char_index(encoding, range.start)?;
+        let end = self.content_char_index(encoding, range.end)?;
+        (start <= end).then(|| Cow::from(self.text.slice(start..end)))
     }
 
     /// Select a maximal run of characters accepted by `is_word` on one line.
@@ -157,62 +175,47 @@ impl Document {
     where
         F: FnMut(char) -> bool,
     {
-        let offset = self.content_offset(encoding, position)?;
-        let line_start = self.text.line_to_byte(position.line as usize);
-        let cursor = offset - line_start;
-        let line = self.line(position.line)?;
-        let seed = if line[cursor..].chars().next().is_some_and(&mut is_word) {
+        let line = self.line_content(position.line)?;
+        let cursor = encoding.char_index(line, position.character)?;
+        let seed = if line.get_char(cursor).is_some_and(&mut is_word) {
             cursor
         } else {
-            let (index, ch) = line[..cursor].char_indices().next_back()?;
-            if !is_word(ch) {
+            let previous = cursor.checked_sub(1)?;
+            if !is_word(line.char(previous)) {
                 return None;
             }
-            index
+            previous
         };
         let mut start = seed;
-        for (index, ch) in line[..seed].char_indices().rev() {
+        for ch in line.chars_at(seed).reversed() {
             if !is_word(ch) {
                 break;
             }
-            start = index;
+            start -= 1;
         }
         // The seed was already accepted; scan the remainder of its run.
-        let mut end = seed + line[seed..].chars().next()?.len_utf8();
-        for ch in line[end..].chars() {
+        let mut end = seed + 1;
+        for ch in line.chars_at(end) {
             if !is_word(ch) {
                 break;
             }
-            end += ch.len_utf8();
+            end += 1;
         }
-        let start = line_start + start;
-        let end = line_start + end;
         Some((
-            self.text_fragment(start, end),
+            Cow::from(line.slice(start..end)),
             Range::new(
-                self.offset_to_position(encoding, start)?,
-                self.offset_to_position(encoding, end)?,
+                Position::new(position.line, encoding.column(line, start)?),
+                Position::new(position.line, encoding.column(line, end)?),
             ),
         ))
     }
 
-    // Existing conversion behavior is frozen. These read helpers additionally
-    // reject UTF-16 positions that the conversion accepts within a terminator.
-    fn content_offset(&self, encoding: PositionEncoding, position: Position) -> Option<usize> {
+    // Use the rope's existing indexes without materializing a line string.
+    // Frozen public conversions keep their separate line-ending behavior.
+    fn content_char_index(&self, encoding: PositionEncoding, position: Position) -> Option<usize> {
         let line = self.line_content(position.line)?;
-        let offset = self.position_to_offset(encoding, position)?;
-        let end = self.text.line_to_byte(position.line as usize) + line.len_bytes();
-        (offset <= end).then_some(offset)
-    }
-
-    fn text_fragment(&self, start: usize, end: usize) -> Cow<'_, str> {
-        let text = self
-            .text
-            .slice(self.text.byte_to_char(start)..self.text.byte_to_char(end));
-        match text.as_str() {
-            Some(text) => Cow::Borrowed(text),
-            None => Cow::Owned(text.to_string()),
-        }
+        let index = encoding.char_index(line, position.character)?;
+        Some(self.text.line_to_char(position.line as usize) + index)
     }
 
     fn line_content(&self, line: u32) -> Option<ropey::RopeSlice<'_>> {

@@ -455,3 +455,33 @@ async fn words_and_lines_respect_all_terminators_in_the_existing_coordinate_mode
         }
     }
 }
+
+#[tokio::test]
+async fn local_queries_after_a_long_unicode_prefix_keep_exact_encoded_boundaries() {
+    // Each repeated prefix has 11 UTF-8 bytes, 6 UTF-16 units, and 5 scalars.
+    let prefix = "\u{4e2d}\u{1f600}e\u{301} ".repeat(600);
+    let word = "a-\u{4e2d}\u{1f600}e\u{301}";
+    let text = format!("first\r\n{prefix}{word} {}\r\n", "suffix ".repeat(600));
+    for (encoding, start, end, split) in [
+        ("utf-8", 6600, 6612, Some(6603)),
+        ("utf-16", 3600, 3607, Some(3604)),
+        ("utf-32", 3000, 3006, None),
+    ] {
+        let mut journey = opened(&text, Some(encoding)).await;
+        for cursor in [start, start + 2, end] {
+            let result = read(&mut journey, json!({
+                "range":range(1,start,1,end),"position":position(1,cursor),"predicate":"unicode",
+            })).await;
+            assert_eq!(result["selection"], word);
+            assert_eq!(result["word"], json!([word, range(1, start, 1, end)]));
+        }
+        if let Some(split) = split {
+            let result = read(&mut journey, json!({
+                "range":range(1,split,1,split),"position":position(1,split),"predicate":"unicode",
+            })).await;
+            assert_eq!(result["selection"], Value::Null);
+            assert_eq!(result["word"], Value::Null);
+        }
+        journey.finish().await.unwrap();
+    }
+}
