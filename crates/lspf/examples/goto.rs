@@ -42,11 +42,14 @@ fn selected(
     uri: &lspf::types::Uri,
     position: Position,
 ) -> Result<(String, String), LspError> {
-    let text = example_support::text(ctx, uri)?;
-    let word = example_support::word_at(&text, position)
-        .map(|(word, _)| word)
+    let document = example_support::document(ctx, uri)?;
+    let word = document
+        .word_at_position(ctx.documents().position_encoding(), position, |ch| {
+            ch.is_ascii_alphanumeric() || ch == '_'
+        })
+        .map(|(word, _)| word.into_owned())
         .ok_or_else(|| LspError::invalid_params("no symbol at position"))?;
-    Ok((text, word))
+    Ok((document.text(), word))
 }
 
 async fn declaration(
@@ -114,7 +117,7 @@ async fn references(
     let uri = params.text_document_position_params.text_document.uri;
     let (text, word) = selected(&ctx, &uri, params.text_document_position_params.position)?;
     Ok(Some(
-        example_support::word_ranges(&text, &word)
+        example_support::word_ranges(&text, &word, ctx.documents().position_encoding())
             .into_iter()
             .map(|range| Location {
                 uri: uri.clone(),

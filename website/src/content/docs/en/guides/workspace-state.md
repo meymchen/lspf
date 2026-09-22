@@ -53,6 +53,69 @@ registration for a built-in document notification — `textDocument/didOpen`,
 one post-validation hook: the engine decodes and mutates first, and the hook
 observes the result through `ctx.documents()`.
 
+## Read text from one Document snapshot
+
+Obtain a `Document` once for related queries, and pass the connection's
+`DocumentsView::position_encoding()` to position-based helpers. These reads
+use that immutable snapshot even after `didChange` or `didClose`. Notebook
+cells and snapshots from `Workspace::text_document` use the same API; a
+provider-loaded snapshot keeps `version() == None` and an empty language ID.
+
+```rust
+# use lspf::{ServerContext, types::{Position, Range, Uri}};
+# fn inspect(ctx: ServerContext, uri: Uri, selection: Range, cursor: Position) {
+let documents = ctx.documents();
+let encoding = documents.position_encoding();
+if let Some(document) = documents.get(&uri) {
+    let line = document.line(cursor.line);
+    let selected = document.text_in_range(encoding, selection);
+    let word = document.word_at_position(encoding, cursor, |ch| {
+        ch.is_alphanumeric() || ch == '_' || ch == '\u{301}'
+    });
+    // `word` contains (text, range); its range uses the supplied encoding.
+}
+# }
+```
+
+`Document::line(line)` takes a zero-based line number and returns
+`Option<Cow<'_, str>>`. It omits the complete terminator and preserves all
+other characters, including trailing spaces. The existing coordinate model
+recognizes LF, CRLF, CR, VT, FF, NEL (U+0085), line separator (U+2028), and
+paragraph separator (U+2029). An empty document
+has one empty line; a trailing terminator adds a final empty line. A
+nonexistent line returns `None`. Line numbering follows the existing snapshot
+coordinate model.
+
+`Document::text_in_range(encoding, range)` returns the exact start-inclusive,
+end-exclusive selection as `Option<Cow<'_, str>>`, preserving line endings and
+Unicode characters without normalization. An end at the next line's column
+zero includes the preceding terminator. A valid empty selection, including
+at document end, returns `Some("")`.
+
+`Document::word_at_position(encoding, position, predicate)` returns
+`Option<(Cow<'_, str>, Range)>`. A word is a maximal run of accepted Unicode
+scalar values within one line. The character immediately right of the cursor
+chooses the word if accepted; otherwise the immediately preceding character
+chooses it if accepted. At a word's end it selects that word; a gap does not
+search backward. It never crosses a line terminator, even if the predicate
+accepts it. The predicate is local to the call: the application decides about
+underscores, hyphens, or combining marks. This does not validate identifiers
+or segment grapheme clusters.
+
+Both position-based helpers return `None` for nonexistent lines, columns past
+line content, positions inside a UTF-8 scalar or UTF-16 surrogate pair, and
+positions inside a line terminator. End-of-line immediately before the
+terminator is valid. Range lookup also rejects reversed endpoints and empty
+ranges at invalid positions. Word lookup returns `None` when neither adjacent
+character is accepted. Invalid input is never clamped and never mutates the
+snapshot. Existing text and coordinate-conversion methods keep their contracts.
+
+Results borrow from the retained `Document` when possible or own their
+selected text; borrowing is an optimization, not a guarantee. They hold no
+store lock and expose no storage types. Partial queries may allocate a
+fragment or a line for conversion, but do not first copy the whole document.
+They perform no provider I/O and do not change metadata or workspace state.
+
 ## Notebook synchronization
 
 All four `notebookDocument/*` notifications are protocol built-ins: the engine

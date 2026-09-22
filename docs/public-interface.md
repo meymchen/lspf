@@ -93,6 +93,35 @@ an export whose gate is not listed here.
 | `OsFileProvider` | native-runtime | The standard filesystem provider for native hosts. |
 | `OsFileProviderBuilder` | native-runtime | The configuration surface for the filesystem provider's read limits. |
 
+The additive `Document` text helpers are available under every supported
+native and WASM selection. They read the retained snapshot, including
+provider-loaded snapshots and Notebook-cell Documents:
+
+| Method | Result and contract |
+| --- | --- |
+| `line(u32)` | `Option<Cow<'_, str>>`; zero-based line content without its complete terminator. Empty documents have one empty line; a trailing terminator adds an empty line; missing lines return `None`. |
+| `text_in_range(PositionEncoding, Range)` | `Option<Cow<'_, str>>`; exact start-inclusive, end-exclusive text with original line endings. Valid empty ranges return `Some("")`, including at document end. |
+| `word_at_position(PositionEncoding, Position, F)` where `F: FnMut(char) -> bool` | `Option<(Cow<'_, str>, Range)>`; a maximal accepted run on one line, preferring the character immediately right of the cursor, then the immediately preceding character. No adjacent word returns `None`. |
+
+Line terminators follow the existing coordinate model: LF, CRLF, CR, VT, FF,
+NEL (U+0085), line separator (U+2028), and paragraph separator (U+2029).
+Position-based helpers use the explicitly supplied encoding from
+`DocumentsView::position_encoding()`. They reject nonexistent lines, columns
+past line content, encoded-scalar interiors, and line-terminator interiors;
+range lookup also rejects reversed endpoints. End-of-line immediately before
+its terminator is valid. No input is clamped or truncated. The word predicate
+receives Unicode scalar values, is not stored, and cannot select across a line
+terminator. It supplies application membership policy, not identifier or
+grapheme validation.
+
+The helpers preserve text and metadata and remain readable after live sync or
+close. Results borrow from the snapshot when possible or own only selected
+text, without a store lock or public Rope type. Partial reads can allocate a
+fragment or conversion line but do not materialize the whole document.
+Existing `text`, `position_to_offset`, and `offset_to_position` signatures and
+contracts remain unchanged. The native and real-target WASM interface checks
+compile the additive methods through the shared downstream signature fixture.
+
 ## Results, errors, and connection outcome
 
 | Item | Availability | Role |

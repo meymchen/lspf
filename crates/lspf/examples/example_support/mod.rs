@@ -8,7 +8,7 @@
 mod example_logging;
 
 use lspf::types::{Diagnostic, DiagnosticSeverity, Position, Range, Uri};
-use lspf::{LspError, Server, ServerContext};
+use lspf::{Document, LspError, PositionEncoding, Server, ServerContext};
 
 pub(crate) async fn serve<S: Send + Sync + 'static>(server: Server<S>) -> lspf::Result<()> {
     example_logging::init();
@@ -16,11 +16,14 @@ pub(crate) async fn serve<S: Send + Sync + 'static>(server: Server<S>) -> lspf::
     std::process::exit(outcome.code());
 }
 
-pub(crate) fn text(ctx: &ServerContext, uri: &Uri) -> Result<String, LspError> {
+pub(crate) fn document(ctx: &ServerContext, uri: &Uri) -> Result<Document, LspError> {
     ctx.documents()
         .get(uri)
-        .map(|document| document.text())
         .ok_or_else(|| LspError::invalid_params(format!("document is not open: {}", uri.as_str())))
+}
+
+pub(crate) fn text(ctx: &ServerContext, uri: &Uri) -> Result<String, LspError> {
+    Ok(document(ctx, uri)?.text())
 }
 
 pub(crate) fn line_range(line: u32, text: &str) -> Range {
@@ -76,30 +79,7 @@ pub(crate) fn sum_diagnostics(text: &str) -> Vec<Diagnostic> {
         .collect()
 }
 
-pub(crate) fn word_at(text: &str, position: Position) -> Option<(String, Range)> {
-    let line = text.lines().nth(position.line as usize)?;
-    let cursor = usize::try_from(position.character).ok()?.min(line.len());
-    let is_word = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
-    let mut start = cursor;
-    while start > 0 && is_word(line.as_bytes()[start - 1]) {
-        start -= 1;
-    }
-    let mut end = cursor;
-    while end < line.len() && is_word(line.as_bytes()[end]) {
-        end += 1;
-    }
-    (start != end).then(|| {
-        (
-            line[start..end].to_string(),
-            Range::new(
-                Position::new(position.line, start as u32),
-                Position::new(position.line, end as u32),
-            ),
-        )
-    })
-}
-
-pub(crate) fn word_ranges(text: &str, needle: &str) -> Vec<Range> {
+pub(crate) fn word_ranges(text: &str, needle: &str, encoding: PositionEncoding) -> Vec<Range> {
     text.lines()
         .enumerate()
         .flat_map(|(line, text)| {
@@ -112,11 +92,22 @@ pub(crate) fn word_ranges(text: &str, needle: &str) -> Vec<Range> {
                 };
                 (boundary(start.wrapping_sub(1)) && boundary(end)).then(|| {
                     Range::new(
-                        Position::new(line as u32, start as u32),
-                        Position::new(line as u32, end as u32),
+                        Position::new(line as u32, column(&text[..start], encoding)),
+                        Position::new(line as u32, column(&text[..end], encoding)),
                     )
                 })
             })
         })
         .collect()
+}
+
+#[cfg(all(test, feature = "testing"))]
+pub(crate) mod text_tests;
+
+fn column(prefix: &str, encoding: PositionEncoding) -> u32 {
+    match encoding {
+        PositionEncoding::Utf8 => prefix.len() as u32,
+        PositionEncoding::Utf16 => prefix.encode_utf16().count() as u32,
+        PositionEncoding::Utf32 => prefix.chars().count() as u32,
+    }
 }

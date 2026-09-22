@@ -306,3 +306,6 @@ async fn the_frozen_testing_clock_controls_connection_deadlines() {
     let error: JourneyError = JourneyError::from(lspf::Error::from(TransportError::Closed));
     assert!(!error.to_string().is_empty());
 }
+
+#[path = "support/document_text_interface.rs"]
+mod document_text_interface;

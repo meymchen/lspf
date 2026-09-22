@@ -1,8 +1,9 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use gen_lsp_types::{
-    InitializeParams, Position, PositionEncodingKind, TextDocumentContentChangeEvent,
+    InitializeParams, Position, PositionEncodingKind, Range, TextDocumentContentChangeEvent,
     TextDocumentItem, Uri,
 };
 use ropey::Rope;
@@ -48,6 +49,9 @@ pub enum PositionEncoding {
 /// Backed by `ropey::Rope`, but `ropey` never leaks into the public API.
 /// The document is immutable from user code; mutations flow through the
 /// concurrency-safe document store the connection's protocol engine owns.
+/// Retaining a snapshot preserves its text and metadata across later changes
+/// and closes. The same read helpers work on provider-loaded snapshots and
+/// Notebook-cell Documents without consulting live connection state.
 #[derive(Debug, Clone)]
 pub struct Document {
     uri: Uri,
@@ -86,6 +90,147 @@ impl Document {
     /// Full document text as a `String`.
     pub fn text(&self) -> String {
         self.text.to_string()
+    }
+
+    /// Read a zero-based line without its terminating line break.
+    ///
+    /// Terminators follow the existing coordinate model: LF, CRLF, CR, VT,
+    /// FF, NEL (U+0085), line separator (U+2028), and paragraph separator
+    /// (U+2029).
+    ///
+    /// All other characters, including trailing spaces, are preserved. An
+    /// empty document has one empty line, and a final line terminator adds an
+    /// empty line. A nonexistent line returns `None`. Line numbering follows
+    /// the snapshot's position/offset coordinate model.
+    ///
+    /// The result borrows from this snapshot when possible, otherwise owns
+    /// only the requested text. It does not retain a document-store lock.
+    pub fn line(&self, line: u32) -> Option<Cow<'_, str>> {
+        let line = self.line_content(line)?;
+        Some(match line.as_str() {
+            Some(text) => Cow::Borrowed(text),
+            None => Cow::Owned(line.to_string()),
+        })
+    }
+
+    /// Read a start-inclusive, end-exclusive LSP range from this snapshot.
+    ///
+    /// Pass the connection's [`DocumentsView::position_encoding`]. Source
+    /// characters and embedded line endings are preserved exactly; ending at
+    /// the next line's column zero includes the preceding line terminator.
+    /// A valid empty range returns `Some("")`, including at document end.
+    ///
+    /// Returns `None` for reversed ranges, nonexistent lines, columns beyond
+    /// line content, or positions inside an encoded scalar or line terminator.
+    /// End-of-line means immediately before its terminator. No position is
+    /// clamped or truncated. Both endpoints are checked against this snapshot.
+    /// The result borrows when possible or owns only the selected fragment.
+    pub fn text_in_range(&self, encoding: PositionEncoding, range: Range) -> Option<Cow<'_, str>> {
+        let start = self.content_offset(encoding, range.start)?;
+        let end = self.content_offset(encoding, range.end)?;
+        (start <= end).then(|| self.text_fragment(start, end))
+    }
+
+    /// Select a maximal run of characters accepted by `is_word` on one line.
+    ///
+    /// The predicate receives Unicode scalar values. The character immediately
+    /// to the right of the cursor chooses the run if accepted; otherwise the
+    /// immediately preceding character chooses it if accepted. Thus a cursor
+    /// just after a word selects it, but a gap does not search backward.
+    /// A run never crosses a line terminator, even if the predicate accepts it.
+    ///
+    /// Pass the connection's [`DocumentsView::position_encoding`]; both the
+    /// input position and returned range use that encoding. Invalid positions
+    /// (as for [`Self::text_in_range`]) or no adjacent accepted character return
+    /// `None`. The text borrows from this snapshot when possible or owns only
+    /// the selected word, and remains independent of later synchronization.
+    ///
+    /// The application chooses punctuation, underscores, and combining marks.
+    /// This is neither identifier validation nor grapheme segmentation; the
+    /// predicate is used only for this call and is never stored.
+    pub fn word_at_position<F>(
+        &self,
+        encoding: PositionEncoding,
+        position: Position,
+        mut is_word: F,
+    ) -> Option<(Cow<'_, str>, Range)>
+    where
+        F: FnMut(char) -> bool,
+    {
+        let offset = self.content_offset(encoding, position)?;
+        let line_start = self.text.line_to_byte(position.line as usize);
+        let cursor = offset - line_start;
+        let line = self.line(position.line)?;
+        let seed = if line[cursor..].chars().next().is_some_and(&mut is_word) {
+            cursor
+        } else {
+            let (index, ch) = line[..cursor].char_indices().next_back()?;
+            if !is_word(ch) {
+                return None;
+            }
+            index
+        };
+        let mut start = seed;
+        for (index, ch) in line[..seed].char_indices().rev() {
+            if !is_word(ch) {
+                break;
+            }
+            start = index;
+        }
+        // The seed was already accepted; scan the remainder of its run.
+        let mut end = seed + line[seed..].chars().next()?.len_utf8();
+        for ch in line[end..].chars() {
+            if !is_word(ch) {
+                break;
+            }
+            end += ch.len_utf8();
+        }
+        let start = line_start + start;
+        let end = line_start + end;
+        Some((
+            self.text_fragment(start, end),
+            Range::new(
+                self.offset_to_position(encoding, start)?,
+                self.offset_to_position(encoding, end)?,
+            ),
+        ))
+    }
+
+    // Existing conversion behavior is frozen. These read helpers additionally
+    // reject UTF-16 positions that the conversion accepts within a terminator.
+    fn content_offset(&self, encoding: PositionEncoding, position: Position) -> Option<usize> {
+        let line = self.line_content(position.line)?;
+        let offset = self.position_to_offset(encoding, position)?;
+        let end = self.text.line_to_byte(position.line as usize) + line.len_bytes();
+        (offset <= end).then_some(offset)
+    }
+
+    fn text_fragment(&self, start: usize, end: usize) -> Cow<'_, str> {
+        let text = self
+            .text
+            .slice(self.text.byte_to_char(start)..self.text.byte_to_char(end));
+        match text.as_str() {
+            Some(text) => Cow::Borrowed(text),
+            None => Cow::Owned(text.to_string()),
+        }
+    }
+
+    fn line_content(&self, line: u32) -> Option<ropey::RopeSlice<'_>> {
+        let line = self.text.get_line(line as usize)?;
+        let mut end = line.len_chars();
+        if end > 0 {
+            let last = line.char(end - 1);
+            if matches!(
+                last,
+                '\n' | '\r' | '\u{b}' | '\u{c}' | '\u{85}' | '\u{2028}' | '\u{2029}'
+            ) {
+                end -= 1;
+                if last == '\n' && end > 0 && line.char(end - 1) == '\r' {
+                    end -= 1;
+                }
+            }
+        }
+        Some(line.slice(..end))
     }
 
     /// Convert an LSP `Position` to a byte offset into the rope, using the

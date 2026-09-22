@@ -30,18 +30,19 @@ async fn prepare(
     _: CancellationToken,
 ) -> Result<Option<PrepareRenameResponse>, LspError> {
     let position = params.text_document_position_params;
-    let text = example_support::text(&ctx, &position.text_document.uri)?;
-    let Some((word, range)) = example_support::word_at(&text, position.position) else {
+    let document = example_support::document(&ctx, &position.text_document.uri)?;
+    let encoding = ctx.documents().position_encoding();
+    let Some((word, range)) = document.word_at_position(encoding, position.position, |ch| {
+        ch.is_ascii_alphanumeric() || ch == '_'
+    }) else {
         return Ok(None);
     };
-    Ok(
-        renameable(&text, &word).then_some(PrepareRenameResponse::PrepareRenamePlaceholder(
-            PrepareRenamePlaceholder {
-                range,
-                placeholder: word,
-            },
-        )),
-    )
+    Ok(renameable(&document.text(), &word).then_some(
+        PrepareRenameResponse::PrepareRenamePlaceholder(PrepareRenamePlaceholder {
+            range,
+            placeholder: word.into_owned(),
+        }),
+    ))
 }
 
 async fn rename(
@@ -51,16 +52,20 @@ async fn rename(
     _: CancellationToken,
 ) -> Result<Option<WorkspaceEdit>, LspError> {
     let uri = params.text_document_position_params.text_document.uri;
-    let text = example_support::text(&ctx, &uri)?;
-    let Some((word, _)) =
-        example_support::word_at(&text, params.text_document_position_params.position)
-    else {
+    let document = example_support::document(&ctx, &uri)?;
+    let encoding = ctx.documents().position_encoding();
+    let Some((word, _)) = document.word_at_position(
+        encoding,
+        params.text_document_position_params.position,
+        |ch| ch.is_ascii_alphanumeric() || ch == '_',
+    ) else {
         return Ok(None);
     };
+    let text = document.text();
     if !renameable(&text, &word) {
         return Ok(None);
     }
-    let edits = example_support::word_ranges(&text, &word)
+    let edits = example_support::word_ranges(&text, &word, encoding)
         .into_iter()
         .map(|range| TextEdit {
             range,
@@ -87,4 +92,36 @@ async fn main() -> lspf::Result<()> {
         .build()
         .expect("rename registrations are valid");
     example_support::serve(server).await
+}
+
+#[cfg(all(test, feature = "testing"))]
+mod tests {
+    use super::*;
+    use example_support::text_tests::{URI, opened, request};
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn rename_selects_and_edits_words_after_a_utf16_emoji_prefix() {
+        let server = Server::builder(State)
+            .feature(lspf::features::rename(RenameOptions::default()), rename)
+            .feature(lspf::features::prepare_rename(), prepare)
+            .build()
+            .unwrap();
+        let mut journey = opened(server, "type Thing(\n\u{1f600} Thing").await;
+        let params = json!({"textDocument":{"uri":URI},"position":{"line":1,"character":5}});
+        let response = request(&mut journey, "textDocument/prepareRename", params.clone()).await;
+        let selection = json!({"start":{"line":1,"character":3},"end":{"line":1,"character":8}});
+        assert_eq!(response, json!({"range":selection,"placeholder":"Thing"}));
+        let mut params = params;
+        params["newName"] = json!("Renamed");
+        let response = request(&mut journey, "textDocument/rename", params).await;
+        assert_eq!(
+            response["changes"][URI],
+            json!([
+                {"range":{"start":{"line":0,"character":5},"end":{"line":0,"character":10}},"newText":"Renamed"},
+                {"range":selection,"newText":"Renamed"},
+            ])
+        );
+        journey.finish().await.unwrap();
+    }
 }
