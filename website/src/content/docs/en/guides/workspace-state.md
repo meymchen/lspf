@@ -55,35 +55,34 @@ observes the result through `ctx.documents()`.
 
 ## Read text from one Document snapshot
 
-Obtain a `Document` once for related queries, and pass the connection's
-`DocumentsView::position_encoding()` to position-based helpers. These reads
-use that immutable snapshot even after `didChange` or `didClose`. Notebook
-cells and snapshots from `Workspace::text_document` use the same API; a
+Obtain a `Document` once for related queries. Each snapshot retains the
+connection's negotiated encoding; position-based helpers use it automatically.
+`Document::position_encoding()` exposes it when application code needs the
+coordinate units. Text and encoding remain available after `didChange` or
+`didClose`. Notebook cells and snapshots from `Workspace::text_document` use the same API; a
 provider-loaded snapshot keeps `version() == None` and an empty language ID.
 
 ```rust
 # use lspf::{ServerContext, types::{Position, Range, Uri}};
 # fn inspect(ctx: ServerContext, uri: Uri, selection: Range, cursor: Position) {
 let documents = ctx.documents();
-let encoding = documents.position_encoding();
 if let Some(document) = documents.get(&uri) {
     let count = document.line_count();
-    let line = document.line_range(encoding, cursor.line)
-        .and_then(|range| document.text(encoding, Some(range)));
-    let selected = document.text(encoding, Some(selection));
-    let whole = document.text(encoding, None).expect("full document text is always available");
-    let word = document.word_at_position(encoding, cursor, |ch| {
+    let line = document.line_range(cursor.line)
+        .and_then(|range| document.text(Some(range)));
+    let selected = document.text(Some(selection));
+    let whole = document.text(None).expect("full document text is always available");
+    let word = document.word_at_position(cursor, |ch| {
         ch.is_alphanumeric() || ch == '_' || ch == '\u{301}'
     });
-    // `word` contains (text, range); its range uses the supplied encoding.
+    // `word` contains (text, range); its range uses the snapshot's encoding.
 }
 # }
 ```
 
-`Document::text(encoding, range)` returns `Option<Cow<'_, str>>`. Pass `None`
-to read the full snapshot; this always returns `Some`, and the encoding is
-unused. Pass `Some(range)` to read the exact start-inclusive, end-exclusive
-selection, preserving line endings and Unicode characters without
+`Document::text(range)` returns `Option<Cow<'_, str>>`. Pass `None`
+to read the full snapshot; this always returns `Some`. Pass `Some(range)` to
+read the exact start-inclusive, end-exclusive selection, preserving line endings and Unicode characters without
 normalization. An end at the next line's column zero includes the preceding
 terminator. A valid empty selection, including at document end, returns
 `Some("")`.
@@ -93,15 +92,15 @@ An empty document has one empty line; a trailing terminator adds a final empty
 line. The existing coordinate model recognizes LF, CRLF, CR, VT, FF, NEL
 (U+0085), line separator (U+2028), and paragraph separator (U+2029).
 
-`Document::line_range(encoding, line)` takes a zero-based line number and
+`Document::line_range(line)` takes a zero-based line number and
 returns `Option<Range>`, excluding the complete terminator and preserving
-trailing spaces. Its columns use the supplied encoding. Empty lines have an
+trailing spaces. Its columns use the snapshot's encoding. Empty lines have an
 empty range; a missing line or an end column too large for an LSP position
 returns `None`. Compose a successful range with `text` as above to read a line.
 Use `and_then` for that composition: passing a failed line lookup directly as
 the optional selection would request the full document.
 
-`Document::word_at_position(encoding, position, predicate)` returns
+`Document::word_at_position(position, predicate)` returns
 `Option<(Cow<'_, str>, Range)>`. A word is a maximal run of accepted Unicode
 scalar values within one line. The character immediately right of the cursor
 chooses the word if accepted; otherwise the immediately preceding character
@@ -117,7 +116,8 @@ positions inside a line terminator. End-of-line immediately before the
 terminator is valid. Range lookup also rejects reversed endpoints and empty
 ranges at invalid positions. Word lookup returns `None` when neither adjacent
 character is accepted. Invalid input is never clamped and never mutates the
-snapshot. Existing coordinate-conversion methods keep their contracts.
+snapshot. `position_to_offset(position)` and `offset_to_position(offset)`
+use the retained encoding and preserve their existing conversion behavior.
 
 Results borrow from the retained `Document` when possible or own their
 selected text; borrowing is an optimization, not a guarantee. They hold no
@@ -125,14 +125,16 @@ store lock and expose no storage types. Text queries may allocate their selected
 coordinates. Partial reads do not first copy the whole document.
 They perform no provider I/O and do not change metadata or workspace state.
 
-### Migrate full-text reads
+### Migrate Document reads
 
 Replace the former `document.text()` call with
-`document.text(encoding, None).expect("full document text is always available")`.
+`document.text(None).expect("full document text is always available")`.
 The result may borrow from the snapshot; use `.into_owned()` when a `String`
 must outlive that snapshot. Range reads use `Some(range)` through the same
 method. Line text is obtained by composing `line_range` with `text`; there are
-no separate `line` or `text_in_range` methods.
+no separate `line` or `text_in_range` methods. Remove the encoding argument
+from Document position/offset conversions; `DocumentsView` conversions retain
+their URI-based signatures.
 
 ## Notebook synchronization
 
@@ -202,7 +204,7 @@ async fn notebook_source(
         // Membership and order come from the notebook view; text comes from
         // the document store.
         .filter_map(|cell| documents.get(&cell.document))
-        .map(|document| document.text(ctx.documents().position_encoding(), None).expect("full document text is always available").into_owned())
+        .map(|document| document.text(None).expect("full document text is always available").into_owned())
         .collect::<Vec<_>>()
         .join("\n"))
 }
@@ -258,7 +260,7 @@ async fn count_words(
         .text_document(&uri)
         .await
         .map_err(LspError::invalid_request)?;
-    Ok(document.text(ctx.documents().position_encoding(), None).expect("full document text is always available").split_whitespace().count())
+    Ok(document.text(None).expect("full document text is always available").split_whitespace().count())
 }
 # fn main() {
 #     let server = Server::builder(State)

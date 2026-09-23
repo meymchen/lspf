@@ -103,11 +103,7 @@ async fn hover(
     let uri = params.text_document_position_params.text_document.uri;
     let documents: DocumentsView = ctx.documents();
     let words = documents.get(&uri).map_or(0, |document: Document| {
-        document
-            .text(Default::default(), None)
-            .unwrap()
-            .split_whitespace()
-            .count()
+        document.text(None).unwrap().split_whitespace().count()
     });
     Ok(Some(Hover {
         contents: HoverContents::MarkupContent(MarkupContent {

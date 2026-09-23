@@ -24,7 +24,7 @@ pub(crate) fn document(ctx: &ServerContext, uri: &Uri) -> Result<Document, LspEr
 
 pub(crate) fn text(ctx: &ServerContext, uri: &Uri) -> Result<String, LspError> {
     Ok(document(ctx, uri)?
-        .text(ctx.documents().position_encoding(), None)
+        .text(None)
         .expect("full document text is always available")
         .into_owned())
 }

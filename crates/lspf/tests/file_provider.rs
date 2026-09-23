@@ -292,7 +292,7 @@ async fn builder_provider_is_used_by_the_established_workspace() {
                     .text_document(&uri)
                     .await
                     .unwrap()
-                    .text(Default::default(), None)
+                    .text(None)
                     .unwrap()
                     .into_owned();
                 *observed.lock().unwrap() = Some(text);
@@ -353,7 +353,7 @@ async fn builder_os_provider_serves_unopened_files_outside_any_root() {
                     .text_document(&uri)
                     .await
                     .unwrap()
-                    .text(Default::default(), None)
+                    .text(None)
                     .unwrap()
                     .into_owned();
                 *observed.lock().unwrap() = Some(text);

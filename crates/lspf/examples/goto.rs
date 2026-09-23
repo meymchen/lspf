@@ -44,14 +44,12 @@ fn selected(
 ) -> Result<(String, String), LspError> {
     let document = example_support::document(ctx, uri)?;
     let word = document
-        .word_at_position(ctx.documents().position_encoding(), position, |ch| {
-            ch.is_ascii_alphanumeric() || ch == '_'
-        })
+        .word_at_position(position, |ch| ch.is_ascii_alphanumeric() || ch == '_')
         .map(|(word, _)| word.into_owned())
         .ok_or_else(|| LspError::invalid_params("no symbol at position"))?;
     Ok((
         document
-            .text(ctx.documents().position_encoding(), None)
+            .text(None)
             .expect("full document text is always available")
             .into_owned(),
         word,

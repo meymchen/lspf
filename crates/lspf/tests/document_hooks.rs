@@ -76,9 +76,7 @@ fn uri(s: &str) -> Uri {
 async fn on_did_open(state: Arc<AppState>, ctx: ServerContext, params: DidOpenTextDocumentParams) {
     let doc = ctx.documents().get(&params.text_document.uri);
     state.seen.lock().unwrap().push(Seen::Open {
-        text: doc
-            .as_ref()
-            .map(|d| d.text(Default::default(), None).unwrap().into_owned()),
+        text: doc.as_ref().map(|d| d.text(None).unwrap().into_owned()),
         version: doc.as_ref().and_then(|d| d.version()),
     });
 }
@@ -92,9 +90,7 @@ async fn on_did_change(
         .documents()
         .get(&params.text_document.text_document_identifier.uri);
     state.seen.lock().unwrap().push(Seen::Change {
-        text: doc
-            .as_ref()
-            .map(|d| d.text(Default::default(), None).unwrap().into_owned()),
+        text: doc.as_ref().map(|d| d.text(None).unwrap().into_owned()),
         version: doc.as_ref().and_then(|d| d.version()),
     });
 }
@@ -181,9 +177,7 @@ async fn probe(
     let uri = uri(&params.uri);
     let doc = documents.get(&uri);
     Ok(ProbeResult {
-        text: doc
-            .as_ref()
-            .map(|d| d.text(Default::default(), None).unwrap().into_owned()),
+        text: doc.as_ref().map(|d| d.text(None).unwrap().into_owned()),
         version: doc.as_ref().and_then(|d| d.version()),
         offset: params
             .position

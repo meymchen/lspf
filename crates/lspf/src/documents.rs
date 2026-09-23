@@ -30,7 +30,7 @@ fn document_text_capacity_exhausted() -> DocumentMutationError {
 ///
 /// LSP defaults to UTF-16; lspf prefers UTF-8, then UTF-32, when the client
 /// offers them.
-/// The store's current value governs every `position ↔ offset` conversion.
+/// Each document snapshot retains the connection's negotiated value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PositionEncoding {
     /// `Position.character` is a UTF-8 byte offset within the line.
@@ -79,6 +79,7 @@ pub struct Document {
     uri: Uri,
     language_id: String,
     version: Option<i32>,
+    encoding: PositionEncoding,
     text: Rope,
 }
 
@@ -100,22 +101,31 @@ impl Document {
         self.version
     }
 
-    pub(crate) fn provider_snapshot(uri: Uri, text: String) -> Self {
+    /// The connection's negotiated encoding, retained with this snapshot.
+    ///
+    /// All position-based reads and conversions use this value, including on
+    /// provider-loaded documents and Notebook cells.
+    pub fn position_encoding(&self) -> PositionEncoding {
+        self.encoding
+    }
+
+    pub(crate) fn provider_snapshot(uri: Uri, text: String, encoding: PositionEncoding) -> Self {
         Self {
             uri,
             language_id: String::new(),
             version: None,
+            encoding,
             text: Rope::from_str(&text),
         }
     }
 
     /// Read the full snapshot or a start-inclusive, end-exclusive LSP range.
     ///
-    /// `None` selects the whole document and always returns `Some`; the encoding
-    /// is unused for this selection. Pass `Some(range)` and the connection's
-    /// [`DocumentsView::position_encoding`] for a partial read. Source characters
-    /// and embedded line endings are preserved exactly. Ending at the next line's
-    /// column zero includes the preceding line terminator. A valid empty range
+    /// `None` selects the whole document and always returns `Some`. Pass
+    /// `Some(range)` for a partial read using this snapshot's
+    /// [`Self::position_encoding`]. Source characters and embedded line endings
+    /// are preserved exactly. Ending at the next line's column zero includes
+    /// the preceding line terminator. A valid empty range
     /// returns `Some("")`, including at document end.
     ///
     /// Returns `None` for reversed ranges, nonexistent lines, columns beyond
@@ -124,12 +134,12 @@ impl Document {
     /// clamped or truncated. Both endpoints are checked against this snapshot.
     /// The result borrows when possible or owns only the selected text, without
     /// retaining a document-store lock. Use [`Self::line_range`] to select a line.
-    pub fn text(&self, encoding: PositionEncoding, range: Option<Range>) -> Option<Cow<'_, str>> {
+    pub fn text(&self, range: Option<Range>) -> Option<Cow<'_, str>> {
         let Some(range) = range else {
             return Some(Cow::from(self.text.slice(..)));
         };
-        let start = self.content_char_index(encoding, range.start)?;
-        let end = self.content_char_index(encoding, range.end)?;
+        let start = self.content_char_index(range.start)?;
+        let end = self.content_char_index(range.end)?;
         (start <= end).then(|| Cow::from(self.text.slice(start..end)))
     }
 
@@ -145,18 +155,18 @@ impl Document {
 
     /// The range of a zero-based line, excluding its complete line terminator.
     ///
-    /// Both positions use the supplied encoding. Empty lines have an empty
+    /// Both positions use this snapshot's encoding. Empty lines have an empty
     /// range, including the sole line of an empty document and a trailing empty
     /// line (see [`Self::line_count`]). Returns `None` for a nonexistent line or
     /// when its end column cannot fit in an LSP position. No text is copied.
     ///
     /// Read the returned range with [`Self::text`] to obtain the line content,
     /// preserving trailing spaces and all other non-terminator characters.
-    pub fn line_range(&self, encoding: PositionEncoding, line: u32) -> Option<Range> {
+    pub fn line_range(&self, line: u32) -> Option<Range> {
         let content = self.line_content(line)?;
         Some(Range::new(
             Position::new(line, 0),
-            Position::new(line, encoding.column(content, content.len_chars())?),
+            Position::new(line, self.encoding.column(content, content.len_chars())?),
         ))
     }
 
@@ -168,9 +178,9 @@ impl Document {
     /// just after a word selects it, but a gap does not search backward.
     /// A run never crosses a line terminator, even if the predicate accepts it.
     ///
-    /// Pass the connection's [`DocumentsView::position_encoding`]; both the
-    /// input position and returned range use that encoding. Invalid positions
-    /// (as for [`Self::text`]) or no adjacent accepted character return
+    /// Both the input position and returned range use this snapshot's
+    /// [`Self::position_encoding`]. Invalid positions (as for [`Self::text`])
+    /// or no adjacent accepted character return
     /// `None`. The text borrows from this snapshot when possible or owns only
     /// the selected word, and remains independent of later synchronization.
     ///
@@ -179,7 +189,6 @@ impl Document {
     /// predicate is used only for this call and is never stored.
     pub fn word_at_position<F>(
         &self,
-        encoding: PositionEncoding,
         position: Position,
         mut is_word: F,
     ) -> Option<(Cow<'_, str>, Range)>
@@ -187,7 +196,7 @@ impl Document {
         F: FnMut(char) -> bool,
     {
         let line = self.line_content(position.line)?;
-        let cursor = encoding.char_index(line, position.character)?;
+        let cursor = self.encoding.char_index(line, position.character)?;
         let seed = if line.get_char(cursor).is_some_and(&mut is_word) {
             cursor
         } else {
@@ -215,17 +224,17 @@ impl Document {
         Some((
             Cow::from(line.slice(start..end)),
             Range::new(
-                Position::new(position.line, encoding.column(line, start)?),
-                Position::new(position.line, encoding.column(line, end)?),
+                Position::new(position.line, self.encoding.column(line, start)?),
+                Position::new(position.line, self.encoding.column(line, end)?),
             ),
         ))
     }
 
     // Use the rope's existing indexes without materializing a line string.
-    // Frozen public conversions keep their separate line-ending behavior.
-    fn content_char_index(&self, encoding: PositionEncoding, position: Position) -> Option<usize> {
+    // Position/offset conversions retain their legacy line-ending behavior.
+    fn content_char_index(&self, position: Position) -> Option<usize> {
         let line = self.line_content(position.line)?;
-        let index = encoding.char_index(line, position.character)?;
+        let index = self.encoding.char_index(line, position.character)?;
         Some(self.text.line_to_char(position.line as usize) + index)
     }
 
@@ -248,12 +257,8 @@ impl Document {
     }
 
     /// Convert an LSP `Position` to a byte offset into the rope, using the
-    /// supplied encoding. Returns `None` if the position is out of range.
-    pub fn position_to_offset(
-        &self,
-        encoding: PositionEncoding,
-        position: Position,
-    ) -> Option<usize> {
+    /// snapshot's encoding. Returns `None` if the position is out of range.
+    pub fn position_to_offset(&self, position: Position) -> Option<usize> {
         let line_idx = position.line as usize;
         if line_idx >= self.text.len_lines() {
             return None;
@@ -261,7 +266,7 @@ impl Document {
         let line_start_byte = self.text.line_to_byte(line_idx);
         let line_text: String = self.text.line(line_idx).into();
 
-        match encoding {
+        match self.encoding {
             PositionEncoding::Utf8 => {
                 let byte_in_line = position.character as usize;
                 // `character` is a byte offset, but it must land within the
@@ -302,13 +307,9 @@ impl Document {
         }
     }
 
-    /// Convert a byte offset into an LSP `Position`, using the supplied
+    /// Convert a byte offset into an LSP `Position`, using this snapshot's
     /// encoding. Returns `None` if the offset is out of range.
-    pub fn offset_to_position(
-        &self,
-        encoding: PositionEncoding,
-        offset: usize,
-    ) -> Option<Position> {
+    pub fn offset_to_position(&self, offset: usize) -> Option<Position> {
         if offset > self.text.len_bytes() {
             return None;
         }
@@ -317,7 +318,7 @@ impl Document {
         let line_offset = offset - line_start_byte;
         let line_text: String = self.text.line(line_idx).into();
 
-        match encoding {
+        match self.encoding {
             PositionEncoding::Utf8 => Some(Position {
                 line: line_idx as u32,
                 character: line_offset as u32,
@@ -355,15 +356,14 @@ impl Document {
     }
 
     /// Apply one content change to this document's text, interpreting a
-    /// partial change's `range` under `encoding`. A whole-document change
-    /// replaces the complete text.
+    /// partial change's `range` under its retained encoding. A whole-document
+    /// change replaces the complete text.
     ///
     /// Leaves the text untouched when the change is rejected, so a caller
     /// applying a batch can abandon a working copy without having corrupted
     /// anything.
     pub(crate) fn apply_change(
         &mut self,
-        encoding: PositionEncoding,
         change: TextDocumentContentChangeEvent,
         max_bytes: usize,
     ) -> std::result::Result<(), DocumentMutationError> {
@@ -382,20 +382,16 @@ impl Document {
         if text.len() > max_bytes {
             return Err(document_text_capacity_exhausted());
         }
-        let start_offset = self
-            .position_to_offset(encoding, range.start)
-            .ok_or_else(|| {
-                DocumentMutationError::Protocol(crate::LspError::invalid_request(
-                    "invalid start position",
-                ))
-            })?;
-        let end_offset = self
-            .position_to_offset(encoding, range.end)
-            .ok_or_else(|| {
-                DocumentMutationError::Protocol(crate::LspError::invalid_request(
-                    "invalid end position",
-                ))
-            })?;
+        let start_offset = self.position_to_offset(range.start).ok_or_else(|| {
+            DocumentMutationError::Protocol(crate::LspError::invalid_request(
+                "invalid start position",
+            ))
+        })?;
+        let end_offset = self.position_to_offset(range.end).ok_or_else(|| {
+            DocumentMutationError::Protocol(crate::LspError::invalid_request(
+                "invalid end position",
+            ))
+        })?;
         // A reversed range (end before start) would panic `Rope::remove`
         // while the write lock is held, poisoning the store for every
         // later access. Reject it as an invalid request instead.
@@ -535,12 +531,14 @@ impl Documents {
             return Err(document_text_capacity_exhausted());
         }
 
+        let encoding = inner.encoding;
         inner.by_uri.insert(
             key,
             Document {
                 uri: item.uri,
                 language_id: item.language_id.as_str().to_owned(),
                 version: Some(item.version),
+                encoding,
                 text: Rope::from_str(&item.text),
             },
         );
@@ -633,7 +631,6 @@ impl Documents {
         changes: impl IntoIterator<Item = TextDocumentContentChangeEvent>,
     ) -> std::result::Result<(), DocumentMutationError> {
         let mut inner = self.inner.write().unwrap();
-        let encoding = inner.encoding;
         let key = UriKey::new(uri);
         let document = inner.by_uri.get(&key).cloned().ok_or_else(|| {
             DocumentMutationError::Protocol(crate::LspError::invalid_request("document not found"))
@@ -645,7 +642,7 @@ impl Documents {
         // more than the edits it actually makes.
         let mut updated = document;
         for change in changes {
-            if let Err(error) = updated.apply_change(encoding, change, available_document_bytes) {
+            if let Err(error) = updated.apply_change(change, available_document_bytes) {
                 if matches!(error, DocumentMutationError::Capacity(_)) {
                     self.trace.resource_budget(
                         Resource::Documents,
@@ -677,7 +674,7 @@ impl Documents {
         inner
             .by_uri
             .get(&UriKey::new(uri))
-            .and_then(|doc| doc.position_to_offset(inner.encoding, position))
+            .and_then(|doc| doc.position_to_offset(position))
     }
 
     /// Convert an offset using the store's current encoding.
@@ -686,7 +683,7 @@ impl Documents {
         inner
             .by_uri
             .get(&UriKey::new(uri))
-            .and_then(|doc| doc.offset_to_position(inner.encoding, offset))
+            .and_then(|doc| doc.offset_to_position(offset))
     }
 
     /// Current position encoding for every document in the store.
@@ -821,7 +818,16 @@ mod tests {
     /// starts from. Returns the store and the URI the document was opened
     /// under.
     fn opened(name: &str, text: &str) -> (Documents, Uri) {
+        opened_with_encoding(name, text, PositionEncoding::default())
+    }
+
+    fn opened_with_encoding(
+        name: &str,
+        text: &str,
+        encoding: PositionEncoding,
+    ) -> (Documents, Uri) {
         let docs = Documents::new();
+        docs.set_position_encoding(encoding);
         let u = uri(name);
         docs.open(text_item(u.clone(), text))
             .expect("the default policy accepts the test document");
@@ -878,7 +884,7 @@ mod tests {
         assert_eq!(doc.uri(), &u);
         assert_eq!(doc.language_id(), "plaintext");
         assert_eq!(doc.version(), Some(1));
-        assert_eq!(doc.text(Default::default(), None).unwrap(), "hello world");
+        assert_eq!(doc.text(None).unwrap(), "hello world");
     }
 
     #[test]
@@ -937,7 +943,7 @@ mod tests {
         assert_eq!(
             docs.get(&uri("FILE:///C:/w/a.rs"))
                 .unwrap()
-                .text(Default::default(), None)
+                .text(None)
                 .unwrap(),
             "goodbye"
         );
@@ -957,14 +963,7 @@ mod tests {
         docs.open(text_item(u.clone(), "shared"))
             .expect("the default policy accepts the test document");
 
-        assert_eq!(
-            docs2
-                .get(&u)
-                .unwrap()
-                .text(Default::default(), None)
-                .unwrap(),
-            "shared"
-        );
+        assert_eq!(docs2.get(&u).unwrap().text(None).unwrap(), "shared");
     }
 
     #[test]
@@ -989,10 +988,7 @@ mod tests {
         let remaining = first
             .get(&u)
             .expect("closing the second overlay is isolated");
-        assert_eq!(
-            remaining.text(Default::default(), None).unwrap(),
-            "first editor changed"
-        );
+        assert_eq!(remaining.text(None).unwrap(), "first editor changed");
         assert_eq!(remaining.version(), Some(2));
         assert!(second.get(&u).is_none());
     }
@@ -1026,8 +1022,11 @@ mod tests {
 
     #[test]
     fn utf8_position_is_byte_offset() {
-        let (docs, u) = opened("file:///unicode.txt", "héllo\nworld");
-        docs.set_position_encoding(PositionEncoding::Utf8);
+        let (docs, u) = opened_with_encoding(
+            "file:///unicode.txt",
+            "héllo\nworld",
+            PositionEncoding::Utf8,
+        );
 
         // 'é' starts at byte 1, so 'l' starts at byte 3.
         assert_eq!(docs.position_to_offset(&u, at(0, 3)), Some(3));
@@ -1036,8 +1035,8 @@ mod tests {
 
     #[test]
     fn utf32_position_counts_unicode_code_points() {
-        let (docs, u) = opened("file:///unicode.txt", "héllo😋");
-        docs.set_position_encoding(PositionEncoding::Utf32);
+        let (docs, u) =
+            opened_with_encoding("file:///unicode.txt", "héllo😋", PositionEncoding::Utf32);
 
         // The second 'l' starts at code-point offset 3 and the emoji at offset 5.
         assert_eq!(docs.position_to_offset(&u, at(0, 3)), Some(4));
@@ -1048,8 +1047,11 @@ mod tests {
 
     #[test]
     fn utf8_position_rejects_mid_codepoint_and_past_eol() {
-        let (docs, u) = opened("file:///unicode.txt", "héllo\nworld");
-        docs.set_position_encoding(PositionEncoding::Utf8);
+        let (docs, u) = opened_with_encoding(
+            "file:///unicode.txt",
+            "héllo\nworld",
+            PositionEncoding::Utf8,
+        );
 
         assert_eq!(
             docs.position_to_offset(&u, at(0, 2)),
@@ -1103,7 +1105,7 @@ mod tests {
                 "an invalid UTF-16 endpoint must reject the whole change"
             );
             let doc = docs.get(&u).expect("the rejected edit keeps the document");
-            assert_eq!(doc.text(Default::default(), None).unwrap(), "a👋b");
+            assert_eq!(doc.text(None).unwrap(), "a👋b");
             assert_eq!(doc.version(), Some(1));
         }
 
@@ -1119,14 +1121,13 @@ mod tests {
         // Covers a mixed-width sample: composed and decomposed text,
         // BMP characters, a surrogate pair, and a line boundary.
         let text = "äa\u{0308}錯誤😋\näa\u{0308}錯誤😋";
-        let (docs, u) = opened("file:///position-round-trip.txt", text);
 
         for encoding in [
             PositionEncoding::Utf8,
             PositionEncoding::Utf32,
             PositionEncoding::Utf16,
         ] {
-            docs.set_position_encoding(encoding);
+            let (docs, u) = opened_with_encoding("file:///position-round-trip.txt", text, encoding);
             let mut line_start = 0;
 
             for (line_index, line) in text.split('\n').enumerate() {
@@ -1159,14 +1160,12 @@ mod tests {
 
     #[test]
     fn positions_use_line_content_before_crlf_and_lf_endings() {
-        let (docs, u) = opened("file:///line-endings.txt", "x\r\ny\n");
-
         for encoding in [
             PositionEncoding::Utf8,
             PositionEncoding::Utf32,
             PositionEncoding::Utf16,
         ] {
-            docs.set_position_encoding(encoding);
+            let (docs, u) = opened_with_encoding("file:///line-endings.txt", "x\r\ny\n", encoding);
             assert_eq!(docs.position_to_offset(&u, at(0, 1)), Some(1));
             assert_eq!(docs.offset_to_position(&u, 1), Some(at(0, 1)));
             assert_eq!(docs.position_to_offset(&u, at(1, 0)), Some(3));
@@ -1175,7 +1174,11 @@ mod tests {
             assert_eq!(docs.position_to_offset(&u, at(2, 0)), Some(5));
         }
 
-        docs.set_position_encoding(PositionEncoding::Utf32);
+        let (docs, u) = opened_with_encoding(
+            "file:///line-endings.txt",
+            "x\r\ny\n",
+            PositionEncoding::Utf32,
+        );
         assert_eq!(docs.position_to_offset(&u, at(0, 2)), None);
         assert_eq!(docs.position_to_offset(&u, at(0, 3)), None);
         assert_eq!(docs.position_to_offset(&u, at(1, 2)), None);
@@ -1189,7 +1192,7 @@ mod tests {
             .expect("the change applies cleanly");
 
         let doc = docs.get(&u).unwrap();
-        assert_eq!(doc.text(Default::default(), None).unwrap(), "hello lspf");
+        assert_eq!(doc.text(None).unwrap(), "hello lspf");
         assert_eq!(doc.version(), Some(2));
     }
 
@@ -1210,16 +1213,13 @@ mod tests {
         docs.apply_changes(&u, 27, [change(None, "contents")])
             .expect("a no-op replacement still records its version");
         let no_op = docs.get(&u).unwrap();
-        assert_eq!(no_op.text(Default::default(), None).unwrap(), "contents");
+        assert_eq!(no_op.text(None).unwrap(), "contents");
         assert_eq!(no_op.version(), Some(27));
 
         docs.apply_changes(&u, 7, [change(None, "new contents")])
             .expect("the store accepts the client's non-monotonic version");
         let regressed = docs.get(&u).unwrap();
-        assert_eq!(
-            regressed.text(Default::default(), None).unwrap(),
-            "new contents"
-        );
+        assert_eq!(regressed.text(None).unwrap(), "new contents");
         assert_eq!(regressed.version(), Some(7));
     }
 
@@ -1249,7 +1249,7 @@ mod tests {
             .expect("each range is interpreted against the preceding edit");
 
         let doc = docs.get(&u).unwrap();
-        assert_eq!(doc.text(Default::default(), None).unwrap(), "adcb");
+        assert_eq!(doc.text(None).unwrap(), "adcb");
         assert_eq!(doc.version(), Some(2));
     }
 
@@ -1261,7 +1261,7 @@ mod tests {
             .expect("the insertion applies at the empty document's only position");
 
         let doc = docs.get(&u).unwrap();
-        assert_eq!(doc.text(Default::default(), None).unwrap(), "f");
+        assert_eq!(doc.text(None).unwrap(), "f");
         assert_eq!(doc.version(), Some(2));
     }
 
@@ -1277,10 +1277,7 @@ mod tests {
             .expect("the trailing newline exposes an empty final line");
 
         let doc = docs.get(&u).unwrap();
-        assert_eq!(
-            doc.text(Default::default(), None).unwrap(),
-            "first\nsecond\nthird"
-        );
+        assert_eq!(doc.text(None).unwrap(), "first\nsecond\nthird");
         assert_eq!(doc.version(), Some(2));
     }
 
@@ -1292,7 +1289,7 @@ mod tests {
             .expect("the change applies cleanly");
 
         let doc = docs.get(&u).unwrap();
-        assert_eq!(doc.text(Default::default(), None).unwrap(), "goodbye");
+        assert_eq!(doc.text(None).unwrap(), "goodbye");
         assert_eq!(doc.version(), Some(2));
     }
 
@@ -1309,7 +1306,7 @@ mod tests {
         );
 
         let doc = docs.get(&u).expect("the store is still readable");
-        assert_eq!(doc.text(Default::default(), None).unwrap(), "hello world");
+        assert_eq!(doc.text(None).unwrap(), "hello world");
         assert_eq!(doc.version(), Some(1), "a rejected change advances nothing");
     }
 

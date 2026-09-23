@@ -302,7 +302,11 @@ impl Workspace {
             return Ok(document);
         }
         match self.inner.file_provider.read_text(uri).await {
-            Ok(Some(text)) => Ok(Document::provider_snapshot(uri.clone(), text)),
+            Ok(Some(text)) => Ok(Document::provider_snapshot(
+                uri.clone(),
+                text,
+                self.inner.documents.position_encoding(),
+            )),
             Ok(None) => Err(WorkspaceError::NotFound),
             Err(error) => Err(error),
         }
@@ -579,7 +583,7 @@ mod tests {
                 .documents()
                 .get(&uri("file:///shared.rs"))
                 .expect("a clone reads the same connection documents");
-            assert_eq!(doc.text(Default::default(), None).unwrap(), "fn main() {}");
+            assert_eq!(doc.text(None).unwrap(), "fn main() {}");
         }
     }
 
@@ -647,7 +651,7 @@ mod tests {
 
         let document = workspace.text_document(&requested).await.unwrap();
 
-        assert_eq!(document.text(Default::default(), None).unwrap(), "editor");
+        assert_eq!(document.text(None).unwrap(), "editor");
         assert_eq!(document.version(), Some(7));
     }
 
@@ -667,7 +671,7 @@ mod tests {
 
         let first = workspace.text_document(&requested).await.unwrap();
         assert_eq!(first.uri(), &requested);
-        assert_eq!(first.text(Default::default(), None).unwrap(), "first");
+        assert_eq!(first.text(None).unwrap(), "first");
         assert_eq!(first.version(), None);
         assert!(documents.get(&requested).is_none());
 
@@ -677,7 +681,7 @@ mod tests {
                 .text_document(&requested)
                 .await
                 .unwrap()
-                .text(Default::default(), None)
+                .text(None)
                 .unwrap(),
             "second",
             "an unopened lookup consults the provider every time"
@@ -717,10 +721,7 @@ mod tests {
 
         let first = workspace.text_document(&requested).await.unwrap();
         assert_eq!(first.uri(), &requested);
-        assert_eq!(
-            first.text(Default::default(), None).unwrap(),
-            "provider one"
-        );
+        assert_eq!(first.text(None).unwrap(), "provider one");
         assert_eq!(first.version(), None);
         assert!(
             documents.get(&requested).is_none(),
@@ -733,7 +734,7 @@ mod tests {
                 .text_document(&requested)
                 .await
                 .unwrap()
-                .text(Default::default(), None)
+                .text(None)
                 .unwrap(),
             "provider two",
             "an unopened lookup reads the filesystem every time"
@@ -759,7 +760,7 @@ mod tests {
                 .text_document(&requested)
                 .await
                 .unwrap()
-                .text(Default::default(), None)
+                .text(None)
                 .unwrap(),
             "outside the root"
         );

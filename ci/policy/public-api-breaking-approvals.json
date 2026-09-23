@@ -71,7 +71,7 @@
       "baselineVersion": "1.0.2",
       "target": "*",
       "features": "*",
-      "findingsSha256": "a4921ed50b25694e7191f29af4d2912e789db783d0a6b445f71f0f2a44413166"
+      "findingsSha256": "9bd45e8c84c3e5870daa3ecf8ff0af81e1b22aee525deb3765c0d4084feeadda"
     }
   ]
 }

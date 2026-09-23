@@ -134,12 +134,11 @@ async fn hover(
     let position = params.text_document_position_params.position;
     let uri = params.text_document_position_params.text_document.uri;
     let document = example_support::document(&ctx, &uri)?;
-    let encoding = ctx.documents().position_encoding();
-    let Some(range) = document.line_range(encoding, position.line) else {
+    let Some(range) = document.line_range(position.line) else {
         return Ok(None);
     };
     let line = document
-        .text(encoding, Some(range))
+        .text(Some(range))
         .expect("the line range belongs to this snapshot");
     let Some(value) = parse(&line) else {
         return Ok(None);

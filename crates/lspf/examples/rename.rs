@@ -31,15 +31,14 @@ async fn prepare(
 ) -> Result<Option<PrepareRenameResponse>, LspError> {
     let position = params.text_document_position_params;
     let document = example_support::document(&ctx, &position.text_document.uri)?;
-    let encoding = ctx.documents().position_encoding();
-    let Some((word, range)) = document.word_at_position(encoding, position.position, |ch| {
+    let Some((word, range)) = document.word_at_position(position.position, |ch| {
         ch.is_ascii_alphanumeric() || ch == '_'
     }) else {
         return Ok(None);
     };
     Ok(renameable(
         &document
-            .text(encoding, None)
+            .text(None)
             .expect("full document text is always available"),
         &word,
     )
@@ -59,21 +58,20 @@ async fn rename(
 ) -> Result<Option<WorkspaceEdit>, LspError> {
     let uri = params.text_document_position_params.text_document.uri;
     let document = example_support::document(&ctx, &uri)?;
-    let encoding = ctx.documents().position_encoding();
-    let Some((word, _)) = document.word_at_position(
-        encoding,
-        params.text_document_position_params.position,
-        |ch| ch.is_ascii_alphanumeric() || ch == '_',
-    ) else {
+    let Some((word, _)) = document
+        .word_at_position(params.text_document_position_params.position, |ch| {
+            ch.is_ascii_alphanumeric() || ch == '_'
+        })
+    else {
         return Ok(None);
     };
     let text = document
-        .text(encoding, None)
+        .text(None)
         .expect("full document text is always available");
     if !renameable(&text, &word) {
         return Ok(None);
     }
-    let edits = example_support::word_ranges(&text, &word, encoding)
+    let edits = example_support::word_ranges(&text, &word, document.position_encoding())
         .into_iter()
         .map(|range| TextEdit {
             range,

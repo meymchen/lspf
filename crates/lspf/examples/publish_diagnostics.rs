@@ -20,7 +20,7 @@ async fn publish(ctx: ServerContext, uri: lspf::types::Uri) {
         uri,
         diagnostics: example_support::sum_diagnostics(
             &document
-                .text(ctx.documents().position_encoding(), None)
+                .text(None)
                 .expect("full document text is always available"),
         ),
         version: document.version(),

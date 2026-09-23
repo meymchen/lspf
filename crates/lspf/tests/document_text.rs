@@ -42,18 +42,22 @@ async fn query(
     if params["retain"] == true {
         *state.retained.lock().unwrap() = Some(document.clone());
     }
-    let encoding = ctx.documents().position_encoding();
-    let line_range = document.line_range(encoding, params["line"].as_u64().unwrap_or(0) as u32);
-    let line = line_range.and_then(|range| document.text(encoding, Some(range)));
+    let line_range = document.line_range(params["line"].as_u64().unwrap_or(0) as u32);
+    let line = line_range.and_then(|range| document.text(Some(range)));
     let mut result =
-        json!({"line": line, "text": document.text(encoding, None), "version": document.version()});
+        json!({"line": line, "text": document.text(None), "version": document.version()});
     if params["lineMetadata"] == true {
         result["lineCount"] = json!(document.line_count());
         result["lineRange"] = json!(line_range);
+        result["encoding"] = json!(match document.position_encoding() {
+            lspf::PositionEncoding::Utf8 => "utf-8",
+            lspf::PositionEncoding::Utf16 => "utf-16",
+            lspf::PositionEncoding::Utf32 => "utf-32",
+        });
     }
     if let Some(range) = params.get("range") {
         let range = serde_json::from_value(range.clone()).unwrap();
-        result["selection"] = json!(document.text(encoding, Some(range)));
+        result["selection"] = json!(document.text(Some(range)));
     }
     if let Some(position) = params.get("position") {
         let position = serde_json::from_value(position.clone()).unwrap();
@@ -64,11 +68,13 @@ async fn query(
             Some("all") => true,
             _ => ch.is_ascii_alphanumeric() || ch == '_',
         };
-        result["word"] = json!(document.word_at_position(
-            ctx.documents().position_encoding(),
-            position,
-            predicate
-        ));
+        result["word"] = json!(document.word_at_position(position, predicate));
+    }
+    if params["coordinates"] == true {
+        let position = serde_json::from_value(params["position"].clone()).unwrap();
+        result["offsetAtPosition"] = json!(document.position_to_offset(position));
+        result["positionAtOffset"] =
+            json!(document.offset_to_position(params["offset"].as_u64().unwrap() as usize));
     }
     if params["metadata"] == true {
         result["uri"] = json!(document.uri());
@@ -188,6 +194,38 @@ async fn line_ranges_use_negotiated_columns_and_counts_include_trailing_empty_li
     assert_eq!(result["lineRange"], range(0, 0, 0, 0));
     assert_eq!(result["text"], "");
     empty.finish().await.unwrap();
+}
+
+#[tokio::test]
+async fn snapshots_keep_their_connections_encoding_for_all_coordinate_queries() {
+    let mut connections = Vec::new();
+    for (encoding, start, end) in [("utf-8", 5, 9), ("utf-16", 3, 7), ("utf-32", 2, 6)] {
+        connections.push((
+            opened("😀 word\r\n", Some(encoding)).await,
+            encoding,
+            start,
+            end,
+        ));
+    }
+    // Query after all three connections have negotiated different encodings.
+    for (mut journey, encoding, start, end) in connections {
+        let result = read(
+            &mut journey,
+            json!({
+                "lineMetadata":true,"coordinates":true,"offset":5,
+                "position":position(0,start),"range":range(0,start,0,end),
+            }),
+        )
+        .await;
+        assert_eq!(result["encoding"], encoding);
+        assert_eq!(result["lineRange"], range(0, 0, 0, end));
+        assert_eq!(result["lineCount"], 2);
+        assert_eq!(result["selection"], "word");
+        assert_eq!(result["word"], json!(["word", range(0, start, 0, end)]));
+        assert_eq!(result["offsetAtPosition"], 5);
+        assert_eq!(result["positionAtOffset"], position(0, start));
+        journey.finish().await.unwrap();
+    }
 }
 
 #[tokio::test]
@@ -364,89 +402,107 @@ async fn malformed_positions_and_ranges_are_absent_without_affecting_the_snapsho
 
 #[tokio::test]
 async fn retained_snapshot_survives_changes_and_close() {
-    let original = "\u{1f600} old\r\n";
-    let mut journey = opened(original, None).await;
-    let request = json!({"range":range(0,3,0,6),"position":position(0,4),"metadata":true,"lineMetadata":true});
-    let mut retain = request.clone();
-    retain["retain"] = json!(true);
-    let before = read(&mut journey, retain).await;
-    assert_eq!(before["selection"], "old");
-    assert_eq!(before["word"], json!(["old", range(0, 3, 0, 6)]));
-    assert_eq!(before["uri"], URI);
-    assert_eq!(before["languageId"], "text");
-    assert_eq!(before["lineCount"], 2);
-    assert_eq!(before["lineRange"], range(0, 0, 0, 6));
-    notify(
-        &mut journey,
-        "textDocument/didChange",
-        json!({
-            "textDocument":{"uri":URI,"version":8},
-            "contentChanges":[{"range":range(0,3,0,6),"text":"newer\nsuffix"}],
-        }),
-    );
-    let current = read(&mut journey, request.clone()).await;
-    assert_eq!(current["selection"], "new");
-    assert_eq!(current["word"], json!(["newer", range(0, 3, 0, 8)]));
-    assert_eq!(current["lineCount"], 3);
-    assert_eq!(current["lineRange"], range(0, 0, 0, 8));
-    assert_eq!(current["version"], 8);
-    let mut retained = request;
-    retained["retained"] = json!(true);
-    assert_eq!(read(&mut journey, retained.clone()).await, before);
-    notify(
-        &mut journey,
-        "textDocument/didClose",
-        json!({"textDocument":{"uri":URI}}),
-    );
-    let after = read(&mut journey, retained).await;
-    let mut closed = before;
-    closed["live"] = json!(false);
-    assert_eq!(after, closed);
-    journey.finish().await.unwrap();
+    for (encoding, start) in [("utf-8", 5), ("utf-16", 3), ("utf-32", 2)] {
+        let original = "\u{1f600} old\r\n";
+        let mut journey = opened(original, Some(encoding)).await;
+        let request = json!({"range":range(0,start,0,start+3),"position":position(0,start+1),"metadata":true,"lineMetadata":true});
+        let mut retain = request.clone();
+        retain["retain"] = json!(true);
+        let before = read(&mut journey, retain).await;
+        assert_eq!(before["encoding"], encoding);
+        assert_eq!(before["selection"], "old");
+        assert_eq!(
+            before["word"],
+            json!(["old", range(0, start, 0, start + 3)])
+        );
+        assert_eq!(before["uri"], URI);
+        assert_eq!(before["languageId"], "text");
+        assert_eq!(before["lineCount"], 2);
+        assert_eq!(before["lineRange"], range(0, 0, 0, start + 3));
+        notify(
+            &mut journey,
+            "textDocument/didChange",
+            json!({
+                "textDocument":{"uri":URI,"version":8},
+                "contentChanges":[{"range":range(0,start,0,start+3),"text":"newer\nsuffix"}],
+            }),
+        );
+        let current = read(&mut journey, request.clone()).await;
+        assert_eq!(current["encoding"], encoding);
+        assert_eq!(current["selection"], "new");
+        assert_eq!(
+            current["word"],
+            json!(["newer", range(0, start, 0, start + 5)])
+        );
+        assert_eq!(current["lineCount"], 3);
+        assert_eq!(current["lineRange"], range(0, 0, 0, start + 5));
+        assert_eq!(current["version"], 8);
+        let mut retained = request;
+        retained["retained"] = json!(true);
+        assert_eq!(read(&mut journey, retained.clone()).await, before);
+        notify(
+            &mut journey,
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":URI}}),
+        );
+        let after = read(&mut journey, retained).await;
+        let mut closed = before;
+        closed["live"] = json!(false);
+        assert_eq!(after, closed);
+        journey.finish().await.unwrap();
+    }
 }
 
 #[tokio::test]
 async fn provider_and_notebook_snapshots_share_the_same_text_helpers() {
-    let provider = MemoryFileProvider::new();
-    provider.insert(URI.parse::<Uri>().unwrap(), "\u{1f600} stored\r\n");
-    let mut journey = ServerJourney::start(server(provider)).await.unwrap();
-    let result = read(
-        &mut journey,
-        json!({"provider":true,"metadata":true,"lineMetadata":true,
-        "range":range(0,3,0,9),"position":position(0,4)}),
-    )
-    .await;
-    assert_eq!(
-        result,
-        json!({"line":"\u{1f600} stored","text":"\u{1f600} stored\r\n",
+    for (encoding, start) in [("utf-8", 5), ("utf-16", 3), ("utf-32", 2)] {
+        let provider = MemoryFileProvider::new();
+        provider.insert(URI.parse::<Uri>().unwrap(), "\u{1f600} stored\r\n");
+        let params: InitializeParams = serde_json::from_value(json!({
+            "capabilities":{"general":{"positionEncodings":[encoding]}}
+        }))
+        .unwrap();
+        let mut journey = ServerJourney::start_with(server(provider), params)
+            .await
+            .unwrap();
+        let result = read(
+            &mut journey,
+            json!({"provider":true,"metadata":true,"lineMetadata":true,
+        "range":range(0,start,0,start+6),"position":position(0,start+1)}),
+        )
+        .await;
+        assert_eq!(
+            result,
+            json!({"line":"\u{1f600} stored","text":"\u{1f600} stored\r\n",
         "version":null,"uri":URI,"languageId":"","live":false,
-        "selection":"stored","word":["stored",range(0,3,0,9)],
-        "lineCount":2,"lineRange":range(0,0,0,9)})
-    );
-    let cell = "file:///book.ipynb#cell";
-    notify(
-        &mut journey,
-        "notebookDocument/didOpen",
-        json!({
-            "notebookDocument":{"uri":"file:///book.ipynb","notebookType":"test","version":1,
-                "cells":[{"kind":2,"document":cell}]},
-            "cellTextDocuments":[{"uri":cell,"languageId":"rust","version":3,"text":"\u{1f600} cell\r\n"}],
-        }),
-    );
-    let result = read(
-        &mut journey,
-        json!({"uri":cell,"metadata":true,"lineMetadata":true,
-        "range":range(0,3,0,7),"position":position(0,5)}),
-    )
-    .await;
-    assert_eq!(
-        result,
-        json!({"line":"\u{1f600} cell","text":"\u{1f600} cell\r\n",
+        "selection":"stored","word":["stored",range(0,start,0,start+6)],
+        "lineCount":2,"lineRange":range(0,0,0,start+6),"encoding":encoding})
+        );
+        let cell = "file:///book.ipynb#cell";
+        notify(
+            &mut journey,
+            "notebookDocument/didOpen",
+            json!({
+                "notebookDocument":{"uri":"file:///book.ipynb","notebookType":"test","version":1,
+                    "cells":[{"kind":2,"document":cell}]},
+                "cellTextDocuments":[{"uri":cell,"languageId":"rust","version":3,"text":"\u{1f600} cell\r\n"}],
+            }),
+        );
+        let result = read(
+            &mut journey,
+            json!({"uri":cell,"metadata":true,"lineMetadata":true,
+        "range":range(0,start,0,start+4),"position":position(0,start+2)}),
+        )
+        .await;
+        assert_eq!(
+            result,
+            json!({"line":"\u{1f600} cell","text":"\u{1f600} cell\r\n",
         "version":3,"uri":cell,"languageId":"rust","live":true,
-        "selection":"cell","word":["cell",range(0,3,0,7)],
-        "lineCount":2,"lineRange":range(0,0,0,7)})
-    );
-    journey.finish().await.unwrap();
+        "selection":"cell","word":["cell",range(0,start,0,start+4)],
+        "lineCount":2,"lineRange":range(0,0,0,start+4),"encoding":encoding})
+        );
+        journey.finish().await.unwrap();
+    }
 }
 
 #[tokio::test]

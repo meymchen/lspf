@@ -50,7 +50,7 @@ description: 选择进程拓扑、明确关闭所有权并诊断端点故障。
 | 文档钩子没有运行 | 确认已启用文档同步，而且通知通过了验证和资源接纳。笔记本单元格变更调用笔记本钩子，而不是文本文档钩子。 |
 | 高负载时请求返回 `ServerCancelled` | 检查消息：容量耗尽表示入站接纳已满；`handler deadline expired` 表示请求超过截止时间。 |
 | 发送返回 `OutboundOverloaded` | 可选消息超过了消息数或编码后字节数预算。合并过期输出，或根据实测队列压力调优。 |
-| emoji 附近的诊断或位置发生偏移 | 使用 `ctx.documents().position_encoding()` 和视图的转换辅助方法；UTF-16 会把代理项对计为两个单元。 |
+| emoji 附近的诊断或位置发生偏移 | 使用 `Document` 快照的转换辅助方法；自行计算时读取 `document.position_encoding()`；UTF-16 会把代理项对计为两个单元。 |
 | Client 请求超时 | 确认连接驱动器正在运行、对端实现了该方法，而且出站截止时间符合实测延迟。 |
 | 受监督的子进程提前退出 | 检查 `ChildOutput::outcome`、操作系统状态、stderr 和 `stderr_truncated`；待处理请求会以已取消结束。 |
 | TCP 或 WebSocket 只能服务一个对端 | 这是第一方构建器的约定。请在应用自行管理的 accept 循环中创建端点。 |

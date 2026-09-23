@@ -823,7 +823,7 @@ mod tests {
             documents
                 .get(&uri("file:///c1"))
                 .unwrap()
-                .text(Default::default(), None)
+                .text(None)
                 .unwrap(),
             "one"
         );
@@ -837,7 +837,7 @@ mod tests {
             documents
                 .get(&uri("file:///c2"))
                 .unwrap()
-                .text(Default::default(), None)
+                .text(None)
                 .unwrap(),
             "one"
         );
@@ -870,7 +870,7 @@ mod tests {
             assert_eq!(notebooks.view().get(&notebook_uri), Some(before));
             for spelling in ["file:///c1", "file:///c2"] {
                 let document = documents.get(&uri(spelling)).unwrap();
-                assert_eq!(document.text(Default::default(), None).unwrap(), "one");
+                assert_eq!(document.text(None).unwrap(), "one");
                 assert_eq!(document.version(), Some(1));
                 assert_eq!(document.uri(), &uri(spelling));
             }
@@ -928,7 +928,7 @@ mod tests {
         assert!(documents.get(&uri("file:///c2")).is_none());
         let restored = documents.get(&uri("file:///c%31")).unwrap();
         assert_eq!(restored.uri(), &uri("file:///c1"));
-        assert_eq!(restored.text(Default::default(), None).unwrap(), "one");
+        assert_eq!(restored.text(None).unwrap(), "one");
         assert_eq!(restored.version(), Some(1));
         assert_eq!(
             notebooks
@@ -949,7 +949,7 @@ mod tests {
             documents
                 .get(&uri("file:///c2"))
                 .unwrap()
-                .text(Default::default(), None)
+                .text(None)
                 .unwrap(),
             "one"
         );
@@ -977,7 +977,7 @@ mod tests {
         assert_eq!(notebooks.view().get(&notebook_uri), Some(before));
         assert!(documents.get(&uri("file:///c2")).is_none());
         let restored = documents.get(&uri("file:///c1")).unwrap();
-        assert_eq!(restored.text(Default::default(), None).unwrap(), "one");
+        assert_eq!(restored.text(None).unwrap(), "one");
         assert_eq!(restored.version(), Some(1));
     }
 

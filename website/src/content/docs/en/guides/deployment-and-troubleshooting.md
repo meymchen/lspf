@@ -74,7 +74,7 @@ finishes.
 | A document hook does not run | Confirm document sync is enabled and the notification passed validation and resource admission. Notebook cell changes invoke notebook hooks, not text-document hooks. |
 | Requests return `ServerCancelled` under load | Inspect the message: capacity exhaustion means inbound admission is full; `handler deadline expired` means the request exceeded its deadline. |
 | Sends return `OutboundOverloaded` | The optional message exceeded the message-count or encoded-byte budget. Coalesce stale output or tune from measured queue pressure. |
-| Diagnostics or positions are shifted around emoji | Use `ctx.documents().position_encoding()` and the view's conversion helpers; UTF-16 counts surrogate pairs as two units. |
+| Diagnostics or positions are shifted around emoji | Use the Document snapshot's conversion helpers, or `document.position_encoding()` for custom calculations; UTF-16 counts surrogate pairs as two units. |
 | A Client request times out | Ensure the connection driver is running, the peer implements the method, and the outbound deadline fits observed latency. |
 | A supervised child exits early | Inspect `ChildOutput::outcome`, OS status, stderr, and `stderr_truncated`; pending requests resolve as cancelled. |
 | TCP or WebSocket serves only one peer | This is the first-party builder contract. Put endpoint construction inside an application-owned accept loop. |
