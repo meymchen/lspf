@@ -166,7 +166,6 @@ async fn main() -> lspf::Result<()> {
 mod tests {
     use super::*;
     use example_support::text_tests::{URI, opened, request};
-    use lspf::types::{Position, Range};
     use serde_json::json;
 
     #[tokio::test]
