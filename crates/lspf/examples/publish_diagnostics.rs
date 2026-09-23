@@ -18,7 +18,11 @@ async fn publish(ctx: ServerContext, uri: lspf::types::Uri) {
     };
     let _ = ctx.publish_diagnostics(PublishDiagnosticsParams {
         uri,
-        diagnostics: example_support::sum_diagnostics(&document.text()),
+        diagnostics: example_support::sum_diagnostics(
+            &document
+                .text(ctx.documents().position_encoding(), None)
+                .expect("full document text is always available"),
+        ),
         version: document.version(),
     });
 }

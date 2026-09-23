@@ -55,7 +55,7 @@ async fn hover(
         contents: HoverContents::MarkupContent(MarkupContent {
             kind: MarkupKind::PlainText,
             value: format!("{} · {} words", state.product_name,
-                document.text().split_whitespace().count()),
+                document.text(ctx.documents().position_encoding(), None).expect("full document text is always available").split_whitespace().count()),
         }),
         range: None,
     }))

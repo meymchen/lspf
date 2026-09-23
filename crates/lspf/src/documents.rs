@@ -109,44 +109,55 @@ impl Document {
         }
     }
 
-    /// Full document text as a `String`.
-    pub fn text(&self) -> String {
-        self.text.to_string()
-    }
-
-    /// Read a zero-based line without its terminating line break.
+    /// Read the full snapshot or a start-inclusive, end-exclusive LSP range.
     ///
-    /// Terminators follow the existing coordinate model: LF, CRLF, CR, VT,
-    /// FF, NEL (U+0085), line separator (U+2028), and paragraph separator
-    /// (U+2029).
-    ///
-    /// All other characters, including trailing spaces, are preserved. An
-    /// empty document has one empty line, and a final line terminator adds an
-    /// empty line. A nonexistent line returns `None`. Line numbering follows
-    /// the snapshot's position/offset coordinate model.
-    ///
-    /// The result borrows from this snapshot when possible, otherwise owns
-    /// only the requested text. It does not retain a document-store lock.
-    pub fn line(&self, line: u32) -> Option<Cow<'_, str>> {
-        self.line_content(line).map(Cow::from)
-    }
-
-    /// Read a start-inclusive, end-exclusive LSP range from this snapshot.
-    ///
-    /// Pass the connection's [`DocumentsView::position_encoding`]. Source
-    /// characters and embedded line endings are preserved exactly; ending at
-    /// the next line's column zero includes the preceding line terminator.
-    /// A valid empty range returns `Some("")`, including at document end.
+    /// `None` selects the whole document and always returns `Some`; the encoding
+    /// is unused for this selection. Pass `Some(range)` and the connection's
+    /// [`DocumentsView::position_encoding`] for a partial read. Source characters
+    /// and embedded line endings are preserved exactly. Ending at the next line's
+    /// column zero includes the preceding line terminator. A valid empty range
+    /// returns `Some("")`, including at document end.
     ///
     /// Returns `None` for reversed ranges, nonexistent lines, columns beyond
     /// line content, or positions inside an encoded scalar or line terminator.
     /// End-of-line means immediately before its terminator. No position is
     /// clamped or truncated. Both endpoints are checked against this snapshot.
-    /// The result borrows when possible or owns only the selected fragment.
-    pub fn text_in_range(&self, encoding: PositionEncoding, range: Range) -> Option<Cow<'_, str>> {
+    /// The result borrows when possible or owns only the selected text, without
+    /// retaining a document-store lock. Use [`Self::line_range`] to select a line.
+    pub fn text(&self, encoding: PositionEncoding, range: Option<Range>) -> Option<Cow<'_, str>> {
+        let Some(range) = range else {
+            return Some(Cow::from(self.text.slice(..)));
+        };
         let start = self.content_char_index(encoding, range.start)?;
         let end = self.content_char_index(encoding, range.end)?;
         (start <= end).then(|| Cow::from(self.text.slice(start..end)))
+    }
+
+    /// Number of lines in this snapshot, without materializing its text.
+    ///
+    /// An empty document has one empty line. A final line terminator adds an
+    /// empty line. Line numbering follows the snapshot's coordinate model:
+    /// LF, CRLF, CR, VT, FF, NEL (U+0085), line separator (U+2028), and paragraph
+    /// separator (U+2029) are terminators.
+    pub fn line_count(&self) -> usize {
+        self.text.len_lines()
+    }
+
+    /// The range of a zero-based line, excluding its complete line terminator.
+    ///
+    /// Both positions use the supplied encoding. Empty lines have an empty
+    /// range, including the sole line of an empty document and a trailing empty
+    /// line (see [`Self::line_count`]). Returns `None` for a nonexistent line or
+    /// when its end column cannot fit in an LSP position. No text is copied.
+    ///
+    /// Read the returned range with [`Self::text`] to obtain the line content,
+    /// preserving trailing spaces and all other non-terminator characters.
+    pub fn line_range(&self, encoding: PositionEncoding, line: u32) -> Option<Range> {
+        let content = self.line_content(line)?;
+        Some(Range::new(
+            Position::new(line, 0),
+            Position::new(line, encoding.column(content, content.len_chars())?),
+        ))
     }
 
     /// Select a maximal run of characters accepted by `is_word` on one line.
@@ -159,7 +170,7 @@ impl Document {
     ///
     /// Pass the connection's [`DocumentsView::position_encoding`]; both the
     /// input position and returned range use that encoding. Invalid positions
-    /// (as for [`Self::text_in_range`]) or no adjacent accepted character return
+    /// (as for [`Self::text`]) or no adjacent accepted character return
     /// `None`. The text borrows from this snapshot when possible or owns only
     /// the selected word, and remains independent of later synchronization.
     ///
@@ -867,7 +878,7 @@ mod tests {
         assert_eq!(doc.uri(), &u);
         assert_eq!(doc.language_id(), "plaintext");
         assert_eq!(doc.version(), Some(1));
-        assert_eq!(doc.text(), "hello world");
+        assert_eq!(doc.text(Default::default(), None).unwrap(), "hello world");
     }
 
     #[test]
@@ -924,7 +935,10 @@ mod tests {
         docs.apply_changes(&uri("file:///c:/w/a.rs"), 2, [change(None, "goodbye")])
             .expect("the change names the same document by another spelling");
         assert_eq!(
-            docs.get(&uri("FILE:///C:/w/a.rs")).unwrap().text(),
+            docs.get(&uri("FILE:///C:/w/a.rs"))
+                .unwrap()
+                .text(Default::default(), None)
+                .unwrap(),
             "goodbye"
         );
 
@@ -943,7 +957,14 @@ mod tests {
         docs.open(text_item(u.clone(), "shared"))
             .expect("the default policy accepts the test document");
 
-        assert_eq!(docs2.get(&u).unwrap().text(), "shared");
+        assert_eq!(
+            docs2
+                .get(&u)
+                .unwrap()
+                .text(Default::default(), None)
+                .unwrap(),
+            "shared"
+        );
     }
 
     #[test]
@@ -968,7 +989,10 @@ mod tests {
         let remaining = first
             .get(&u)
             .expect("closing the second overlay is isolated");
-        assert_eq!(remaining.text(), "first editor changed");
+        assert_eq!(
+            remaining.text(Default::default(), None).unwrap(),
+            "first editor changed"
+        );
         assert_eq!(remaining.version(), Some(2));
         assert!(second.get(&u).is_none());
     }
@@ -1079,7 +1103,7 @@ mod tests {
                 "an invalid UTF-16 endpoint must reject the whole change"
             );
             let doc = docs.get(&u).expect("the rejected edit keeps the document");
-            assert_eq!(doc.text(), "a👋b");
+            assert_eq!(doc.text(Default::default(), None).unwrap(), "a👋b");
             assert_eq!(doc.version(), Some(1));
         }
 
@@ -1165,7 +1189,7 @@ mod tests {
             .expect("the change applies cleanly");
 
         let doc = docs.get(&u).unwrap();
-        assert_eq!(doc.text(), "hello lspf");
+        assert_eq!(doc.text(Default::default(), None).unwrap(), "hello lspf");
         assert_eq!(doc.version(), Some(2));
     }
 
@@ -1186,13 +1210,16 @@ mod tests {
         docs.apply_changes(&u, 27, [change(None, "contents")])
             .expect("a no-op replacement still records its version");
         let no_op = docs.get(&u).unwrap();
-        assert_eq!(no_op.text(), "contents");
+        assert_eq!(no_op.text(Default::default(), None).unwrap(), "contents");
         assert_eq!(no_op.version(), Some(27));
 
         docs.apply_changes(&u, 7, [change(None, "new contents")])
             .expect("the store accepts the client's non-monotonic version");
         let regressed = docs.get(&u).unwrap();
-        assert_eq!(regressed.text(), "new contents");
+        assert_eq!(
+            regressed.text(Default::default(), None).unwrap(),
+            "new contents"
+        );
         assert_eq!(regressed.version(), Some(7));
     }
 
@@ -1222,7 +1249,7 @@ mod tests {
             .expect("each range is interpreted against the preceding edit");
 
         let doc = docs.get(&u).unwrap();
-        assert_eq!(doc.text(), "adcb");
+        assert_eq!(doc.text(Default::default(), None).unwrap(), "adcb");
         assert_eq!(doc.version(), Some(2));
     }
 
@@ -1234,7 +1261,7 @@ mod tests {
             .expect("the insertion applies at the empty document's only position");
 
         let doc = docs.get(&u).unwrap();
-        assert_eq!(doc.text(), "f");
+        assert_eq!(doc.text(Default::default(), None).unwrap(), "f");
         assert_eq!(doc.version(), Some(2));
     }
 
@@ -1250,7 +1277,10 @@ mod tests {
             .expect("the trailing newline exposes an empty final line");
 
         let doc = docs.get(&u).unwrap();
-        assert_eq!(doc.text(), "first\nsecond\nthird");
+        assert_eq!(
+            doc.text(Default::default(), None).unwrap(),
+            "first\nsecond\nthird"
+        );
         assert_eq!(doc.version(), Some(2));
     }
 
@@ -1262,7 +1292,7 @@ mod tests {
             .expect("the change applies cleanly");
 
         let doc = docs.get(&u).unwrap();
-        assert_eq!(doc.text(), "goodbye");
+        assert_eq!(doc.text(Default::default(), None).unwrap(), "goodbye");
         assert_eq!(doc.version(), Some(2));
     }
 
@@ -1279,7 +1309,7 @@ mod tests {
         );
 
         let doc = docs.get(&u).expect("the store is still readable");
-        assert_eq!(doc.text(), "hello world");
+        assert_eq!(doc.text(Default::default(), None).unwrap(), "hello world");
         assert_eq!(doc.version(), Some(1), "a rejected change advances nothing");
     }
 

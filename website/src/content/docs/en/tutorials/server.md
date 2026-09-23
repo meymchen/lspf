@@ -86,7 +86,7 @@ async fn hover(
     let Some(document) = ctx.documents().get(uri) else {
         return Ok(None);
     };
-    let words = document.text().split_whitespace().count();
+    let words = document.text(ctx.documents().position_encoding(), None).expect("full document text is always available").split_whitespace().count();
     Ok(Some(Hover {
         contents: HoverContents::MarkupContent(MarkupContent {
             kind: MarkupKind::PlainText,
@@ -134,7 +134,7 @@ fn publish_line_diagnostics(state: &State, ctx: &ServerContext, uri: Uri) {
         return;
     };
     let encoding = ctx.documents().position_encoding();
-    let text = document.text();
+    let text = document.text(ctx.documents().position_encoding(), None).expect("full document text is always available");
     let diagnostics = text
         .lines()
         .enumerate()
@@ -221,7 +221,7 @@ async fn count_words(
             uri.as_str()
         )));
     };
-    Ok(document.text().split_whitespace().count())
+    Ok(document.text(ctx.documents().position_encoding(), None).expect("full document text is always available").split_whitespace().count())
 }
 ```
 
@@ -282,7 +282,7 @@ async fn hover(
     let Some(document) = ctx.documents().get(uri) else {
         return Ok(None);
     };
-    let words = document.text().split_whitespace().count();
+    let words = document.text(ctx.documents().position_encoding(), None).expect("full document text is always available").split_whitespace().count();
     Ok(Some(Hover {
         contents: HoverContents::MarkupContent(MarkupContent {
             kind: MarkupKind::PlainText,
@@ -311,7 +311,7 @@ fn publish_line_diagnostics(state: &State, ctx: &ServerContext, uri: Uri) {
         return;
     };
     let encoding = ctx.documents().position_encoding();
-    let text = document.text();
+    let text = document.text(ctx.documents().position_encoding(), None).expect("full document text is always available");
     let diagnostics = text
         .lines()
         .enumerate()
@@ -374,7 +374,7 @@ async fn count_words(
             uri.as_str()
         )));
     };
-    Ok(document.text().split_whitespace().count())
+    Ok(document.text(ctx.documents().position_encoding(), None).expect("full document text is always available").split_whitespace().count())
 }
 
 #[tokio::main]

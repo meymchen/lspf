@@ -139,9 +139,12 @@ async fn on_did_close(
     let cell_texts = [CELL_ONE, CELL_TWO, CELL_THREE]
         .iter()
         .map(|spelling| {
-            ctx.documents()
-                .get(&uri(spelling))
-                .map(|document| document.text())
+            ctx.documents().get(&uri(spelling)).map(|document| {
+                document
+                    .text(Default::default(), None)
+                    .unwrap()
+                    .into_owned()
+            })
         })
         .collect();
     state.seen.lock().unwrap().push(Seen::Close {
@@ -209,7 +212,11 @@ async fn probe(
         texts: params
             .cells
             .iter()
-            .map(|spelling| documents.get(&uri(spelling)).map(|d| d.text()))
+            .map(|spelling| {
+                documents
+                    .get(&uri(spelling))
+                    .map(|d| d.text(Default::default(), None).unwrap().into_owned())
+            })
             .collect(),
         owners: params
             .cells

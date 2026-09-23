@@ -37,9 +37,13 @@ async fn target_at_position(
     let document = ctx.documents().get(uri)?;
     let encoding = ctx.documents().position_encoding();
     let offset = document.position_to_offset(encoding, position)?;
-    let link = markdown_links(&document.text())
-        .into_iter()
-        .find(|link| link.target_start <= offset && offset <= link.target_end)?;
+    let link = markdown_links(
+        &document
+            .text(ctx.documents().position_encoding(), None)
+            .expect("full document text is always available"),
+    )
+    .into_iter()
+    .find(|link| link.target_start <= offset && offset <= link.target_end)?;
     let local = resolve_local_target(uri, &link.target)?;
     let target = ctx.workspace().text_document(&local.uri).await.ok()?;
     let heading = selected_heading(&target, encoding, local.fragment.as_deref());
@@ -58,7 +62,9 @@ async fn publish_diagnostics(ctx: ServerContext, uri: Uri) {
     let Some(document) = ctx.documents().get(&uri) else {
         return;
     };
-    let text = document.text();
+    let text = document
+        .text(ctx.documents().position_encoding(), None)
+        .expect("full document text is always available");
     let mut diagnostics = Vec::new();
     for link in markdown_links(&text) {
         let Some(local) = resolve_local_target(&uri, &link.target) else {

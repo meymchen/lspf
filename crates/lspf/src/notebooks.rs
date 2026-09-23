@@ -819,14 +819,28 @@ mod tests {
         }))))).unwrap_err();
         assert!(matches!(error, NotebookMutationError::Capacity(_)));
         assert_eq!(notebooks.view().get(&notebook_uri), Some(before));
-        assert_eq!(documents.get(&uri("file:///c1")).unwrap().text(), "one");
+        assert_eq!(
+            documents
+                .get(&uri("file:///c1"))
+                .unwrap()
+                .text(Default::default(), None)
+                .unwrap(),
+            "one"
+        );
         assert!(documents.get(&uri("file:///c2")).is_none());
         notebooks.close(close_params(&notebook_uri));
         assert!(documents.get(&uri("file:///c1")).is_none());
         notebooks
             .open(open_params(&notebook_uri, 3, vec![cell("file:///c2")]))
             .unwrap();
-        assert_eq!(documents.get(&uri("file:///c2")).unwrap().text(), "one");
+        assert_eq!(
+            documents
+                .get(&uri("file:///c2"))
+                .unwrap()
+                .text(Default::default(), None)
+                .unwrap(),
+            "one"
+        );
     }
 
     #[test]
@@ -856,7 +870,7 @@ mod tests {
             assert_eq!(notebooks.view().get(&notebook_uri), Some(before));
             for spelling in ["file:///c1", "file:///c2"] {
                 let document = documents.get(&uri(spelling)).unwrap();
-                assert_eq!(document.text(), "one");
+                assert_eq!(document.text(Default::default(), None).unwrap(), "one");
                 assert_eq!(document.version(), Some(1));
                 assert_eq!(document.uri(), &uri(spelling));
             }
@@ -914,7 +928,7 @@ mod tests {
         assert!(documents.get(&uri("file:///c2")).is_none());
         let restored = documents.get(&uri("file:///c%31")).unwrap();
         assert_eq!(restored.uri(), &uri("file:///c1"));
-        assert_eq!(restored.text(), "one");
+        assert_eq!(restored.text(Default::default(), None).unwrap(), "one");
         assert_eq!(restored.version(), Some(1));
         assert_eq!(
             notebooks
@@ -931,7 +945,14 @@ mod tests {
                 vec![cell("file:///c1"), cell("file:///c2")],
             ))
             .unwrap();
-        assert_eq!(documents.get(&uri("file:///c2")).unwrap().text(), "one");
+        assert_eq!(
+            documents
+                .get(&uri("file:///c2"))
+                .unwrap()
+                .text(Default::default(), None)
+                .unwrap(),
+            "one"
+        );
     }
 
     #[test]
@@ -956,7 +977,7 @@ mod tests {
         assert_eq!(notebooks.view().get(&notebook_uri), Some(before));
         assert!(documents.get(&uri("file:///c2")).is_none());
         let restored = documents.get(&uri("file:///c1")).unwrap();
-        assert_eq!(restored.text(), "one");
+        assert_eq!(restored.text(Default::default(), None).unwrap(), "one");
         assert_eq!(restored.version(), Some(1));
     }
 

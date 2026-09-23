@@ -37,12 +37,18 @@ async fn prepare(
     }) else {
         return Ok(None);
     };
-    Ok(renameable(&document.text(), &word).then_some(
-        PrepareRenameResponse::PrepareRenamePlaceholder(PrepareRenamePlaceholder {
+    Ok(renameable(
+        &document
+            .text(encoding, None)
+            .expect("full document text is always available"),
+        &word,
+    )
+    .then_some(PrepareRenameResponse::PrepareRenamePlaceholder(
+        PrepareRenamePlaceholder {
             range,
             placeholder: word.into_owned(),
-        }),
-    ))
+        },
+    )))
 }
 
 async fn rename(
@@ -61,7 +67,9 @@ async fn rename(
     ) else {
         return Ok(None);
     };
-    let text = document.text();
+    let text = document
+        .text(encoding, None)
+        .expect("full document text is always available");
     if !renameable(&text, &word) {
         return Ok(None);
     }

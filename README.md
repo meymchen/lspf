@@ -42,7 +42,7 @@ async fn hover(
     Ok(ctx.documents().get(&uri).map(|doc| Hover {
         contents: HoverContents::MarkupContent(MarkupContent {
             kind: MarkupKind::PlainText,
-            value: format!("{} words", doc.text().split_whitespace().count()),
+            value: format!("{} words", doc.text(ctx.documents().position_encoding(), None).expect("full document text is always available").split_whitespace().count()),
         }),
         range: None,
     }))
@@ -191,7 +191,7 @@ async fn hover(
     Ok(Some(Hover {
         contents: HoverContents::MarkupContent(MarkupContent {
             kind: MarkupKind::PlainText,
-            value: format!("{} words", document.text().split_whitespace().count()),
+            value: format!("{} words", document.text(ctx.documents().position_encoding(), None).expect("full document text is always available").split_whitespace().count()),
         }),
         range: None,
     }))

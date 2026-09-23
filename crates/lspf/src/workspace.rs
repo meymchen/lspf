@@ -579,7 +579,7 @@ mod tests {
                 .documents()
                 .get(&uri("file:///shared.rs"))
                 .expect("a clone reads the same connection documents");
-            assert_eq!(doc.text(), "fn main() {}");
+            assert_eq!(doc.text(Default::default(), None).unwrap(), "fn main() {}");
         }
     }
 
@@ -647,7 +647,7 @@ mod tests {
 
         let document = workspace.text_document(&requested).await.unwrap();
 
-        assert_eq!(document.text(), "editor");
+        assert_eq!(document.text(Default::default(), None).unwrap(), "editor");
         assert_eq!(document.version(), Some(7));
     }
 
@@ -667,13 +667,18 @@ mod tests {
 
         let first = workspace.text_document(&requested).await.unwrap();
         assert_eq!(first.uri(), &requested);
-        assert_eq!(first.text(), "first");
+        assert_eq!(first.text(Default::default(), None).unwrap(), "first");
         assert_eq!(first.version(), None);
         assert!(documents.get(&requested).is_none());
 
         provider.insert(inserted, "second");
         assert_eq!(
-            workspace.text_document(&requested).await.unwrap().text(),
+            workspace
+                .text_document(&requested)
+                .await
+                .unwrap()
+                .text(Default::default(), None)
+                .unwrap(),
             "second",
             "an unopened lookup consults the provider every time"
         );
@@ -712,7 +717,10 @@ mod tests {
 
         let first = workspace.text_document(&requested).await.unwrap();
         assert_eq!(first.uri(), &requested);
-        assert_eq!(first.text(), "provider one");
+        assert_eq!(
+            first.text(Default::default(), None).unwrap(),
+            "provider one"
+        );
         assert_eq!(first.version(), None);
         assert!(
             documents.get(&requested).is_none(),
@@ -721,7 +729,12 @@ mod tests {
 
         std::fs::write(&file, "provider two").expect("the test file rewrites");
         assert_eq!(
-            workspace.text_document(&requested).await.unwrap().text(),
+            workspace
+                .text_document(&requested)
+                .await
+                .unwrap()
+                .text(Default::default(), None)
+                .unwrap(),
             "provider two",
             "an unopened lookup reads the filesystem every time"
         );
@@ -742,7 +755,12 @@ mod tests {
         );
 
         assert_eq!(
-            workspace.text_document(&requested).await.unwrap().text(),
+            workspace
+                .text_document(&requested)
+                .await
+                .unwrap()
+                .text(Default::default(), None)
+                .unwrap(),
             "outside the root"
         );
     }

@@ -252,7 +252,7 @@ mod tests {
             .documents()
             .get(&uri)
             .expect("a cloned context reads the same connection documents");
-        assert_eq!(doc.text(), "fn main() {}");
+        assert_eq!(doc.text(Default::default(), None).unwrap(), "fn main() {}");
         assert_eq!(
             clone.workspace().roots(),
             ctx.workspace().roots(),
@@ -379,7 +379,8 @@ mod tests {
             ctx.documents()
                 .get(&cell.document)
                 .expect("the cell text is an ordinary document")
-                .text(),
+                .text(Default::default(), None)
+                .unwrap(),
             "print('one text engine')"
         );
     }

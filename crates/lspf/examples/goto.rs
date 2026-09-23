@@ -49,7 +49,13 @@ fn selected(
         })
         .map(|(word, _)| word.into_owned())
         .ok_or_else(|| LspError::invalid_params("no symbol at position"))?;
-    Ok((document.text(), word))
+    Ok((
+        document
+            .text(ctx.documents().position_encoding(), None)
+            .expect("full document text is always available")
+            .into_owned(),
+        word,
+    ))
 }
 
 async fn declaration(

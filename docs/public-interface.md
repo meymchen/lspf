@@ -93,20 +93,21 @@ an export whose gate is not listed here.
 | `OsFileProvider` | native-runtime | The standard filesystem provider for native hosts. |
 | `OsFileProviderBuilder` | native-runtime | The configuration surface for the filesystem provider's read limits. |
 
-The additive `Document` text helpers are available under every supported
+The `Document` text queries are available under every supported
 native and WASM selection. They read the retained snapshot, including
 provider-loaded snapshots and Notebook-cell Documents:
 
 | Method | Result and contract |
 | --- | --- |
-| `line(u32)` | `Option<Cow<'_, str>>`; zero-based line content without its complete terminator. Empty documents have one empty line; a trailing terminator adds an empty line; missing lines return `None`. |
-| `text_in_range(PositionEncoding, Range)` | `Option<Cow<'_, str>>`; exact start-inclusive, end-exclusive text with original line endings. Valid empty ranges return `Some("")`, including at document end. |
+| `line_count()` | `usize`; empty documents have one empty line and a trailing terminator adds an empty line. |
+| `line_range(PositionEncoding, u32)` | `Option<Range>`; zero-based line range without its complete terminator, with encoded columns. Empty lines have empty ranges; nonexistent lines or unrepresentable end columns return `None`. |
+| `text(PositionEncoding, Option<Range>)` | `Option<Cow<'_, str>>`; `None` selects the full snapshot and always succeeds, ignoring encoding. `Some(range)` selects exact start-inclusive, end-exclusive text with original line endings. Valid empty ranges return `Some("")`, including at document end. |
 | `word_at_position(PositionEncoding, Position, F)` where `F: FnMut(char) -> bool` | `Option<(Cow<'_, str>, Range)>`; a maximal accepted run on one line, preferring the character immediately right of the cursor, then the immediately preceding character. No adjacent word returns `None`. |
 
 Line terminators follow the existing coordinate model: LF, CRLF, CR, VT, FF,
 NEL (U+0085), line separator (U+2028), and paragraph separator (U+2029).
-Position-based helpers use the explicitly supplied encoding from
-`DocumentsView::position_encoding()`. They reject nonexistent lines, columns
+Line ranges, selected text, and word queries use the explicitly supplied encoding from
+`DocumentsView::position_encoding()`. Text selections and word queries reject nonexistent lines, columns
 past line content, encoded-scalar interiors, and line-terminator interiors;
 range lookup also rejects reversed endpoints. End-of-line immediately before
 its terminator is valid. No input is clamped or truncated. The word predicate
@@ -116,11 +117,19 @@ grapheme validation.
 
 The helpers preserve text and metadata and remain readable after live sync or
 close. Results borrow from the snapshot when possible or own only selected
-text, without a store lock or public Rope type. Partial reads can allocate a
-fragment or conversion line but do not materialize the whole document.
-Existing `text`, `position_to_offset`, and `offset_to_position` signatures and
-contracts remain unchanged. The native and real-target WASM interface checks
-compile the additive methods through the shared downstream signature fixture.
+text, without a store lock or public Rope type. Text reads can allocate their selected
+fragment, while line ranges only compute coordinates. Partial reads do not
+materialize the whole document. `position_to_offset` and `offset_to_position`
+keep their signatures and contracts. The native and real-target WASM interface
+checks compile the queries through the shared downstream signature fixture.
+
+This replaces `text() -> String` with one optional-range reader. Migrate whole
+reads to `text(encoding, None).expect("full document text is always available")`,
+adding `.into_owned()` when an owned string is required. Compose `line_range`
+with `text` using `and_then` to read line content; a failed line lookup must not
+be passed as `None`, which selects the whole document. Separate `line` and
+`text_in_range` methods are not exposed. The interface decision is recorded in
+[ADR 0036](adr/0036-document-text-queries-compose-through-ranges.md).
 
 ## Results, errors, and connection outcome
 

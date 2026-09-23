@@ -4,7 +4,7 @@ mod example_support;
 
 use std::sync::Arc;
 
-use lspf::types::{Hover, HoverContents, HoverParams, MarkupContent, MarkupKind, Position, Range};
+use lspf::types::{Hover, HoverContents, HoverParams, MarkupContent, MarkupKind};
 use lspf::{CancellationToken, LspError, Server, ServerContext};
 
 struct State;
@@ -135,25 +135,21 @@ async fn hover(
     let uri = params.text_document_position_params.text_document.uri;
     let document = example_support::document(&ctx, &uri)?;
     let encoding = ctx.documents().position_encoding();
-    let Some(line) = document.line(position.line) else {
+    let Some(range) = document.line_range(encoding, position.line) else {
         return Ok(None);
     };
+    let line = document
+        .text(encoding, Some(range))
+        .expect("the line range belongs to this snapshot");
     let Some(value) = parse(&line) else {
         return Ok(None);
     };
-    let start = Position::new(position.line, 0);
-    let line_start = document
-        .position_to_offset(encoding, start)
-        .expect("a retrieved line has a start position");
-    let end = document
-        .offset_to_position(encoding, line_start + line.len())
-        .expect("the end of line content is a valid position");
     Ok(Some(Hover {
         contents: HoverContents::MarkupContent(MarkupContent {
             kind: MarkupKind::Markdown,
             value: markdown(&value),
         }),
-        range: Some(Range::new(start, end)),
+        range: Some(range),
     }))
 }
 
@@ -170,6 +166,7 @@ async fn main() -> lspf::Result<()> {
 mod tests {
     use super::*;
     use example_support::text_tests::{URI, opened, request};
+    use lspf::types::{Position, Range};
     use serde_json::json;
 
     #[tokio::test]

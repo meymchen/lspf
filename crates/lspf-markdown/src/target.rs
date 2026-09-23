@@ -131,7 +131,9 @@ fn heading_slug(title: &str) -> String {
 }
 
 fn headings(document: &Document, encoding: PositionEncoding) -> Vec<(String, Heading)> {
-    let text = document.text();
+    let text = document
+        .text(encoding, None)
+        .expect("full document text is always available");
     let lines = content_lines(&text);
     let mut headings = Vec::new();
     for (index, source) in lines.iter().enumerate() {

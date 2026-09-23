@@ -42,12 +42,18 @@ async fn query(
     if params["retain"] == true {
         *state.retained.lock().unwrap() = Some(document.clone());
     }
-    let line = document.line(params["line"].as_u64().unwrap_or(0) as u32);
-    let mut result = json!({"line": line, "text": document.text(), "version": document.version()});
+    let encoding = ctx.documents().position_encoding();
+    let line_range = document.line_range(encoding, params["line"].as_u64().unwrap_or(0) as u32);
+    let line = line_range.and_then(|range| document.text(encoding, Some(range)));
+    let mut result =
+        json!({"line": line, "text": document.text(encoding, None), "version": document.version()});
+    if params["lineMetadata"] == true {
+        result["lineCount"] = json!(document.line_count());
+        result["lineRange"] = json!(line_range);
+    }
     if let Some(range) = params.get("range") {
         let range = serde_json::from_value(range.clone()).unwrap();
-        result["selection"] =
-            json!(document.text_in_range(ctx.documents().position_encoding(), range));
+        result["selection"] = json!(document.text(encoding, Some(range)));
     }
     if let Some(position) = params.get("position") {
         let position = serde_json::from_value(position.clone()).unwrap();
@@ -150,6 +156,38 @@ async fn lines_preserve_content_and_omit_whole_terminators() {
 
 fn range(start_line: u32, start: u32, end_line: u32, end: u32) -> Value {
     json!({"start": {"line": start_line, "character": start}, "end": {"line": end_line, "character": end}})
+}
+
+#[tokio::test]
+async fn line_ranges_use_negotiated_columns_and_counts_include_trailing_empty_lines() {
+    for (encoding, end) in [("utf-8", 11), ("utf-16", 6), ("utf-32", 5)] {
+        let mut journey = opened("a中😀e\u{301}\r\n\nlast\r", Some(encoding)).await;
+        for (line, last_column, text) in [
+            (0, end, "a中😀e\u{301}"),
+            (1, 0, ""),
+            (2, 4, "last"),
+            (3, 0, ""),
+        ] {
+            let result = read(&mut journey, json!({"line": line, "lineMetadata": true})).await;
+            assert_eq!(result["lineCount"], 4);
+            assert_eq!(result["lineRange"], range(line, 0, line, last_column));
+            assert_eq!(result["line"], text);
+            assert_eq!(result["text"], "a中😀e\u{301}\r\n\nlast\r");
+        }
+        for line in [4, u32::MAX] {
+            let result = read(&mut journey, json!({"line": line, "lineMetadata": true})).await;
+            assert_eq!(result["lineCount"], 4);
+            assert_eq!(result["lineRange"], Value::Null);
+            assert_eq!(result["line"], Value::Null);
+        }
+        journey.finish().await.unwrap();
+    }
+    let mut empty = opened("", None).await;
+    let result = read(&mut empty, json!({"lineMetadata": true})).await;
+    assert_eq!(result["lineCount"], 1);
+    assert_eq!(result["lineRange"], range(0, 0, 0, 0));
+    assert_eq!(result["text"], "");
+    empty.finish().await.unwrap();
 }
 
 #[tokio::test]
@@ -328,7 +366,7 @@ async fn malformed_positions_and_ranges_are_absent_without_affecting_the_snapsho
 async fn retained_snapshot_survives_changes_and_close() {
     let original = "\u{1f600} old\r\n";
     let mut journey = opened(original, None).await;
-    let request = json!({"range":range(0,3,0,6),"position":position(0,4),"metadata":true});
+    let request = json!({"range":range(0,3,0,6),"position":position(0,4),"metadata":true,"lineMetadata":true});
     let mut retain = request.clone();
     retain["retain"] = json!(true);
     let before = read(&mut journey, retain).await;
@@ -336,17 +374,21 @@ async fn retained_snapshot_survives_changes_and_close() {
     assert_eq!(before["word"], json!(["old", range(0, 3, 0, 6)]));
     assert_eq!(before["uri"], URI);
     assert_eq!(before["languageId"], "text");
+    assert_eq!(before["lineCount"], 2);
+    assert_eq!(before["lineRange"], range(0, 0, 0, 6));
     notify(
         &mut journey,
         "textDocument/didChange",
         json!({
             "textDocument":{"uri":URI,"version":8},
-            "contentChanges":[{"range":range(0,3,0,6),"text":"new"}],
+            "contentChanges":[{"range":range(0,3,0,6),"text":"newer\nsuffix"}],
         }),
     );
     let current = read(&mut journey, request.clone()).await;
     assert_eq!(current["selection"], "new");
-    assert_eq!(current["word"], json!(["new", range(0, 3, 0, 6)]));
+    assert_eq!(current["word"], json!(["newer", range(0, 3, 0, 8)]));
+    assert_eq!(current["lineCount"], 3);
+    assert_eq!(current["lineRange"], range(0, 0, 0, 8));
     assert_eq!(current["version"], 8);
     let mut retained = request;
     retained["retained"] = json!(true);
@@ -370,7 +412,7 @@ async fn provider_and_notebook_snapshots_share_the_same_text_helpers() {
     let mut journey = ServerJourney::start(server(provider)).await.unwrap();
     let result = read(
         &mut journey,
-        json!({"provider":true,"metadata":true,
+        json!({"provider":true,"metadata":true,"lineMetadata":true,
         "range":range(0,3,0,9),"position":position(0,4)}),
     )
     .await;
@@ -378,7 +420,8 @@ async fn provider_and_notebook_snapshots_share_the_same_text_helpers() {
         result,
         json!({"line":"\u{1f600} stored","text":"\u{1f600} stored\r\n",
         "version":null,"uri":URI,"languageId":"","live":false,
-        "selection":"stored","word":["stored",range(0,3,0,9)]})
+        "selection":"stored","word":["stored",range(0,3,0,9)],
+        "lineCount":2,"lineRange":range(0,0,0,9)})
     );
     let cell = "file:///book.ipynb#cell";
     notify(
@@ -392,7 +435,7 @@ async fn provider_and_notebook_snapshots_share_the_same_text_helpers() {
     );
     let result = read(
         &mut journey,
-        json!({"uri":cell,"metadata":true,
+        json!({"uri":cell,"metadata":true,"lineMetadata":true,
         "range":range(0,3,0,7),"position":position(0,5)}),
     )
     .await;
@@ -400,7 +443,8 @@ async fn provider_and_notebook_snapshots_share_the_same_text_helpers() {
         result,
         json!({"line":"\u{1f600} cell","text":"\u{1f600} cell\r\n",
         "version":3,"uri":cell,"languageId":"rust","live":true,
-        "selection":"cell","word":["cell",range(0,3,0,7)]})
+        "selection":"cell","word":["cell",range(0,3,0,7)],
+        "lineCount":2,"lineRange":range(0,0,0,7)})
     );
     journey.finish().await.unwrap();
 }

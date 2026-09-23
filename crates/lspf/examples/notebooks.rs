@@ -74,7 +74,9 @@ async fn hover(
                 notebook.version(),
                 notebook.cells().len(),
                 document.version().unwrap_or_default(),
-                document.text(),
+                document
+                    .text(ctx.documents().position_encoding(), None)
+                    .expect("full document text is always available"),
             ),
         }),
         range: None,
