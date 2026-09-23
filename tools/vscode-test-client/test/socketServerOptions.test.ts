@@ -7,6 +7,7 @@ import * as net from 'node:net';
 import { WebSocketServer } from 'ws';
 
 import {
+    createConnectSession,
     createSocketSession,
     defaultSocketHost,
     type SocketHost,
@@ -360,4 +361,67 @@ test('stops the server it started when the client is disposed', async () => {
     session.dispose();
 
     assert.equal(server.killed, true);
+});
+
+test('a connect session retries until the debugged server binds, and never spawns', async () => {
+    const socket = { tcp: true } as any;
+    let attempts = 0;
+    let spawned = false;
+    const session = createConnectSession(
+        { host: '127.0.0.1', port: 9259 },
+        hostWith({
+            spawnServer: () => {
+                spawned = true;
+                return fakeServer();
+            },
+            connectTcp: async (address) => {
+                assert.deepEqual(address, { host: '127.0.0.1', port: 9259 });
+                attempts += 1;
+                if (attempts < 3) {
+                    throw new Error('ECONNREFUSED');
+                }
+                return socket;
+            },
+        }),
+    );
+
+    const transports = await session.serverOptions();
+    assert.equal(attempts, 3);
+    assert.deepEqual(transports, { reader: socket, writer: socket });
+    session.dispose();
+    assert.equal(spawned, false);
+});
+
+test('a connect session gives up after the connect timeout', async () => {
+    let now = 0;
+    const session = createConnectSession(
+        { host: '127.0.0.1', port: 9259 },
+        hostWith({
+            connectTcp: async () => {
+                throw new Error('ECONNREFUSED');
+            },
+            delay: async (ms) => {
+                now += ms;
+            },
+            now: () => now,
+        }),
+    );
+    await assert.rejects(session.serverOptions(), (error: Error) => {
+        assert.match(error.message, /no lspf-markdown server is listening on 127\.0\.0\.1:9259/);
+        assert.match(error.message, /client \+ server/);
+        assert.match(String((error.cause as Error).message), /ECONNREFUSED/);
+        return true;
+    });
+    assert.ok(now >= 30_000);
+});
+
+test('a connect session dials a real listener', async () => {
+    const server = net.createServer((connection) => connection.end());
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as net.AddressInfo;
+    const session = createConnectSession({ host: '127.0.0.1', port });
+    const transports = (await session.serverOptions()) as unknown as { reader: net.Socket };
+    assert.equal(transports.reader.remotePort, port);
+    transports.reader.destroy();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
 });

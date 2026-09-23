@@ -29,21 +29,38 @@ test('does not run npm when every dependency is present', async () => {
 });
 
 test('installs locked dependencies when a runtime module is missing', async () => {
-    const { ensureDependencies, npmExecutable } = await import(
-        '../scripts/ensureDependencies.mts'
-    );
-    let invocation: { command: string; args: string[] } | undefined;
-    ensureDependencies(
-        () => {
-            throw new Error('missing');
-        },
-        (command, args) => {
-            invocation = { command, args };
-            return { status: 0 };
-        },
-        'win32',
-    );
+    const { ensureDependencies } = await import('../scripts/ensureDependencies.mts');
+    const invocations: { command: string; args: string[]; shell: boolean }[] = [];
+    for (const platform of ['win32', 'linux'] as const) {
+        ensureDependencies(
+            () => {
+                throw new Error('missing');
+            },
+            (command, args, options) => {
+                invocations.push({ command, args, shell: options.shell });
+                return { status: 0 };
+            },
+            platform,
+        );
+    }
 
-    assert.deepEqual(invocation, { command: 'npm.cmd', args: ['ci'] });
-    assert.equal(npmExecutable('linux'), 'npm');
+    assert.deepEqual(invocations, [
+        { command: 'npm ci', args: [], shell: true },
+        { command: 'npm', args: ['ci'], shell: false },
+    ]);
+});
+
+test('reports a failed install', async () => {
+    const { ensureDependencies } = await import('../scripts/ensureDependencies.mts');
+    assert.throws(
+        () =>
+            ensureDependencies(
+                () => {
+                    throw new Error('missing');
+                },
+                () => ({ status: 1 }),
+                'linux',
+            ),
+        /npm ci exited with status 1/,
+    );
 });

@@ -11,8 +11,9 @@ type CommandResult = { error?: Error; status: number | null };
 type RunCommand = (
     command: string,
     args: string[],
-    options: { cwd: string; stdio: 'inherit' },
+    options: { cwd: string; stdio: 'inherit'; shell: boolean },
 ) => CommandResult;
+type NpmInvocation = { command: string; args: string[]; shell: boolean };
 
 export function missingDependencies(resolveModule: ResolveModule): string[] {
     return requiredModules.filter((specifier) => {
@@ -25,8 +26,12 @@ export function missingDependencies(resolveModule: ResolveModule): string[] {
     });
 }
 
-export function npmExecutable(platform: NodeJS.Platform): string {
-    return platform === 'win32' ? 'npm.cmd' : 'npm';
+// Node refuses to spawn `npm.cmd` directly on Windows (CVE-2024-27980), so
+// Windows runs the fixed command line through the shell instead.
+export function npmCiInvocation(platform: NodeJS.Platform): NpmInvocation {
+    return platform === 'win32'
+        ? { command: 'npm ci', args: [], shell: true }
+        : { command: 'npm', args: ['ci'], shell: false };
 }
 
 export function ensureDependencies(
@@ -40,9 +45,11 @@ export function ensureDependencies(
     }
 
     console.log(`Installing missing VS Code test-client dependencies: ${missing.join(', ')}`);
-    const result = runCommand(npmExecutable(platform), ['ci'], {
+    const npm = npmCiInvocation(platform);
+    const result = runCommand(npm.command, npm.args, {
         cwd: packageRoot,
         stdio: 'inherit',
+        shell: npm.shell,
     });
     if (result.error) {
         throw result.error;

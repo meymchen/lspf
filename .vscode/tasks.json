@@ -147,6 +147,15 @@
       "problemMatcher": []
     },
     {
+      "label": "prepare VS Code test client",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "ensure VS Code test client dependencies",
+        "watch VS Code test client"
+      ],
+      "problemMatcher": []
+    },
+    {
       "label": "prepare VS Code LSP example",
       "dependsOrder": "sequence",
       "dependsOn": [

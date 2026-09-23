@@ -10,12 +10,16 @@ import * as path from 'node:path';
  */
 export type TransportName = 'stdio' | 'tcp' | 'websocket';
 
-export interface SocketTransport {
+/** A TCP address the client dials. */
+export interface ServerAddress {
+    readonly host: string;
+    readonly port: number;
+}
+
+export interface SocketTransport extends ServerAddress {
     readonly name: 'tcp' | 'websocket';
     /** Cargo example that serves the shared handlers over this adapter. */
     readonly example: string;
-    readonly host: string;
-    readonly port: number;
 }
 
 /**
@@ -83,4 +87,27 @@ export function resolveTransportBinary(
         'examples',
         `${transport.example}${suffix}`,
     );
+}
+
+/**
+ * Read the address of a server something else started, such as a debugger
+ * running `lspf-markdown --listen <host:port>`.
+ *
+ * @param selected Value of `LSPF_TEST_CONNECT`, as `host:port`. When set, the
+ * client dials that address instead of starting a server, and it takes
+ * precedence over `LSPF_TEST_TRANSPORT`.
+ */
+export function resolveConnectAddress(
+    selected: string | undefined = process.env.LSPF_TEST_CONNECT,
+): ServerAddress | undefined {
+    if (selected === undefined || selected === '') {
+        return undefined;
+    }
+    const separator = selected.lastIndexOf(':');
+    const host = selected.slice(0, separator);
+    const port = Number(selected.slice(separator + 1));
+    if (separator <= 0 || !Number.isInteger(port) || port < 1 || port > 65535) {
+        throw new Error(`invalid LSPF_TEST_CONNECT: ${selected} (expected host:port)`);
+    }
+    return { host, port };
 }

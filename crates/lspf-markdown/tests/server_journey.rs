@@ -10,7 +10,8 @@ use lspf::types::{
     TextDocumentItem, TextDocumentPositionParams, VersionedTextDocumentIdentifier,
     WorkDoneProgressParams,
 };
-use lspf::{MemoryFileProvider, RawMessage, RequestId};
+use lspf::{RawMessage, RequestId};
+use lspf_markdown::MemoryFs;
 
 fn notification(method: &'static str, params: &impl serde::Serialize) -> RawMessage {
     RawMessage::Notification {
@@ -43,7 +44,7 @@ async fn diagnostics(journey: &mut ServerJourney) -> PublishDiagnosticsParams {
 async fn incremental_edits_recompute_broken_local_link_diagnostics() {
     let uri = lspf::types::Uri::from_str("file:///workspace/readme.md").unwrap();
     let guide = lspf::types::Uri::from_str("file:///workspace/guide.md").unwrap();
-    let provider = MemoryFileProvider::new();
+    let provider = MemoryFs::new();
     provider.insert(guide, "# Guide\n");
     let mut journey = ServerJourney::start(lspf_markdown::server(provider))
         .await
@@ -118,7 +119,7 @@ async fn incremental_edits_recompute_broken_local_link_diagnostics() {
 async fn hover_describes_the_resolved_local_target() {
     let uri = lspf::types::Uri::from_str("file:///workspace/readme.md").unwrap();
     let guide = lspf::types::Uri::from_str("file:///workspace/guide.md").unwrap();
-    let provider = MemoryFileProvider::new();
+    let provider = MemoryFs::new();
     provider.insert(guide, "# Guide\n\nWelcome.\n");
     let mut journey = ServerJourney::start(lspf_markdown::server(provider))
         .await
@@ -185,7 +186,7 @@ async fn hover_describes_the_resolved_local_target() {
 async fn definition_navigates_to_the_local_targets_first_heading() {
     let uri = lspf::types::Uri::from_str("file:///workspace/readme.md").unwrap();
     let guide = lspf::types::Uri::from_str("file:///workspace/guide.md").unwrap();
-    let provider = MemoryFileProvider::new();
+    let provider = MemoryFs::new();
     provider.insert(guide, "# Guide\n\nWelcome.\n");
     let mut journey = ServerJourney::start(lspf_markdown::server(provider))
         .await
@@ -249,7 +250,7 @@ async fn definition_navigates_to_the_local_targets_first_heading() {
 #[tokio::test]
 async fn diagnostics_ignore_code_examples_and_external_links() {
     let uri = lspf::types::Uri::from_str("file:///workspace/readme.md").unwrap();
-    let mut journey = ServerJourney::start(lspf_markdown::server(MemoryFileProvider::new()))
+    let mut journey = ServerJourney::start(lspf_markdown::server(MemoryFs::new()))
         .await
         .unwrap();
 
@@ -276,7 +277,7 @@ async fn diagnostics_ignore_code_examples_and_external_links() {
 async fn balanced_parentheses_are_part_of_an_inline_destination() {
     let uri = lspf::types::Uri::from_str("file:///workspace/readme.md").unwrap();
     let target = lspf::types::Uri::from_str("file:///workspace/guide_(v2).md").unwrap();
-    let provider = MemoryFileProvider::new();
+    let provider = MemoryFs::new();
     provider.insert(target, "# Guide v2\n");
     let mut journey = ServerJourney::start(lspf_markdown::server(provider))
         .await
@@ -305,7 +306,7 @@ async fn balanced_parentheses_are_part_of_an_inline_destination() {
 async fn reference_links_resolve_their_local_definition_target() {
     let uri = lspf::types::Uri::from_str("file:///workspace/readme.md").unwrap();
     let guide = lspf::types::Uri::from_str("file:///workspace/guide.md").unwrap();
-    let provider = MemoryFileProvider::new();
+    let provider = MemoryFs::new();
     provider.insert(guide, "# Guide\n");
     let mut journey = ServerJourney::start(lspf_markdown::server(provider))
         .await
@@ -406,7 +407,7 @@ async fn reference_links_resolve_their_local_definition_target() {
 async fn fragment_definition_navigates_to_the_named_heading() {
     let uri = lspf::types::Uri::from_str("file:///workspace/readme.md").unwrap();
     let guide = lspf::types::Uri::from_str("file:///workspace/guide.md").unwrap();
-    let provider = MemoryFileProvider::new();
+    let provider = MemoryFs::new();
     provider.insert(guide, "# Guide\n\n## Install\n");
     let mut journey = ServerJourney::start(lspf_markdown::server(provider))
         .await
@@ -469,7 +470,7 @@ async fn fragment_definition_navigates_to_the_named_heading() {
 #[tokio::test]
 async fn shortcut_reference_links_report_broken_definition_targets() {
     let uri = lspf::types::Uri::from_str("file:///workspace/readme.md").unwrap();
-    let mut journey = ServerJourney::start(lspf_markdown::server(MemoryFileProvider::new()))
+    let mut journey = ServerJourney::start(lspf_markdown::server(MemoryFs::new()))
         .await
         .unwrap();
 
@@ -505,7 +506,7 @@ async fn shortcut_reference_links_report_broken_definition_targets() {
 async fn fragment_definition_uses_setext_headings_and_ignores_fenced_examples() {
     let uri = lspf::types::Uri::from_str("file:///workspace/readme.md").unwrap();
     let guide = lspf::types::Uri::from_str("file:///workspace/guide.md").unwrap();
-    let provider = MemoryFileProvider::new();
+    let provider = MemoryFs::new();
     provider.insert(guide, "```md\n# Install\n```\n\nInstall\n=======\n");
     let mut journey = ServerJourney::start(lspf_markdown::server(provider))
         .await
@@ -566,7 +567,7 @@ async fn fragment_definition_uses_setext_headings_and_ignores_fenced_examples() 
 #[tokio::test]
 async fn diagnostics_ignore_links_in_indented_code_blocks() {
     let uri = lspf::types::Uri::from_str("file:///workspace/readme.md").unwrap();
-    let mut journey = ServerJourney::start(lspf_markdown::server(MemoryFileProvider::new()))
+    let mut journey = ServerJourney::start(lspf_markdown::server(MemoryFs::new()))
         .await
         .unwrap();
 
@@ -592,7 +593,7 @@ async fn diagnostics_ignore_links_in_indented_code_blocks() {
 #[tokio::test]
 async fn diagnostics_distinguish_tab_code_from_list_continuation_links() {
     let uri = lspf::types::Uri::from_str("file:///workspace/readme.md").unwrap();
-    let mut journey = ServerJourney::start(lspf_markdown::server(MemoryFileProvider::new()))
+    let mut journey = ServerJourney::start(lspf_markdown::server(MemoryFs::new()))
         .await
         .unwrap();
 
@@ -623,7 +624,7 @@ async fn diagnostics_distinguish_tab_code_from_list_continuation_links() {
 #[tokio::test]
 async fn diagnostics_follow_links_in_nested_list_continuations() {
     let uri = lspf::types::Uri::from_str("file:///workspace/readme.md").unwrap();
-    let mut journey = ServerJourney::start(lspf_markdown::server(MemoryFileProvider::new()))
+    let mut journey = ServerJourney::start(lspf_markdown::server(MemoryFs::new()))
         .await
         .unwrap();
 
@@ -654,7 +655,7 @@ async fn diagnostics_follow_links_in_nested_list_continuations() {
 #[tokio::test]
 async fn diagnostics_restore_parent_indent_after_a_deeper_list_item() {
     let uri = lspf::types::Uri::from_str("file:///workspace/readme.md").unwrap();
-    let mut journey = ServerJourney::start(lspf_markdown::server(MemoryFileProvider::new()))
+    let mut journey = ServerJourney::start(lspf_markdown::server(MemoryFs::new()))
         .await
         .unwrap();
 
@@ -685,7 +686,7 @@ async fn diagnostics_restore_parent_indent_after_a_deeper_list_item() {
 #[tokio::test]
 async fn diagnostics_ignore_links_in_blockquoted_fences() {
     let uri = lspf::types::Uri::from_str("file:///workspace/readme.md").unwrap();
-    let mut journey = ServerJourney::start(lspf_markdown::server(MemoryFileProvider::new()))
+    let mut journey = ServerJourney::start(lspf_markdown::server(MemoryFs::new()))
         .await
         .unwrap();
 
@@ -711,7 +712,7 @@ async fn diagnostics_ignore_links_in_blockquoted_fences() {
 #[tokio::test]
 async fn diagnostics_ignore_escaped_link_syntax() {
     let uri = lspf::types::Uri::from_str("file:///workspace/readme.md").unwrap();
-    let mut journey = ServerJourney::start(lspf_markdown::server(MemoryFileProvider::new()))
+    let mut journey = ServerJourney::start(lspf_markdown::server(MemoryFs::new()))
         .await
         .unwrap();
 

@@ -38,3 +38,4 @@ wasm-bindgen-test = "0.3"
 wasm-bindgen-futures = "0.4"
 web-sys = "0.3"
 js-sys = "0.3"
+pulldown-cmark = { version = "0.13", default-features = false }

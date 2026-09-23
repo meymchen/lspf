@@ -30,6 +30,20 @@ starts the stdio server for Markdown documents.
 4. Return to the fixture and replace `missing.md` with `guide.md`. The diagnostic
    clears after the edit.
 
+## Debug the server and the client together
+
+To stop at Rust breakpoints in `lspf-markdown`, including in `initialize`,
+select **Debug lspf-markdown client + server (Windows)** in **Run and Debug**
+and press **F5**. On macOS and Linux, select the **(LLDB)** entry instead. The
+Windows entry uses the C/C++ extension's debugger and the LLDB entry uses
+CodeLLDB; both are in the workspace's recommended extensions.
+
+The debugger starts `lspf-markdown --listen 127.0.0.1:9259`, and the Extension
+Development Host opens `editor-validation/fixture` with a client that connects
+to that address instead of starting its own server. Open `readme.md` there to
+connect. Server output appears in the debugger's **Debug Console**. Stopping
+either session stops both.
+
 ## Use an installed server
 
 The default launch builds and uses `target/debug/lspf-markdown`. To exercise
