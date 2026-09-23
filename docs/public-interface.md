@@ -128,7 +128,7 @@ conversion behavior. The native and real-target WASM interface checks compile
 the queries through the shared downstream signature fixture.
 
 This replaces `text() -> String` with one optional-range reader. Migrate whole
-reads to `text(None).expect("full document text is always available")`,
+reads to `text(None)`,
 adding `.into_owned()` when an owned string is required. Remove the explicit
 encoding argument from Document position/offset conversions; they now use the
 snapshot's encoding. `DocumentsView` conversions retain their signatures.
