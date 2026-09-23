@@ -310,16 +310,16 @@ pub fn incremental_edits(data: &[u8]) {
         .into()
     };
 
-    let before = document.text(None).unwrap().into_owned();
+    let before = document.text(None).into_owned();
     let result = document.apply_change(change, LARGE_INPUT_LIMIT);
     if result.is_err() {
         assert_eq!(
-            document.text(None).unwrap(),
+            document.text(None),
             before,
             "a rejected edit mutated the document"
         );
     } else {
-        assert!(document.text(None).unwrap().len() <= LARGE_INPUT_LIMIT);
+        assert!(document.text(None).len() <= LARGE_INPUT_LIMIT);
     }
 }
 

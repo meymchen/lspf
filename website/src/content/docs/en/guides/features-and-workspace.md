@@ -47,7 +47,7 @@ async fn hover(
     Ok(Some(Hover {
         contents: lspf::types::HoverContents::MarkupContent(lspf::types::MarkupContent {
             kind: lspf::types::MarkupKind::PlainText,
-            value: format!("{} words", document.text(None).expect("full document text is always available").split_whitespace().count()),
+            value: format!("{} words", document.text(None).split_whitespace().count()),
         }),
         range: None,
     }))

@@ -121,26 +121,32 @@ impl Document {
 
     /// Read the full snapshot or a start-inclusive, end-exclusive LSP range.
     ///
-    /// `None` selects the whole document and always returns `Some`. Pass
-    /// `Some(range)` for a partial read using this snapshot's
-    /// [`Self::position_encoding`]. Source characters and embedded line endings
-    /// are preserved exactly. Ending at the next line's column zero includes
-    /// the preceding line terminator. A valid empty range
-    /// returns `Some("")`, including at document end.
+    /// `None` selects the whole document. Pass `Some(range)` for a partial read
+    /// using this snapshot's [`Self::position_encoding`]. Source characters and
+    /// embedded line endings are preserved exactly. Ending at the next line's
+    /// column zero includes the preceding line terminator.
     ///
-    /// Returns `None` for reversed ranges, nonexistent lines, columns beyond
-    /// line content, or positions inside an encoded scalar or line terminator.
-    /// End-of-line means immediately before its terminator. No position is
-    /// clamped or truncated. Both endpoints are checked against this snapshot.
+    /// Returns an empty string for empty or invalid ranges, including reversed
+    /// ranges, nonexistent lines, columns beyond line content, and positions
+    /// inside an encoded scalar or line terminator. End-of-line means
+    /// immediately before its terminator. No position is clamped or truncated.
+    /// Both endpoints are checked against this snapshot before selecting text.
     /// The result borrows when possible or owns only the selected text, without
     /// retaining a document-store lock. Use [`Self::line_range`] to select a line.
-    pub fn text(&self, range: Option<Range>) -> Option<Cow<'_, str>> {
+    pub fn text(&self, range: Option<Range>) -> Cow<'_, str> {
         let Some(range) = range else {
-            return Some(Cow::from(self.text.slice(..)));
+            return Cow::from(self.text.slice(..));
         };
-        let start = self.content_char_index(range.start)?;
-        let end = self.content_char_index(range.end)?;
-        (start <= end).then(|| Cow::from(self.text.slice(start..end)))
+        let (Some(start), Some(end)) = (
+            self.content_char_index(range.start),
+            self.content_char_index(range.end),
+        ) else {
+            return Cow::Borrowed("");
+        };
+        if start > end {
+            return Cow::Borrowed("");
+        }
+        Cow::from(self.text.slice(start..end))
     }
 
     /// Number of lines in this snapshot, without materializing its text.
@@ -179,9 +185,8 @@ impl Document {
     /// A run never crosses a line terminator, even if the predicate accepts it.
     ///
     /// Both the input position and returned range use this snapshot's
-    /// [`Self::position_encoding`]. Invalid positions (as for [`Self::text`])
-    /// or no adjacent accepted character return
-    /// `None`. The text borrows from this snapshot when possible or owns only
+    /// [`Self::position_encoding`]. Invalid positions or no adjacent accepted
+    /// character return `None`. The text borrows from this snapshot when possible or owns only
     /// the selected word, and remains independent of later synchronization.
     ///
     /// The application chooses punctuation, underscores, and combining marks.
@@ -884,7 +889,7 @@ mod tests {
         assert_eq!(doc.uri(), &u);
         assert_eq!(doc.language_id(), "plaintext");
         assert_eq!(doc.version(), Some(1));
-        assert_eq!(doc.text(None).unwrap(), "hello world");
+        assert_eq!(doc.text(None), "hello world");
     }
 
     #[test]
@@ -941,10 +946,7 @@ mod tests {
         docs.apply_changes(&uri("file:///c:/w/a.rs"), 2, [change(None, "goodbye")])
             .expect("the change names the same document by another spelling");
         assert_eq!(
-            docs.get(&uri("FILE:///C:/w/a.rs"))
-                .unwrap()
-                .text(None)
-                .unwrap(),
+            docs.get(&uri("FILE:///C:/w/a.rs")).unwrap().text(None),
             "goodbye"
         );
 
@@ -963,7 +965,7 @@ mod tests {
         docs.open(text_item(u.clone(), "shared"))
             .expect("the default policy accepts the test document");
 
-        assert_eq!(docs2.get(&u).unwrap().text(None).unwrap(), "shared");
+        assert_eq!(docs2.get(&u).unwrap().text(None), "shared");
     }
 
     #[test]
@@ -988,7 +990,7 @@ mod tests {
         let remaining = first
             .get(&u)
             .expect("closing the second overlay is isolated");
-        assert_eq!(remaining.text(None).unwrap(), "first editor changed");
+        assert_eq!(remaining.text(None), "first editor changed");
         assert_eq!(remaining.version(), Some(2));
         assert!(second.get(&u).is_none());
     }
@@ -1105,7 +1107,7 @@ mod tests {
                 "an invalid UTF-16 endpoint must reject the whole change"
             );
             let doc = docs.get(&u).expect("the rejected edit keeps the document");
-            assert_eq!(doc.text(None).unwrap(), "a👋b");
+            assert_eq!(doc.text(None), "a👋b");
             assert_eq!(doc.version(), Some(1));
         }
 
@@ -1192,7 +1194,7 @@ mod tests {
             .expect("the change applies cleanly");
 
         let doc = docs.get(&u).unwrap();
-        assert_eq!(doc.text(None).unwrap(), "hello lspf");
+        assert_eq!(doc.text(None), "hello lspf");
         assert_eq!(doc.version(), Some(2));
     }
 
@@ -1213,13 +1215,13 @@ mod tests {
         docs.apply_changes(&u, 27, [change(None, "contents")])
             .expect("a no-op replacement still records its version");
         let no_op = docs.get(&u).unwrap();
-        assert_eq!(no_op.text(None).unwrap(), "contents");
+        assert_eq!(no_op.text(None), "contents");
         assert_eq!(no_op.version(), Some(27));
 
         docs.apply_changes(&u, 7, [change(None, "new contents")])
             .expect("the store accepts the client's non-monotonic version");
         let regressed = docs.get(&u).unwrap();
-        assert_eq!(regressed.text(None).unwrap(), "new contents");
+        assert_eq!(regressed.text(None), "new contents");
         assert_eq!(regressed.version(), Some(7));
     }
 
@@ -1249,7 +1251,7 @@ mod tests {
             .expect("each range is interpreted against the preceding edit");
 
         let doc = docs.get(&u).unwrap();
-        assert_eq!(doc.text(None).unwrap(), "adcb");
+        assert_eq!(doc.text(None), "adcb");
         assert_eq!(doc.version(), Some(2));
     }
 
@@ -1261,7 +1263,7 @@ mod tests {
             .expect("the insertion applies at the empty document's only position");
 
         let doc = docs.get(&u).unwrap();
-        assert_eq!(doc.text(None).unwrap(), "f");
+        assert_eq!(doc.text(None), "f");
         assert_eq!(doc.version(), Some(2));
     }
 
@@ -1277,7 +1279,7 @@ mod tests {
             .expect("the trailing newline exposes an empty final line");
 
         let doc = docs.get(&u).unwrap();
-        assert_eq!(doc.text(None).unwrap(), "first\nsecond\nthird");
+        assert_eq!(doc.text(None), "first\nsecond\nthird");
         assert_eq!(doc.version(), Some(2));
     }
 
@@ -1289,7 +1291,7 @@ mod tests {
             .expect("the change applies cleanly");
 
         let doc = docs.get(&u).unwrap();
-        assert_eq!(doc.text(None).unwrap(), "goodbye");
+        assert_eq!(doc.text(None), "goodbye");
         assert_eq!(doc.version(), Some(2));
     }
 
@@ -1306,7 +1308,7 @@ mod tests {
         );
 
         let doc = docs.get(&u).expect("the store is still readable");
-        assert_eq!(doc.text(None).unwrap(), "hello world");
+        assert_eq!(doc.text(None), "hello world");
         assert_eq!(doc.version(), Some(1), "a rejected change advances nothing");
     }
 

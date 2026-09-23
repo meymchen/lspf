@@ -32,11 +32,7 @@ fn update(state: &State, ctx: &ServerContext, uri: &Uri) {
         uri.clone(),
         (
             document.version(),
-            example_support::sum_diagnostics(
-                &document
-                    .text(None)
-                    .expect("full document text is always available"),
-            ),
+            example_support::sum_diagnostics(&document.text(None)),
         ),
     );
 }

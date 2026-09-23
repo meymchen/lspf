@@ -102,7 +102,7 @@ provider-loaded snapshots and Notebook-cell Documents:
 | `position_encoding()` | `PositionEncoding`; the connection's negotiated encoding retained in this snapshot. |
 | `line_count()` | `usize`; empty documents have one empty line and a trailing terminator adds an empty line. |
 | `line_range(u32)` | `Option<Range>`; zero-based line range without its complete terminator, with encoded columns. Empty lines have empty ranges; nonexistent lines or unrepresentable end columns return `None`. |
-| `text(Option<Range>)` | `Option<Cow<'_, str>>`; `None` selects the full snapshot and always succeeds. `Some(range)` selects exact start-inclusive, end-exclusive text with original line endings. Valid empty ranges return `Some("")`, including at document end. |
+| `text(Option<Range>)` | `Cow<'_, str>`; `None` selects the full snapshot. `Some(range)` selects exact start-inclusive, end-exclusive text with original line endings. Empty or invalid ranges return an empty string, including valid empty ranges at document end. |
 | `word_at_position(Position, F)` where `F: FnMut(char) -> bool` | `Option<(Cow<'_, str>, Range)>`; a maximal accepted run on one line, preferring the character immediately right of the cursor, then the immediately preceding character. No adjacent word returns `None`. |
 
 Line terminators follow the existing coordinate model: LF, CRLF, CR, VT, FF,
@@ -110,8 +110,10 @@ NEL (U+0085), line separator (U+2028), and paragraph separator (U+2029).
 All position-based queries use the snapshot's retained encoding, exposed by
 `Document::position_encoding()`. Text selections and word queries reject nonexistent lines, columns
 past line content, encoded-scalar interiors, and line-terminator interiors;
-range lookup also rejects reversed endpoints. End-of-line immediately before
-its terminator is valid. No input is clamped or truncated. The word predicate
+text lookup also rejects reversed endpoints. Invalid text selections return
+an empty string, just like valid empty selections; invalid word queries return
+`None`. End-of-line immediately before its terminator is valid. No input is
+clamped or truncated. The word predicate
 receives Unicode scalar values, is not stored, and cannot select across a line
 terminator. It supplies application membership policy, not identifier or
 grapheme validation.
@@ -130,7 +132,7 @@ reads to `text(None).expect("full document text is always available")`,
 adding `.into_owned()` when an owned string is required. Remove the explicit
 encoding argument from Document position/offset conversions; they now use the
 snapshot's encoding. `DocumentsView` conversions retain their signatures.
-Compose `line_range` with `text` using `and_then` to read line content; a failed line lookup must not
+Compose `line_range` with `text` using `map` to read line content; a failed line lookup must not
 be passed as `None`, which selects the whole document. Separate `line` and
 `text_in_range` methods are not exposed. The interface decision is recorded in
 [ADR 0036](adr/0036-document-text-queries-compose-through-ranges.md).

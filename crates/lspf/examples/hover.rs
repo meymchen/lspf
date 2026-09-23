@@ -137,9 +137,7 @@ async fn hover(
     let Some(range) = document.line_range(position.line) else {
         return Ok(None);
     };
-    let line = document
-        .text(Some(range))
-        .expect("the line range belongs to this snapshot");
+    let line = document.text(Some(range));
     let Some(value) = parse(&line) else {
         return Ok(None);
     };

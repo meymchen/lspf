@@ -69,9 +69,9 @@ let documents = ctx.documents();
 if let Some(document) = documents.get(&uri) {
     let count = document.line_count();
     let line = document.line_range(cursor.line)
-        .and_then(|range| document.text(Some(range)));
+        .map(|range| document.text(Some(range)));
     let selected = document.text(Some(selection));
-    let whole = document.text(None).expect("full document text is always available");
+    let whole = document.text(None);
     let word = document.word_at_position(cursor, |ch| {
         ch.is_alphanumeric() || ch == '_' || ch == '\u{301}'
     });
@@ -80,12 +80,12 @@ if let Some(document) = documents.get(&uri) {
 # }
 ```
 
-`Document::text(range)` returns `Option<Cow<'_, str>>`. Pass `None`
-to read the full snapshot; this always returns `Some`. Pass `Some(range)` to
-read the exact start-inclusive, end-exclusive selection, preserving line endings and Unicode characters without
+`Document::text(range)` returns `Cow<'_, str>` directly. Pass `None` to read
+the full snapshot. Pass `Some(range)` to read the exact start-inclusive,
+end-exclusive selection, preserving line endings and Unicode characters without
 normalization. An end at the next line's column zero includes the preceding
-terminator. A valid empty selection, including at document end, returns
-`Some("")`.
+terminator. Empty or invalid selections return an empty string, including a
+valid empty selection at document end.
 
 `Document::line_count()` returns the number of lines without copying text.
 An empty document has one empty line; a trailing terminator adds a final empty
@@ -97,7 +97,7 @@ returns `Option<Range>`, excluding the complete terminator and preserving
 trailing spaces. Its columns use the snapshot's encoding. Empty lines have an
 empty range; a missing line or an end column too large for an LSP position
 returns `None`. Compose a successful range with `text` as above to read a line.
-Use `and_then` for that composition: passing a failed line lookup directly as
+Use `map` for that composition: passing a failed line lookup directly as
 the optional selection would request the full document.
 
 `Document::word_at_position(position, predicate)` returns
@@ -110,13 +110,13 @@ accepts it. The predicate is local to the call: the application decides about
 underscores, hyphens, or combining marks. This does not validate identifiers
 or segment grapheme clusters.
 
-Range-based text reads and word queries return `None` for nonexistent lines, columns past
-line content, positions inside a UTF-8 scalar or UTF-16 surrogate pair, and
-positions inside a line terminator. End-of-line immediately before the
-terminator is valid. Range lookup also rejects reversed endpoints and empty
-ranges at invalid positions. Word lookup returns `None` when neither adjacent
-character is accepted. Invalid input is never clamped and never mutates the
-snapshot. `position_to_offset(position)` and `offset_to_position(offset)`
+Text reads return an empty string for nonexistent lines, columns past line
+content, positions inside a UTF-8 scalar or UTF-16 surrogate pair, and positions
+inside a line terminator. Reversed ranges and empty ranges at invalid positions
+also return an empty string. This result is the same as a valid empty selection.
+End-of-line immediately before the terminator is valid. Word lookup returns
+`None` for invalid positions or when neither adjacent character is accepted.
+Invalid input is never clamped and never mutates the snapshot. `position_to_offset(position)` and `offset_to_position(offset)`
 use the retained encoding and preserve their existing conversion behavior.
 
 Results borrow from the retained `Document` when possible or own their
@@ -128,7 +128,7 @@ They perform no provider I/O and do not change metadata or workspace state.
 ### Migrate Document reads
 
 Replace the former `document.text()` call with
-`document.text(None).expect("full document text is always available")`.
+`document.text(None)`.
 The result may borrow from the snapshot; use `.into_owned()` when a `String`
 must outlive that snapshot. Range reads use `Some(range)` through the same
 method. Line text is obtained by composing `line_range` with `text`; there are
@@ -204,7 +204,7 @@ async fn notebook_source(
         // Membership and order come from the notebook view; text comes from
         // the document store.
         .filter_map(|cell| documents.get(&cell.document))
-        .map(|document| document.text(None).expect("full document text is always available").into_owned())
+        .map(|document| document.text(None).into_owned())
         .collect::<Vec<_>>()
         .join("\n"))
 }
@@ -260,7 +260,7 @@ async fn count_words(
         .text_document(&uri)
         .await
         .map_err(LspError::invalid_request)?;
-    Ok(document.text(None).expect("full document text is always available").split_whitespace().count())
+    Ok(document.text(None).split_whitespace().count())
 }
 # fn main() {
 #     let server = Server::builder(State)

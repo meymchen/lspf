@@ -47,13 +47,7 @@ fn selected(
         .word_at_position(position, |ch| ch.is_ascii_alphanumeric() || ch == '_')
         .map(|(word, _)| word.into_owned())
         .ok_or_else(|| LspError::invalid_params("no symbol at position"))?;
-    Ok((
-        document
-            .text(None)
-            .expect("full document text is always available")
-            .into_owned(),
-        word,
-    ))
+    Ok((document.text(None).into_owned(), word))
 }
 
 async fn declaration(

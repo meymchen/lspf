@@ -141,7 +141,7 @@ async fn on_did_close(
         .map(|spelling| {
             ctx.documents()
                 .get(&uri(spelling))
-                .map(|document| document.text(None).unwrap().into_owned())
+                .map(|document| document.text(None).into_owned())
         })
         .collect();
     state.seen.lock().unwrap().push(Seen::Close {
@@ -212,7 +212,7 @@ async fn probe(
             .map(|spelling| {
                 documents
                     .get(&uri(spelling))
-                    .map(|d| d.text(None).unwrap().into_owned())
+                    .map(|d| d.text(None).into_owned())
             })
             .collect(),
         owners: params

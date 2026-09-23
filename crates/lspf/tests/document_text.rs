@@ -43,7 +43,7 @@ async fn query(
         *state.retained.lock().unwrap() = Some(document.clone());
     }
     let line_range = document.line_range(params["line"].as_u64().unwrap_or(0) as u32);
-    let line = line_range.and_then(|range| document.text(Some(range)));
+    let line = line_range.map(|range| document.text(Some(range)));
     let mut result =
         json!({"line": line, "text": document.text(None), "version": document.version()});
     if params["lineMetadata"] == true {
@@ -346,7 +346,7 @@ fn server(provider: MemoryFileProvider) -> Server<State> {
 }
 
 #[tokio::test]
-async fn malformed_positions_and_ranges_are_absent_without_affecting_the_snapshot() {
+async fn invalid_text_ranges_are_empty_without_affecting_the_snapshot() {
     for (encoding, end, split) in [
         (Some("utf-8"), 8, vec![2, 3, 5, 6, 7]),
         (Some("utf-16"), 4, vec![3]),
@@ -376,7 +376,7 @@ async fn malformed_positions_and_ranges_are_absent_without_affecting_the_snapsho
                     json!({"range":selection,"position":point,"predicate":"all"}),
                 )
                 .await;
-                assert_eq!(result["selection"], Value::Null, "{encoding:?} {selection}");
+                assert_eq!(result["selection"], "", "{encoding:?} {selection}");
                 assert_eq!(result["word"], Value::Null, "{encoding:?} {point}");
                 assert_eq!(result["text"], text);
                 assert_eq!(result["version"], 7);
@@ -389,7 +389,7 @@ async fn malformed_positions_and_ranges_are_absent_without_affecting_the_snapsho
         for selection in [range(0, 1, 0, 0), range(1, 0, 0, end)] {
             assert_eq!(
                 read(&mut journey, json!({"range":selection})).await["selection"],
-                Value::Null
+                ""
             );
             assert_eq!(
                 read(&mut journey, json!({"range":range(0,end,0,end)})).await["selection"],
@@ -550,7 +550,7 @@ async fn words_and_lines_respect_all_terminators_in_the_existing_coordinate_mode
             )
             .await;
             assert_eq!(result["word"], Value::Null);
-            assert_eq!(result["selection"], Value::Null);
+            assert_eq!(result["selection"], "");
             journey.finish().await.unwrap();
         }
     }
@@ -579,7 +579,7 @@ async fn local_queries_after_a_long_unicode_prefix_keep_exact_encoded_boundaries
             let result = read(&mut journey, json!({
                 "range":range(1,split,1,split),"position":position(1,split),"predicate":"unicode",
             })).await;
-            assert_eq!(result["selection"], Value::Null);
+            assert_eq!(result["selection"], "");
             assert_eq!(result["word"], Value::Null);
         }
         journey.finish().await.unwrap();

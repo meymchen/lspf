@@ -30,9 +30,9 @@ let documents = ctx.documents();
 if let Some(document) = documents.get(&uri) {
     let count = document.line_count();
     let line = document.line_range(cursor.line)
-        .and_then(|range| document.text(Some(range)));
+        .map(|range| document.text(Some(range)));
     let selected = document.text(Some(selection));
-    let whole = document.text(None).expect("full document text is always available");
+    let whole = document.text(None);
     let word = document.word_at_position(cursor, |ch| {
         ch.is_alphanumeric() || ch == '_' || ch == '\u{301}'
     });
@@ -41,21 +41,21 @@ if let Some(document) = documents.get(&uri) {
 # }
 ```
 
-`Document::text(range)` 返回 `Option<Cow<'_, str>>`。传入 `None` 读取整个快照，此时始终返回 `Some`。传入 `Some(range)` 读取包含起点、不包含终点的原始文本，保留跨越的行终止符和 Unicode 字符，不做规范化。终点为下一行第零列时，结果包含前一行的终止符。有效的空范围返回 `Some("")`，文档末尾也一样。
+`Document::text(range)` 直接返回 `Cow<'_, str>`。传入 `None` 读取整个快照。传入 `Some(range)` 读取包含起点、不包含终点的原始文本，保留跨越的行终止符和 Unicode 字符，不做规范化。终点为下一行第零列时，结果包含前一行的终止符。空范围或无效范围都返回空字符串，文档末尾的有效空范围也一样。
 
 `Document::line_count()` 无需复制文本即可返回行数。空文档有一行空行；以行终止符结尾的文档还有最后一行空行。现有坐标模型识别 LF、CRLF、CR、VT、FF、NEL（U+0085）、行分隔符（U+2028）和段落分隔符（U+2029）。
 
-`Document::line_range(line)` 接受从零开始的行号，返回 `Option<Range>`。范围排除完整的行终止符，保留尾部空格，列使用快照保存的编码。空行返回空范围；不存在的行或无法用 LSP 位置表示的结束列返回 `None`。按上面的示例用 `and_then` 将成功取得的范围交给 `text`，即可读取行文本。不要把失败的行查询直接作为可选范围传入，因为 `None` 会选择全文。
+`Document::line_range(line)` 接受从零开始的行号，返回 `Option<Range>`。范围排除完整的行终止符，保留尾部空格，列使用快照保存的编码。空行返回空范围；不存在的行或无法用 LSP 位置表示的结束列返回 `None`。按上面的示例用 `map` 将成功取得的范围交给 `text`，即可读取行文本。不要把失败的行查询直接作为可选范围传入，因为 `None` 会选择全文。
 
 `Document::word_at_position(position, predicate)` 返回 `Option<(Cow<'_, str>, Range)>`。词是同一行内由谓词接受的 Unicode 标量值组成的最长连续片段。优先选择光标紧右侧字符所属的词；该字符不被接受时，再检查紧左侧字符。因此光标位于词尾时会选中该词，但不会隔着空白向前搜索。即使谓词接受行终止符，选词也不会跨行。谓词仅用于本次调用，由应用决定是否接受下划线、连字符和组合标记；它不负责标识符校验或字素簇分割。
 
-范围文本读取和词查询都会以 `None` 拒绝不存在的行、超过行内容的列、位于 UTF-8 字符或 UTF-16 代理对内部的位置，以及位于行终止符内部的位置。紧靠终止符之前的行尾位置有效。范围读取还会拒绝逆序端点和坐标无效的空范围；光标相邻两侧均没有被接受的字符时，选词返回 `None`。无效输入不会被截断，也不会修改快照。已有坐标换算方法的转换行为保持不变。
+文本读取遇到不存在的行、超过行内容的列、位于 UTF-8 字符或 UTF-16 代理对内部的位置，以及位于行终止符内部的位置时，返回空字符串。逆序范围和坐标无效的空范围也返回空字符串，与有效空范围的结果相同。紧靠终止符之前的行尾位置有效。词查询遇到无效位置，或光标相邻两侧均没有被接受的字符时，仍返回 `None`。无效输入不会被截断，也不会修改快照。已有坐标换算方法的转换行为保持不变。
 
 结果在可能时借用保留的 `Document`，否则持有所选文本；借用只是优化，不是保证。结果不持有存储锁，也不暴露底层存储类型。文本查询可能为所选片段分配内存；行范围查询只计算坐标。局部读取不会先复制整个文档。读取不会访问提供器，也不会更改元数据或工作区状态。
 
 ### 迁移 Document 读取
 
-将原来的 `document.text()` 改为 `document.text(None).expect("full document text is always available")`。结果可能借用快照；需要在快照释放后保留 `String` 时，调用 `.into_owned()`。范围读取通过同一方法传入 `Some(range)`；行文本由 `line_range` 与 `text` 组合取得，不再提供独立的 `line` 或 `text_in_range` 方法。`Document::position_to_offset(position)` 与 `offset_to_position(offset)` 也移除了显式编码参数，自动使用快照的编码；`DocumentsView` 中基于 URI 的转换签名保持不变。
+将原来的 `document.text()` 改为 `document.text(None)`。结果可能借用快照；需要在快照释放后保留 `String` 时，调用 `.into_owned()`。范围读取通过同一方法传入 `Some(range)`；行文本由 `line_range` 与 `text` 组合取得，不再提供独立的 `line` 或 `text_in_range` 方法。`Document::position_to_offset(position)` 与 `offset_to_position(offset)` 也移除了显式编码参数，自动使用快照的编码；`DocumentsView` 中基于 URI 的转换签名保持不变。
 
 ## 笔记本同步
 

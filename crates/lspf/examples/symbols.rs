@@ -54,14 +54,11 @@ fn update(state: &State, ctx: &ServerContext, uri: &Uri) {
     let Some(document) = ctx.documents().get(uri) else {
         return;
     };
-    state.index.lock().unwrap().insert(
-        uri.clone(),
-        parse(
-            &document
-                .text(None)
-                .expect("full document text is always available"),
-        ),
-    );
+    state
+        .index
+        .lock()
+        .unwrap()
+        .insert(uri.clone(), parse(&document.text(None)));
 }
 
 async fn did_open(state: Arc<State>, ctx: ServerContext, params: DidOpenTextDocumentParams) {
