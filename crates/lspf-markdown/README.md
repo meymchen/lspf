@@ -30,6 +30,12 @@ targets resolve against the workspace folder that holds the document.
 Cross-file features read every Markdown file in the workspace folders,
 skipping dot-directories and `node_modules`.
 
+Local links prefer an existing exact target. If an extensionless target is
+absent, the server tries an existing `.md` file; other extensions must be
+written explicitly. Missing targets retain their exact URI for diagnostics
+and references, but cannot be renamed. File moves preserve link spelling when
+it still selects the intended target, adding an explicit extension when needed.
+
 The server speaks LSP over stdio. Run `lspf-markdown --listen <host:port>` to
 serve one client over TCP instead, for example when a debugger owns the
 process; the [VS Code quick start](../../docs/editors/vscode.md) uses this for

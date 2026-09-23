@@ -13,6 +13,7 @@ use lspf::{CancellationToken, LspError, ServerContext};
 use crate::State;
 use crate::fs::FileKind;
 use crate::index::{Entry, WorkspaceIndex};
+use crate::link_resolution::LinkResolution;
 use crate::parse::{BlockKind, normalize_label};
 use crate::target::{encode_path, resolve_local_target};
 
@@ -108,7 +109,10 @@ async fn path_items(
         if path.is_empty() {
             return heading_items(entry, entry, &replace, "");
         }
-        let Some(resolved) = state.index.resolve(ctx, entry.uri(), path).await else {
+        let Some(resolved) = LinkResolution::new(&state.index, ctx)
+            .resolve(entry.uri(), path)
+            .await
+        else {
             return Vec::new();
         };
         let Some(target) = state.index.get(ctx, &resolved.target.uri).await else {

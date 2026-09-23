@@ -15,7 +15,7 @@ use lspf::{Document, ServerContext};
 
 use crate::fs::{DynFs, FileKind};
 use crate::parse::{MdDocument, parse};
-use crate::target::{LocalTarget, child, is_within, resolve_local_target, uri_key};
+use crate::target::{child, is_within, uri_key};
 
 /// File extensions treated as Markdown, the first being the default.
 pub(crate) const MARKDOWN_EXTENSIONS: [&str; 5] = ["md", "markdown", "mdown", "mkd", "mkdn"];
@@ -52,12 +52,6 @@ impl Entry {
     pub(crate) fn text(&self) -> String {
         self.document.text(None).into_owned()
     }
-}
-
-/// A link destination resolved against the workspace.
-pub(crate) struct Resolved {
-    pub(crate) target: LocalTarget,
-    pub(crate) kind: Option<FileKind>,
 }
 
 struct Cached {
@@ -202,42 +196,6 @@ impl WorkspaceIndex {
             .map(|folder| folder.uri)
             .filter(|root| is_within(uri, root))
             .max_by_key(|root| root.as_str().len())
-    }
-
-    /// Resolve a link destination written in `source` and report what exists
-    /// there. An extensionless path that names no resource falls back to the
-    /// same path with the default Markdown extension.
-    pub(crate) async fn resolve(
-        &self,
-        ctx: &ServerContext,
-        source: &Uri,
-        href: &str,
-    ) -> Option<Resolved> {
-        let root = Self::root_for(ctx, source);
-        let target = resolve_local_target(source, href, root.as_ref())?;
-        let kind = self.stat(ctx, &target.uri).await;
-        if kind.is_none() && !crate::target::file_name(&target.uri).contains('.') {
-            let with_extension = LocalTarget {
-                uri: format!("{}.{}", target.uri.as_str(), MARKDOWN_EXTENSIONS[0])
-                    .parse()
-                    .ok()?,
-                fragment: target.fragment.clone(),
-            };
-            if let Some(kind) = self.stat(ctx, &with_extension.uri).await {
-                return Some(Resolved {
-                    target: with_extension,
-                    kind: Some(kind),
-                });
-            }
-        }
-        Some(Resolved { target, kind })
-    }
-
-    async fn stat(&self, ctx: &ServerContext, uri: &Uri) -> Option<FileKind> {
-        if self.is_open(uri) || ctx.documents().get(uri).is_some() {
-            return Some(FileKind::File);
-        }
-        self.fs.stat(uri).await
     }
 
     /// Every Markdown file in the workspace roots plus every open document.

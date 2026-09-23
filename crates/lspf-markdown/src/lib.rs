@@ -15,6 +15,7 @@
 mod features;
 mod fs;
 mod index;
+mod link_resolution;
 mod parse;
 mod slug;
 mod target;
