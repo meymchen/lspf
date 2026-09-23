@@ -15,6 +15,48 @@
       "preLaunchTask": "prepare VS Code reference server"
     },
     {
+      "name": "Debug LSP client connected to lspf-markdown over TCP",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--disable-extensions",
+        "--extensionDevelopmentPath=${workspaceFolder}/tools/vscode-test-client",
+        "${workspaceFolder}/editor-validation/fixture"
+      ],
+      "env": {
+        "LSPF_TEST_CONNECT": "127.0.0.1:9259"
+      },
+      "outFiles": [
+        "${workspaceFolder}/tools/vscode-test-client/out/**/*.js"
+      ],
+      "preLaunchTask": "prepare VS Code test client",
+      "presentation": {
+        "hidden": true
+      }
+    },
+    {
+      "name": "Debug lspf-markdown server over TCP (Windows)",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/target/debug/lspf-markdown.exe",
+      "args": ["--listen", "127.0.0.1:9259"],
+      "cwd": "${workspaceFolder}",
+      "console": "internalConsole",
+      "preLaunchTask": "build lspf-markdown"
+    },
+    {
+      "name": "Debug lspf-markdown server over TCP (LLDB)",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/target/debug/lspf-markdown",
+      "windows": {
+        "program": "${workspaceFolder}/target/debug/lspf-markdown.exe"
+      },
+      "args": ["--listen", "127.0.0.1:9259"],
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "build lspf-markdown"
+    },
+    {
       "name": "Run LSP example client (select example)",
       "type": "extensionHost",
       "request": "launch",
@@ -78,6 +120,32 @@
       "type": "lldb",
       "request": "attach",
       "pid": "${command:pickMyProcess}"
+    },
+    {
+      "name": "Attach to running LSP server/example (Windows)",
+      "type": "cppvsdbg",
+      "request": "attach",
+      "processId": "${command:pickProcess}"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Debug lspf-markdown client + server (Windows)",
+      "preLaunchTask": "prepare VS Code reference server",
+      "configurations": [
+        "Debug lspf-markdown server over TCP (Windows)",
+        "Debug LSP client connected to lspf-markdown over TCP"
+      ],
+      "stopAll": true
+    },
+    {
+      "name": "Debug lspf-markdown client + server (LLDB)",
+      "preLaunchTask": "prepare VS Code reference server",
+      "configurations": [
+        "Debug lspf-markdown server over TCP (LLDB)",
+        "Debug LSP client connected to lspf-markdown over TCP"
+      ],
+      "stopAll": true
     }
   ],
   "inputs": [

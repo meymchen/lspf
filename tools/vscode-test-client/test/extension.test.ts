@@ -54,6 +54,7 @@ afterEach(() => {
     delete process.env.LSPF_MARKDOWN_SERVER;
     delete process.env.LSPF_TEST_TRANSPORT;
     delete process.env.LSPF_TEST_EXAMPLE;
+    delete process.env.LSPF_TEST_CONNECT;
     clientCalls.length = 0;
     channelNames.length = 0;
     started = false;
@@ -145,4 +146,29 @@ test('a socket transport gives the client the channel the server output goes to'
         { scheme: 'file', language: 'plaintext' },
     ]);
     // The shared example advertises no command and no reverse request.
+});
+
+test('a connect address dials a debugged Markdown server instead of starting one', async () => {
+    process.env.LSPF_TEST_CONNECT = '127.0.0.1:9259';
+    // The connect address wins over a socket transport selection.
+    process.env.LSPF_TEST_TRANSPORT = 'tcp';
+    const subscriptions: unknown[] = [];
+    const activateClient = await loadActivateClient();
+
+    await activateClient(
+        { extensionPath: '/repo/tools/vscode-test-client', subscriptions } as never,
+        host,
+    );
+
+    assert.equal(clientCalls.length, 1);
+    assert.equal(clientCalls[0].id, 'lspf-markdown');
+    assert.equal(typeof clientCalls[0].serverOptions, 'function');
+    assert.deepEqual(clientCalls[0].clientOptions.documentSelector, [
+        { scheme: 'file', language: 'markdown' },
+    ]);
+    // The debugger shows the server's stderr, so no forwarding channel exists.
+    assert.deepEqual(channelNames, []);
+    assert.equal(clientCalls[0].clientOptions.outputChannelName, 'lspf-markdown');
+    assert.deepEqual(subscriptions, []);
+    assert.equal(started, true);
 });

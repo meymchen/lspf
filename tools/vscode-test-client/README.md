@@ -50,6 +50,24 @@ repository window, start `Attach to running LSP server/example` and choose the
 process whose name matches the selected example. CodeLLDB then debugs the same
 process that owns the active stdio connection.
 
+## Debugging `lspf-markdown` from its first message
+
+Attaching to a running server misses `initialize` and the first `didOpen`. To
+debug those, launch `Debug lspf-markdown client + server (Windows)`, or the
+`(LLDB)` compound on macOS and Linux. The debugger starts
+`lspf-markdown --listen 127.0.0.1:9259` from the workspace build. The client
+configuration sets `LSPF_TEST_CONNECT=127.0.0.1:9259`, so the extension dials
+that address, retrying while the server builds and binds, instead of spawning
+a server. The server's stderr goes to the debugger's console rather than the
+`lspf-markdown` output channel, which still records LSP traffic.
+
+`LSPF_TEST_CONNECT` takes `host:port` and overrides `LSPF_TEST_TRANSPORT`. The
+server serves one connection and exits when it closes, so restart the compound
+after stopping the client.
+
+On Windows, `Attach to running LSP server/example (Windows)` attaches with the
+C/C++ extension's debugger, which reads the MSVC toolchain's PDB files.
+
 ## Connecting over TCP or WebSocket
 
 Select `Run LSP example client over a socket (select transport)` and pick `tcp`

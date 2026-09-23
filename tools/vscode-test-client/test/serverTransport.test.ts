@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import * as path from 'node:path';
 
 import {
+    resolveConnectAddress,
     resolveTransport,
     resolveTransportBinary,
     socketTransport,
@@ -52,4 +53,14 @@ test('resolves the transport example binary Cargo builds', () => {
         ),
         'native_websocket.exe',
     );
+});
+
+test('reads the address of a server a debugger started', () => {
+    assert.equal(resolveConnectAddress(undefined), undefined);
+    assert.equal(resolveConnectAddress(''), undefined);
+    assert.deepEqual(resolveConnectAddress('127.0.0.1:9259'), { host: '127.0.0.1', port: 9259 });
+    assert.deepEqual(resolveConnectAddress('localhost:1'), { host: 'localhost', port: 1 });
+    for (const invalid of ['9259', ':9259', '127.0.0.1:', '127.0.0.1:0', '127.0.0.1:70000', 'host:x']) {
+        assert.throws(() => resolveConnectAddress(invalid), /invalid LSPF_TEST_CONNECT/, invalid);
+    }
 });

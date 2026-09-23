@@ -9,8 +9,9 @@ import type {
 import { serverEnvironment } from './serverEnvironment.js';
 import { resolveServerBinary } from './serverPath.js';
 import { serverProfile } from './serverProfile.js';
-import { createSocketSession } from './socketServerOptions.js';
+import { createConnectSession, createSocketSession } from './socketServerOptions.js';
 import {
+    resolveConnectAddress,
     resolveTransport,
     resolveTransportBinary,
     socketTransport,
@@ -39,7 +40,10 @@ export async function activateClient(
 ): Promise<ExtensionClient> {
     // tools/vscode-test-client/out/extensionCore.js  →  repo root is two levels up.
     const repoRoot = path.resolve(context.extensionPath, '..', '..');
-    const transport = resolveTransport();
+    const connectAddress = resolveConnectAddress();
+    // A server someone else started is the selected server binary, so the
+    // profile still follows it; only the socket examples choose their own.
+    const transport = connectAddress ? 'stdio' : resolveTransport();
     const serverBinary =
         transport === 'stdio'
             ? resolveServerBinary(repoRoot)
@@ -52,7 +56,11 @@ export async function activateClient(
     // to read, so the extension owns that forwarding — into the same channel,
     // so both transports produce one channel with the same name and contents.
     let serverOutput: OutputChannel | undefined;
-    if (transport === 'stdio') {
+    if (connectAddress) {
+        // The debugger that launched the server shows its stderr, and owns its
+        // lifetime, so the client only dials it.
+        serverOptions = createConnectSession(connectAddress).serverOptions;
+    } else if (transport === 'stdio') {
         serverOptions = {
             command: serverBinary,
             transport: host.stdioTransport,

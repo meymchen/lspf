@@ -17,7 +17,7 @@ import {
 import type { MessageTransports, StreamInfo } from 'vscode-languageclient/node';
 import WebSocket from 'ws';
 
-import type { SocketTransport } from './serverTransport.js';
+import type { ServerAddress, SocketTransport } from './serverTransport.js';
 
 /** How long to keep retrying the connection while the server binds its port. */
 const CONNECT_TIMEOUT_MS = 30_000;
@@ -32,7 +32,7 @@ export interface SocketSession {
 
 export interface SocketHost {
     spawnServer(binary: string, env: NodeJS.ProcessEnv): ChildProcess;
-    connectTcp(transport: SocketTransport): Promise<net.Socket>;
+    connectTcp(address: ServerAddress): Promise<net.Socket>;
     connectWebSocket(transport: SocketTransport): Promise<WebSocket>;
     delay(ms: number): Promise<void>;
     now(): number;
@@ -41,11 +41,11 @@ export interface SocketHost {
 export const defaultSocketHost: SocketHost = {
     spawnServer: (binary, env) =>
         spawn(binary, [], { env, stdio: ['ignore', 'pipe', 'pipe'] }),
-    connectTcp: (transport) =>
+    connectTcp: (address) =>
         new Promise((resolve, reject) => {
             const socket = net.createConnection({
-                host: transport.host,
-                port: transport.port,
+                host: address.host,
+                port: address.port,
             });
             socket.once('connect', () => {
                 socket.setNoDelay(true);
@@ -218,6 +218,38 @@ export function createSocketSession(
             }
             server = undefined;
         },
+    };
+}
+
+/**
+ * Connect the language client to a server this session did not start.
+ *
+ * A debugger that launches `lspf-markdown --listen` owns that process, so the
+ * session never spawns or stops one. The retry loop covers the time the
+ * debugger needs to build, launch, and bind the server.
+ */
+export function createConnectSession(
+    address: ServerAddress,
+    host: Pick<SocketHost, 'connectTcp' | 'delay' | 'now'> = defaultSocketHost,
+): SocketSession {
+    return {
+        serverOptions: async () => {
+            const target = `${address.host}:${address.port}`;
+            const socket = await connectWithRetry(
+                () => host.connectTcp(address),
+                host,
+                host.now() + CONNECT_TIMEOUT_MS,
+            ).catch((error: unknown) => {
+                throw new Error(
+                    `no lspf-markdown server is listening on ${target}. Launch the ` +
+                        '"Debug lspf-markdown client + server" compound, or run ' +
+                        `\`lspf-markdown --listen ${target}\` first.`,
+                    { cause: error },
+                );
+            });
+            return { reader: socket, writer: socket };
+        },
+        dispose: () => {},
     };
 }
 
