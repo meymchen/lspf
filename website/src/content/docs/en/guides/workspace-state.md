@@ -84,8 +84,8 @@ if let Some(document) = documents.get(&uri) {
 the full snapshot. Pass `Some(range)` to read the exact start-inclusive,
 end-exclusive selection, preserving line endings and Unicode characters without
 normalization. An end at the next line's column zero includes the preceding
-terminator. Empty or invalid selections return an empty string, including a
-valid empty selection at document end.
+terminator. Invalid selections return the whole snapshot. Valid empty
+selections return an empty string, including at document end.
 
 `Document::line_count()` returns the number of lines without copying text.
 An empty document has one empty line; a trailing terminator adds a final empty
@@ -110,10 +110,10 @@ accepts it. The predicate is local to the call: the application decides about
 underscores, hyphens, or combining marks. This does not validate identifiers
 or segment grapheme clusters.
 
-Text reads return an empty string for nonexistent lines, columns past line
+Text reads return the whole snapshot for nonexistent lines, columns past line
 content, positions inside a UTF-8 scalar or UTF-16 surrogate pair, and positions
 inside a line terminator. Reversed ranges and empty ranges at invalid positions
-also return an empty string. This result is the same as a valid empty selection.
+also return the whole snapshot. Valid empty selections still return empty text.
 End-of-line immediately before the terminator is valid. Word lookup returns
 `None` for invalid positions or when neither adjacent character is accepted.
 Invalid input is never clamped and never mutates the snapshot. `position_to_offset(position)` and `offset_to_position(offset)`
@@ -122,7 +122,8 @@ use the retained encoding and preserve their existing conversion behavior.
 Results borrow from the retained `Document` when possible or own their
 selected text; borrowing is an optimization, not a guarantee. They hold no
 store lock and expose no storage types. Text queries may allocate their selected fragment; line ranges only compute
-coordinates. Partial reads do not first copy the whole document.
+coordinates. Valid partial reads do not first copy the whole document; an
+invalid-range fallback can materialize the full snapshot.
 They perform no provider I/O and do not change metadata or workspace state.
 
 ### Migrate Document reads

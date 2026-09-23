@@ -126,10 +126,11 @@ impl Document {
     /// embedded line endings are preserved exactly. Ending at the next line's
     /// column zero includes the preceding line terminator.
     ///
-    /// Returns an empty string for empty or invalid ranges, including reversed
-    /// ranges, nonexistent lines, columns beyond line content, and positions
-    /// inside an encoded scalar or line terminator. End-of-line means
-    /// immediately before its terminator. No position is clamped or truncated.
+    /// Invalid ranges return the whole snapshot: reversed endpoints,
+    /// nonexistent lines, columns beyond line content, or positions inside an
+    /// encoded scalar or line terminator. Valid empty ranges return an empty
+    /// string, including at document end. End-of-line is before its terminator.
+    /// No position is clamped or truncated.
     /// Both endpoints are checked against this snapshot before selecting text.
     /// The result borrows when possible or owns only the selected text, without
     /// retaining a document-store lock. Use [`Self::line_range`] to select a line.
@@ -141,10 +142,10 @@ impl Document {
             self.content_char_index(range.start),
             self.content_char_index(range.end),
         ) else {
-            return Cow::Borrowed("");
+            return Cow::from(self.text.slice(..));
         };
         if start > end {
-            return Cow::Borrowed("");
+            return Cow::from(self.text.slice(..));
         }
         Cow::from(self.text.slice(start..end))
     }

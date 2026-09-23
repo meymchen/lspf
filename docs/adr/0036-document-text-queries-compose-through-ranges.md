@@ -18,11 +18,11 @@ an explicit encoding. Carrying the value in the snapshot keeps text and its
 coordinate units together without another view type or live context lookup.
 The existing Unicode line model and conversion behavior remain unchanged.
 
-`text` returns `Cow<str>` directly: `None` selects the full snapshot, and empty
-or invalid explicit ranges return an empty string. Invalid endpoints are never
-clamped, and reversed ranges do not select text. This deliberately makes an
-invalid selection indistinguishable from a valid empty one, so callers can
-consume text without handling an optional result. Line-range and word queries
-still return `None` when absent. Callers compose a fallible line lookup with
-`map` and use `Cow::into_owned` when text must outlive the snapshot. Unicode
-boundary checks and partial materialization remain inside Document.
+`text` returns `Cow<str>` directly. `None` or an invalid explicit range selects
+the full snapshot; a valid empty range selects an empty string. This makes an
+invalid range behave like an omitted selection, without clamping endpoints or
+returning a partially valid fragment. Line-range and word queries still return
+`None` when absent. Callers compose a fallible line lookup with `map` and use
+`Cow::into_owned` when text must outlive the snapshot. Valid partial reads only
+materialize their selected text; a full-document fallback can materialize the
+whole snapshot. Unicode boundary checks remain inside Document.

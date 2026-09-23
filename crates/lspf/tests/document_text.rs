@@ -346,7 +346,7 @@ fn server(provider: MemoryFileProvider) -> Server<State> {
 }
 
 #[tokio::test]
-async fn invalid_text_ranges_are_empty_without_affecting_the_snapshot() {
+async fn invalid_text_ranges_return_the_whole_snapshot_without_mutation() {
     for (encoding, end, split) in [
         (Some("utf-8"), 8, vec![2, 3, 5, 6, 7]),
         (Some("utf-16"), 4, vec![3]),
@@ -376,7 +376,7 @@ async fn invalid_text_ranges_are_empty_without_affecting_the_snapshot() {
                     json!({"range":selection,"position":point,"predicate":"all"}),
                 )
                 .await;
-                assert_eq!(result["selection"], "", "{encoding:?} {selection}");
+                assert_eq!(result["selection"], text, "{encoding:?} {selection}");
                 assert_eq!(result["word"], Value::Null, "{encoding:?} {point}");
                 assert_eq!(result["text"], text);
                 assert_eq!(result["version"], 7);
@@ -389,7 +389,7 @@ async fn invalid_text_ranges_are_empty_without_affecting_the_snapshot() {
         for selection in [range(0, 1, 0, 0), range(1, 0, 0, end)] {
             assert_eq!(
                 read(&mut journey, json!({"range":selection})).await["selection"],
-                ""
+                text
             );
             assert_eq!(
                 read(&mut journey, json!({"range":range(0,end,0,end)})).await["selection"],
@@ -437,6 +437,16 @@ async fn retained_snapshot_survives_changes_and_close() {
         assert_eq!(current["lineCount"], 3);
         assert_eq!(current["lineRange"], range(0, 0, 0, start + 5));
         assert_eq!(current["version"], 8);
+        let invalid_range = range(u32::MAX, 0, u32::MAX, 0);
+        assert_eq!(
+            read(&mut journey, json!({"range":invalid_range})).await["selection"],
+            "\u{1f600} newer\nsuffix\r\n"
+        );
+        let retained_fallback = json!({"retained":true,"range":invalid_range});
+        assert_eq!(
+            read(&mut journey, retained_fallback.clone()).await["selection"],
+            original
+        );
         let mut retained = request;
         retained["retained"] = json!(true);
         assert_eq!(read(&mut journey, retained.clone()).await, before);
@@ -449,6 +459,10 @@ async fn retained_snapshot_survives_changes_and_close() {
         let mut closed = before;
         closed["live"] = json!(false);
         assert_eq!(after, closed);
+        assert_eq!(
+            read(&mut journey, retained_fallback).await["selection"],
+            original
+        );
         journey.finish().await.unwrap();
     }
 }
@@ -478,6 +492,14 @@ async fn provider_and_notebook_snapshots_share_the_same_text_helpers() {
         "selection":"stored","word":["stored",range(0,start,0,start+6)],
         "lineCount":2,"lineRange":range(0,0,0,start+6),"encoding":encoding})
         );
+        assert_eq!(
+            read(
+                &mut journey,
+                json!({"provider":true,"range":range(9,0,9,0)})
+            )
+            .await["selection"],
+            "\u{1f600} stored\r\n"
+        );
         let cell = "file:///book.ipynb#cell";
         notify(
             &mut journey,
@@ -500,6 +522,10 @@ async fn provider_and_notebook_snapshots_share_the_same_text_helpers() {
         "version":3,"uri":cell,"languageId":"rust","live":true,
         "selection":"cell","word":["cell",range(0,start,0,start+4)],
         "lineCount":2,"lineRange":range(0,0,0,start+4),"encoding":encoding})
+        );
+        assert_eq!(
+            read(&mut journey, json!({"uri":cell,"range":range(9,0,9,0)})).await["selection"],
+            "\u{1f600} cell\r\n"
         );
         journey.finish().await.unwrap();
     }
@@ -550,7 +576,7 @@ async fn words_and_lines_respect_all_terminators_in_the_existing_coordinate_mode
             )
             .await;
             assert_eq!(result["word"], Value::Null);
-            assert_eq!(result["selection"], "");
+            assert_eq!(result["selection"], text);
             journey.finish().await.unwrap();
         }
     }
@@ -579,7 +605,7 @@ async fn local_queries_after_a_long_unicode_prefix_keep_exact_encoded_boundaries
             let result = read(&mut journey, json!({
                 "range":range(1,split,1,split),"position":position(1,split),"predicate":"unicode",
             })).await;
-            assert_eq!(result["selection"], "");
+            assert_eq!(result["selection"], text);
             assert_eq!(result["word"], Value::Null);
         }
         journey.finish().await.unwrap();
