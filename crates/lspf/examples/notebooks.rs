@@ -74,7 +74,7 @@ async fn hover(
                 notebook.version(),
                 notebook.cells().len(),
                 document.version().unwrap_or_default(),
-                document.text(),
+                document.text(None),
             ),
         }),
         range: None,

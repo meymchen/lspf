@@ -71,3 +71,9 @@ git_tag_enable = true
 git_tag_name = "v{{ version }}"
 git_release_enable = true
 git_release_name = "v{{ version }}"
+
+# The unpublished example inherits the workspace version and shares its notes.
+# set-version needs a changelog path for every package with version.workspace.
+[[package]]
+name = "lspf-markdown"
+changelog_path = "crates/lspf/CHANGELOG.md"

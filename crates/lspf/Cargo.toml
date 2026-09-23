@@ -241,6 +241,10 @@ name = "document_hooks"
 required-features = ["runtime-tokio"]
 
 [[test]]
+name = "document_text"
+required-features = ["testing"]
+
+[[test]]
 name = "editing_presentation"
 required-features = ["runtime-tokio"]
 

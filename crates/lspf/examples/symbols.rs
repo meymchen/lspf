@@ -58,7 +58,7 @@ fn update(state: &State, ctx: &ServerContext, uri: &Uri) {
         .index
         .lock()
         .unwrap()
-        .insert(uri.clone(), parse(&document.text()));
+        .insert(uri.clone(), parse(&document.text(None)));
 }
 
 async fn did_open(state: Arc<State>, ctx: ServerContext, params: DidOpenTextDocumentParams) {

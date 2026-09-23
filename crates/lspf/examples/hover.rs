@@ -4,7 +4,7 @@ mod example_support;
 
 use std::sync::Arc;
 
-use lspf::types::{Hover, HoverContents, HoverParams, MarkupContent, MarkupKind, Position, Range};
+use lspf::types::{Hover, HoverContents, HoverParams, MarkupContent, MarkupKind};
 use lspf::{CancellationToken, LspError, Server, ServerContext};
 
 struct State;
@@ -133,11 +133,12 @@ async fn hover(
 ) -> Result<Option<Hover>, LspError> {
     let position = params.text_document_position_params.position;
     let uri = params.text_document_position_params.text_document.uri;
-    let text = example_support::text(&ctx, &uri)?;
-    let Some(line) = text.lines().nth(position.line as usize) else {
+    let document = example_support::document(&ctx, &uri)?;
+    let Some(range) = document.line_range(position.line) else {
         return Ok(None);
     };
-    let Some(value) = parse(line) else {
+    let line = document.text(Some(range));
+    let Some(value) = parse(&line) else {
         return Ok(None);
     };
     Ok(Some(Hover {
@@ -145,10 +146,7 @@ async fn hover(
             kind: MarkupKind::Markdown,
             value: markdown(&value),
         }),
-        range: Some(Range::new(
-            Position::new(position.line, 0),
-            Position::new(position.line, line.len() as u32),
-        )),
+        range: Some(range),
     }))
 }
 
@@ -159,4 +157,39 @@ async fn main() -> lspf::Result<()> {
         .build()
         .expect("hover registration is valid");
     example_support::serve(server).await
+}
+
+#[cfg(all(test, feature = "testing"))]
+mod tests {
+    use super::*;
+    use example_support::text_tests::{URI, opened, request};
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn hover_line_range_counts_a_non_ascii_prefix_in_utf16() {
+        let server = Server::builder(State)
+            .feature(lspf::features::hover(), hover)
+            .build()
+            .unwrap();
+        let mut journey = opened(server, "\u{3000}2026-09-23\r\n").await;
+        let response = request(
+            &mut journey,
+            "textDocument/hover",
+            json!({
+                "textDocument":{"uri":URI},"position":{"line":0,"character":2},
+            }),
+        )
+        .await;
+        assert_eq!(
+            response["range"],
+            json!({"start":{"line":0,"character":0},"end":{"line":0,"character":11}})
+        );
+        assert!(
+            response["contents"]["value"]
+                .as_str()
+                .unwrap()
+                .contains("23/09/2026")
+        );
+        journey.finish().await.unwrap();
+    }
 }

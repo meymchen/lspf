@@ -55,7 +55,7 @@ async fn hover(
         contents: HoverContents::MarkupContent(MarkupContent {
             kind: MarkupKind::PlainText,
             value: format!("{} · {} words", state.product_name,
-                document.text().split_whitespace().count()),
+                document.text(None).split_whitespace().count()),
         }),
         range: None,
     }))
@@ -68,7 +68,7 @@ async fn hover(
 
 `textDocument/didOpen` 和 `textDocument/didChange` 是协议内置消息：引擎先解码并更新文档，再调用你注册的变更后钩子。钩子观察的是已经更新的不可变快照，不能替换框架更新。
 
-在打开和变更钩子中读取 `ctx.documents()`，找出超过 `State` 行宽限制的行，并通过 `ctx.publish_diagnostics` 发送带文档版本的诊断。范围位置必须使用 `ctx.documents().position_encoding()` 及转换辅助方法计算；UTF-8 字节索引不能直接当作 UTF-16 或 UTF-32 位置。关闭文档时发送空诊断，避免客户端保留旧结果。
+在打开和变更钩子中读取 `ctx.documents()`，找出超过 `State` 行宽限制的行，并通过 `ctx.publish_diagnostics` 发送带文档版本的诊断。范围位置应使用 `Document` 的转换辅助方法计算；自行计算时从 `document.position_encoding()` 读取坐标编码；UTF-8 字节索引不能直接当作 UTF-16 或 UTF-32 位置。关闭文档时发送空诊断，避免客户端保留旧结果。
 
 通知处理器没有可返回给对端的错误响应。可恢复问题应记录到 stderr 或应用遥测；资源接纳或版本校验失败时，框架会保留旧快照且不运行钩子。
 

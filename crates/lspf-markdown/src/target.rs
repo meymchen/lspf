@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
+use lspf::Document;
 use lspf::types::{Range, Uri};
-use lspf::{Document, PositionEncoding};
 
 use crate::parser::content_lines;
 
@@ -130,8 +130,8 @@ fn heading_slug(title: &str) -> String {
     slug
 }
 
-fn headings(document: &Document, encoding: PositionEncoding) -> Vec<(String, Heading)> {
-    let text = document.text();
+fn headings(document: &Document) -> Vec<(String, Heading)> {
+    let text = document.text(None);
     let lines = content_lines(&text);
     let mut headings = Vec::new();
     for (index, source) in lines.iter().enumerate() {
@@ -151,7 +151,6 @@ fn headings(document: &Document, encoding: PositionEncoding) -> Vec<(String, Hea
                 push_heading(
                     &mut headings,
                     document,
-                    encoding,
                     title,
                     source.start + indentation + hashes + spacing,
                 );
@@ -173,13 +172,7 @@ fn headings(document: &Document, encoding: PositionEncoding) -> Vec<(String, Hea
             continue;
         }
         let title = trimmed.trim_end();
-        push_heading(
-            &mut headings,
-            document,
-            encoding,
-            title,
-            source.start + indentation,
-        );
+        push_heading(&mut headings, document, title, source.start + indentation);
     }
     headings
 }
@@ -187,7 +180,6 @@ fn headings(document: &Document, encoding: PositionEncoding) -> Vec<(String, Hea
 fn push_heading(
     headings: &mut Vec<(String, Heading)>,
     document: &Document,
-    encoding: PositionEncoding,
     title: &str,
     start_offset: usize,
 ) {
@@ -196,8 +188,8 @@ fn push_heading(
     }
     let end_offset = start_offset + title.len();
     if let (Some(start), Some(end)) = (
-        document.offset_to_position(encoding, start_offset),
-        document.offset_to_position(encoding, end_offset),
+        document.offset_to_position(start_offset),
+        document.offset_to_position(end_offset),
     ) {
         headings.push((
             heading_slug(title),
@@ -209,12 +201,8 @@ fn push_heading(
     }
 }
 
-pub(crate) fn selected_heading(
-    document: &Document,
-    encoding: PositionEncoding,
-    fragment: Option<&str>,
-) -> Option<Heading> {
-    let headings = headings(document, encoding);
+pub(crate) fn selected_heading(document: &Document, fragment: Option<&str>) -> Option<Heading> {
+    let headings = headings(document);
     match fragment {
         Some(fragment) => {
             let fragment = fragment.to_lowercase();

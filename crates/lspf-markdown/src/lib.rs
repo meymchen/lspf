@@ -35,17 +35,16 @@ async fn target_at_position(
     position: Position,
 ) -> Option<TargetAtPosition> {
     let document = ctx.documents().get(uri)?;
-    let encoding = ctx.documents().position_encoding();
-    let offset = document.position_to_offset(encoding, position)?;
-    let link = markdown_links(&document.text())
+    let offset = document.position_to_offset(position)?;
+    let link = markdown_links(&document.text(None))
         .into_iter()
         .find(|link| link.target_start <= offset && offset <= link.target_end)?;
     let local = resolve_local_target(uri, &link.target)?;
     let target = ctx.workspace().text_document(&local.uri).await.ok()?;
-    let heading = selected_heading(&target, encoding, local.fragment.as_deref());
+    let heading = selected_heading(&target, local.fragment.as_deref());
     let source_range = Range::new(
-        document.offset_to_position(encoding, link.target_start)?,
-        document.offset_to_position(encoding, link.target_end)?,
+        document.offset_to_position(link.target_start)?,
+        document.offset_to_position(link.target_end)?,
     );
     Some(TargetAtPosition {
         source_range,
@@ -58,7 +57,7 @@ async fn publish_diagnostics(ctx: ServerContext, uri: Uri) {
     let Some(document) = ctx.documents().get(&uri) else {
         return;
     };
-    let text = document.text();
+    let text = document.text(None);
     let mut diagnostics = Vec::new();
     for link in markdown_links(&text) {
         let Some(local) = resolve_local_target(&uri, &link.target) else {
@@ -67,12 +66,7 @@ async fn publish_diagnostics(ctx: ServerContext, uri: Uri) {
         let target = ctx.workspace().text_document(&local.uri).await;
         let missing_heading = target.as_ref().is_ok_and(|target| {
             local.fragment.is_some()
-                && selected_heading(
-                    target,
-                    ctx.documents().position_encoding(),
-                    local.fragment.as_deref(),
-                )
-                .is_none()
+                && selected_heading(target, local.fragment.as_deref()).is_none()
         });
         if target.is_ok() && !missing_heading {
             continue;

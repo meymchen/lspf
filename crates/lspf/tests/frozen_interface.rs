@@ -103,7 +103,7 @@ async fn hover(
     let uri = params.text_document_position_params.text_document.uri;
     let documents: DocumentsView = ctx.documents();
     let words = documents.get(&uri).map_or(0, |document: Document| {
-        document.text().split_whitespace().count()
+        document.text(None).split_whitespace().count()
     });
     Ok(Some(Hover {
         contents: HoverContents::MarkupContent(MarkupContent {
@@ -306,3 +306,6 @@ async fn the_frozen_testing_clock_controls_connection_deadlines() {
     let error: JourneyError = JourneyError::from(lspf::Error::from(TransportError::Closed));
     assert!(!error.to_string().is_empty());
 }
+
+#[path = "support/document_text_interface.rs"]
+mod document_text_interface;

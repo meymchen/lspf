@@ -82,7 +82,7 @@ an export whose gate is not listed here.
 | --- | --- | --- |
 | `Document` | any | An immutable snapshot of one synchronized text document. |
 | `DocumentsView` | any | The read-only document lookup that gives user code no mutation operation. |
-| `PositionEncoding` | any | The negotiated position encoding a handler needs for offset conversion. |
+| `PositionEncoding` | any | The negotiated coordinate units retained by each Document snapshot. |
 | `Notebook` | any | An immutable snapshot of one synchronized notebook's structure. |
 | `NotebooksView` | any | The read-only notebook lookup that mirrors document ownership. |
 | `Workspace` | any | The cloneable handle to initialization metadata, roots, folders, configuration, and trace level. |
@@ -92,6 +92,51 @@ an export whose gate is not listed here.
 | `EmptyFileProvider` | wasm32 | The explicit no-filesystem default for Worker-hosted WASM. |
 | `OsFileProvider` | native-runtime | The standard filesystem provider for native hosts. |
 | `OsFileProviderBuilder` | native-runtime | The configuration surface for the filesystem provider's read limits. |
+
+The `Document` text queries are available under every supported
+native and WASM selection. They read the retained snapshot, including
+provider-loaded snapshots and Notebook-cell Documents:
+
+| Method | Result and contract |
+| --- | --- |
+| `position_encoding()` | `PositionEncoding`; the connection's negotiated encoding retained in this snapshot. |
+| `line_count()` | `usize`; empty documents have one empty line and a trailing terminator adds an empty line. |
+| `line_range(u32)` | `Option<Range>`; zero-based line range without its complete terminator, with encoded columns. Empty lines have empty ranges; nonexistent lines or unrepresentable end columns return `None`. |
+| `text(Option<Range>)` | `Cow<'_, str>`; `None` selects the full snapshot. `Some(range)` selects exact start-inclusive, end-exclusive text with original line endings. Invalid ranges return the full snapshot. Valid empty ranges return an empty string, including at document end. |
+| `word_at_position(Position, F)` where `F: FnMut(char) -> bool` | `Option<(Cow<'_, str>, Range)>`; a maximal accepted run on one line, preferring the character immediately right of the cursor, then the immediately preceding character. No adjacent word returns `None`. |
+
+Line terminators follow the existing coordinate model: LF, CRLF, CR, VT, FF,
+NEL (U+0085), line separator (U+2028), and paragraph separator (U+2029).
+All position-based queries use the snapshot's retained encoding, exposed by
+`Document::position_encoding()`. Text selections and word queries reject nonexistent lines, columns
+past line content, encoded-scalar interiors, and line-terminator interiors;
+text lookup also treats reversed endpoints as invalid. Invalid text selections
+return the full snapshot, while valid empty selections return an empty string.
+Invalid word queries return `None`. End-of-line immediately before its
+terminator is valid. No input is clamped or truncated. The word predicate
+receives Unicode scalar values, is not stored, and cannot select across a line
+terminator. It supplies application membership policy, not identifier or
+grapheme validation.
+
+The helpers preserve text and metadata and remain readable after live sync or
+close. Results borrow from the snapshot when possible or own only selected
+text, without a store lock or public Rope type. Text reads can allocate their selected
+fragment, while line ranges only compute coordinates. Valid partial reads do
+not materialize the whole document; invalid ranges fall back to a full read.
+`position_to_offset(Position)` and `offset_to_position(usize)` use the same
+retained encoding and preserve their
+conversion behavior. The native and real-target WASM interface checks compile
+the queries through the shared downstream signature fixture.
+
+This replaces `text() -> String` with one optional-range reader. Migrate whole
+reads to `text(None)`,
+adding `.into_owned()` when an owned string is required. Remove the explicit
+encoding argument from Document position/offset conversions; they now use the
+snapshot's encoding. `DocumentsView` conversions retain their signatures.
+Compose `line_range` with `text` using `map` to read line content; a failed line lookup must not
+be passed as `None`, which selects the whole document. Separate `line` and
+`text_in_range` methods are not exposed. The interface decision is recorded in
+[ADR 0036](adr/0036-document-text-queries-compose-through-ranges.md).
 
 ## Results, errors, and connection outcome
 

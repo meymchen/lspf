@@ -94,7 +94,7 @@ async fn doc_probe(
     Ok(DocProbeResult {
         found: doc.is_some(),
         opened_uri: doc.as_ref().map(|d| d.uri().as_str().to_string()),
-        text: doc.map(|d| d.text()),
+        text: doc.map(|d| d.text(None).into_owned()),
     })
 }
 

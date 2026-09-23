@@ -15,3 +15,6 @@ use lspf::{
 
 #[test]
 fn wasm_only_frozen_exports_are_nameable() {}
+
+#[path = "support/document_text_interface.rs"]
+mod document_text_interface;

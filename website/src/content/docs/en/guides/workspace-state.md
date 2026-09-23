@@ -53,6 +53,90 @@ registration for a built-in document notification — `textDocument/didOpen`,
 one post-validation hook: the engine decodes and mutates first, and the hook
 observes the result through `ctx.documents()`.
 
+## Read text from one Document snapshot
+
+Obtain a `Document` once for related queries. Each snapshot retains the
+connection's negotiated encoding; position-based helpers use it automatically.
+`Document::position_encoding()` exposes it when application code needs the
+coordinate units. Text and encoding remain available after `didChange` or
+`didClose`. Notebook cells and snapshots from `Workspace::text_document` use the same API; a
+provider-loaded snapshot keeps `version() == None` and an empty language ID.
+
+```rust
+# use lspf::{ServerContext, types::{Position, Range, Uri}};
+# fn inspect(ctx: ServerContext, uri: Uri, selection: Range, cursor: Position) {
+let documents = ctx.documents();
+if let Some(document) = documents.get(&uri) {
+    let count = document.line_count();
+    let line = document.line_range(cursor.line)
+        .map(|range| document.text(Some(range)));
+    let selected = document.text(Some(selection));
+    let whole = document.text(None);
+    let word = document.word_at_position(cursor, |ch| {
+        ch.is_alphanumeric() || ch == '_' || ch == '\u{301}'
+    });
+    // `word` contains (text, range); its range uses the snapshot's encoding.
+}
+# }
+```
+
+`Document::text(range)` returns `Cow<'_, str>` directly. Pass `None` to read
+the full snapshot. Pass `Some(range)` to read the exact start-inclusive,
+end-exclusive selection, preserving line endings and Unicode characters without
+normalization. An end at the next line's column zero includes the preceding
+terminator. Invalid selections return the whole snapshot. Valid empty
+selections return an empty string, including at document end.
+
+`Document::line_count()` returns the number of lines without copying text.
+An empty document has one empty line; a trailing terminator adds a final empty
+line. The existing coordinate model recognizes LF, CRLF, CR, VT, FF, NEL
+(U+0085), line separator (U+2028), and paragraph separator (U+2029).
+
+`Document::line_range(line)` takes a zero-based line number and
+returns `Option<Range>`, excluding the complete terminator and preserving
+trailing spaces. Its columns use the snapshot's encoding. Empty lines have an
+empty range; a missing line or an end column too large for an LSP position
+returns `None`. Compose a successful range with `text` as above to read a line.
+Use `map` for that composition: passing a failed line lookup directly as
+the optional selection would request the full document.
+
+`Document::word_at_position(position, predicate)` returns
+`Option<(Cow<'_, str>, Range)>`. A word is a maximal run of accepted Unicode
+scalar values within one line. The character immediately right of the cursor
+chooses the word if accepted; otherwise the immediately preceding character
+chooses it if accepted. At a word's end it selects that word; a gap does not
+search backward. It never crosses a line terminator, even if the predicate
+accepts it. The predicate is local to the call: the application decides about
+underscores, hyphens, or combining marks. This does not validate identifiers
+or segment grapheme clusters.
+
+Text reads return the whole snapshot for nonexistent lines, columns past line
+content, positions inside a UTF-8 scalar or UTF-16 surrogate pair, and positions
+inside a line terminator. Reversed ranges and empty ranges at invalid positions
+also return the whole snapshot. Valid empty selections still return empty text.
+End-of-line immediately before the terminator is valid. Word lookup returns
+`None` for invalid positions or when neither adjacent character is accepted.
+Invalid input is never clamped and never mutates the snapshot. `position_to_offset(position)` and `offset_to_position(offset)`
+use the retained encoding and preserve their existing conversion behavior.
+
+Results borrow from the retained `Document` when possible or own their
+selected text; borrowing is an optimization, not a guarantee. They hold no
+store lock and expose no storage types. Text queries may allocate their selected fragment; line ranges only compute
+coordinates. Valid partial reads do not first copy the whole document; an
+invalid-range fallback can materialize the full snapshot.
+They perform no provider I/O and do not change metadata or workspace state.
+
+### Migrate Document reads
+
+Replace the former `document.text()` call with
+`document.text(None)`.
+The result may borrow from the snapshot; use `.into_owned()` when a `String`
+must outlive that snapshot. Range reads use `Some(range)` through the same
+method. Line text is obtained by composing `line_range` with `text`; there are
+no separate `line` or `text_in_range` methods. Remove the encoding argument
+from Document position/offset conversions; `DocumentsView` conversions retain
+their URI-based signatures.
+
 ## Notebook synchronization
 
 All four `notebookDocument/*` notifications are protocol built-ins: the engine
@@ -121,7 +205,7 @@ async fn notebook_source(
         // Membership and order come from the notebook view; text comes from
         // the document store.
         .filter_map(|cell| documents.get(&cell.document))
-        .map(|document| document.text())
+        .map(|document| document.text(None).into_owned())
         .collect::<Vec<_>>()
         .join("\n"))
 }
@@ -177,7 +261,7 @@ async fn count_words(
         .text_document(&uri)
         .await
         .map_err(LspError::invalid_request)?;
-    Ok(document.text().split_whitespace().count())
+    Ok(document.text(None).split_whitespace().count())
 }
 # fn main() {
 #     let server = Server::builder(State)

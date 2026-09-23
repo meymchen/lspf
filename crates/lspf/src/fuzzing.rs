@@ -247,29 +247,29 @@ pub fn position_conversion(data: &[u8]) {
 
     let text = String::from_utf8_lossy(data).into_owned();
     let uri = Uri::from_str("file:///fuzz.txt").expect("static URI parses");
-    let document = Document::provider_snapshot(uri, text.clone());
 
     for encoding in [
         PositionEncoding::Utf8,
         PositionEncoding::Utf32,
         PositionEncoding::Utf16,
     ] {
+        let document = Document::provider_snapshot(uri.clone(), text.clone(), encoding);
         for offset in text
             .char_indices()
             .map(|(offset, _)| offset)
             .chain(std::iter::once(text.len()))
         {
             let position = document
-                .offset_to_position(encoding, offset)
+                .offset_to_position(offset)
                 .expect("in-range character boundary has a position");
-            if let Some(roundtrip) = document.position_to_offset(encoding, position) {
+            if let Some(roundtrip) = document.position_to_offset(position) {
                 assert_eq!(offset, roundtrip, "position conversion did not round-trip");
             }
         }
 
         if data.len() >= 8 {
             let position = Position::new(read_u32(&data[..4]), read_u32(&data[4..8]));
-            let _ = document.position_to_offset(encoding, position);
+            let _ = document.position_to_offset(position);
         }
     }
 }
@@ -290,12 +290,12 @@ pub fn incremental_edits(data: &[u8]) {
     let replacement =
         String::from_utf8_lossy(payload.get(split + 1..).unwrap_or_default()).into_owned();
     let uri = Uri::from_str("file:///fuzz.txt").expect("static URI parses");
-    let mut document = Document::provider_snapshot(uri, initial.clone());
     let encoding = match controls.first().copied().unwrap_or_default() % 3 {
         0 => PositionEncoding::Utf8,
         1 => PositionEncoding::Utf32,
         _ => PositionEncoding::Utf16,
     };
+    let mut document = Document::provider_snapshot(uri, initial, encoding);
     let change = if controls.first().copied().unwrap_or_default() % 5 == 0 {
         gen_lsp_types::TextDocumentContentChangeWholeDocument::new(replacement).into()
     } else {
@@ -310,16 +310,16 @@ pub fn incremental_edits(data: &[u8]) {
         .into()
     };
 
-    let before = document.text();
-    let result = document.apply_change(encoding, change, LARGE_INPUT_LIMIT);
+    let before = document.text(None).into_owned();
+    let result = document.apply_change(change, LARGE_INPUT_LIMIT);
     if result.is_err() {
         assert_eq!(
-            document.text(),
+            document.text(None),
             before,
             "a rejected edit mutated the document"
         );
     } else {
-        assert!(document.text().len() <= LARGE_INPUT_LIMIT);
+        assert!(document.text(None).len() <= LARGE_INPUT_LIMIT);
     }
 }
 
