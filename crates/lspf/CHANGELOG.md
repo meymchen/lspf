@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0](https://github.com/meymchen/lspf/compare/v1.0.2...v2.0.0) - 2026-09-23
+
+### Changed
+
+- [**breaking**] Unify Document reads and retain position encoding ([#330](https://github.com/meymchen/lspf/pull/330))
+
+### Other
+
+- Reference both IDE extension templates ([#327](https://github.com/meymchen/lspf/pull/327))
+
 ## [1.0.2](https://github.com/meymchen/lspf/compare/v1.0.1...v1.0.2) - 2026-09-08
 
 ### Changed
