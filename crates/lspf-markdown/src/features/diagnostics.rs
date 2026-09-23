@@ -9,6 +9,7 @@ use lspf::types::{Diagnostic, DiagnosticSeverity, DiagnosticTag, PublishDiagnost
 use crate::State;
 use crate::fs::FileKind;
 use crate::index::{Entry, is_markdown_path};
+use crate::link_resolution::LinkResolution;
 use crate::parse::normalize_label;
 use crate::target::is_external;
 
@@ -35,11 +36,12 @@ async fn check_href(
     ctx: &ServerContext,
     source: &Uri,
     href: &str,
+    links: &mut LinkResolution<'_>,
 ) -> Option<Problem> {
     if is_external(href) {
         return None;
     }
-    let resolved = state.index.resolve(ctx, source, href).await?;
+    let resolved = links.resolve(source, href).await?;
     match resolved.kind {
         None => Some(Problem::MissingTarget),
         Some(FileKind::Directory) => None,
@@ -79,7 +81,12 @@ fn diagnostic(
 }
 
 /// Compute every diagnostic for one parsed document.
-pub(crate) async fn compute(state: &State, ctx: &ServerContext, entry: &Entry) -> Vec<Diagnostic> {
+async fn compute(
+    state: &State,
+    ctx: &ServerContext,
+    entry: &Entry,
+    links: &mut LinkResolution<'_>,
+) -> Vec<Diagnostic> {
     let uri = entry.uri();
     let md = &entry.md;
     let mut located: Vec<(usize, Diagnostic)> = Vec::new();
@@ -94,7 +101,7 @@ pub(crate) async fn compute(state: &State, ctx: &ServerContext, entry: &Entry) -
         Some((reference.label_range.clone(), definition.dest.clone()))
     }));
     for (range, href) in targets {
-        let message = match check_href(state, ctx, uri, &href).await {
+        let message = match check_href(state, ctx, uri, &href, links).await {
             Some(Problem::MissingTarget) => format!("local link target does not exist: {href}"),
             Some(Problem::MissingHeading) => format!("local link heading does not exist: {href}"),
             None => continue,
@@ -159,13 +166,23 @@ pub(crate) async fn compute(state: &State, ctx: &ServerContext, entry: &Entry) -
 
 /// Publish the diagnostics of the open document at `uri`.
 pub(crate) async fn publish(state: &State, ctx: &ServerContext, uri: Uri) {
+    let mut links = LinkResolution::new(&state.index, ctx);
+    publish_with(state, ctx, uri, &mut links).await;
+}
+
+async fn publish_with(
+    state: &State,
+    ctx: &ServerContext,
+    uri: Uri,
+    links: &mut LinkResolution<'_>,
+) {
     let Some(document) = ctx.documents().get(&uri) else {
         return;
     };
     let Some(entry) = state.index.get(ctx, &uri).await else {
         return;
     };
-    let diagnostics = compute(state, ctx, &entry).await;
+    let diagnostics = compute(state, ctx, &entry, links).await;
     let params = PublishDiagnosticsParams {
         uri,
         diagnostics,
@@ -177,8 +194,9 @@ pub(crate) async fn publish(state: &State, ctx: &ServerContext, uri: Uri) {
 /// Republish every open document, after a change elsewhere in the workspace
 /// may have repaired or broken its links.
 pub(crate) async fn publish_all(state: &State, ctx: &ServerContext) {
+    let mut links = LinkResolution::new(&state.index, ctx);
     for uri in state.index.open_uris() {
-        publish(state, ctx, uri).await;
+        publish_with(state, ctx, uri, &mut links).await;
     }
 }
 

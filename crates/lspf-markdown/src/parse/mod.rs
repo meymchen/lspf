@@ -6,6 +6,7 @@
 //! negotiated position encoding stays the framework's concern.
 
 mod defs;
+mod links;
 
 use std::ops::Range;
 
@@ -14,6 +15,7 @@ use pulldown_cmark::{BrokenLink, CowStr, Event, LinkType, Options, Parser, Tag, 
 use crate::slug::SlugBuilder;
 
 pub(crate) use defs::normalize_label;
+pub(crate) use links::{Located, hrefs, locate, located_href};
 
 /// One ATX or setext heading.
 #[derive(Debug, Clone)]

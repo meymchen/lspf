@@ -7,7 +7,8 @@ use lspf::types::{Contents, Hover, HoverParams, MarkupContent, MarkupKind};
 use lspf::{CancellationToken, LspError, ServerContext};
 
 use crate::State;
-use crate::features::{Located, locate, located_href};
+use crate::link_resolution::LinkResolution;
+use crate::parse::{Located, locate, located_href};
 use crate::target::is_external;
 
 pub(crate) async fn hover(
@@ -24,18 +25,21 @@ pub(crate) async fn hover(
     let Some(offset) = entry.offset(position.position) else {
         return Ok(None);
     };
-    let Some(located) = locate(&entry, offset) else {
+    let Some(located) = locate(&entry.md, offset) else {
         return Ok(None);
     };
     let image = matches!(located, Located::Link(link) if link.image)
         || matches!(located, Located::Reference(reference) if reference.image);
-    let Some(href) = located_href(&entry, &located) else {
+    let Some(href) = located_href(&entry.md, &located) else {
         return Ok(None);
     };
     if is_external(&href.text) {
         return Ok(None);
     }
-    let Some(resolved) = state.index.resolve(&ctx, &uri, &href.text).await else {
+    let Some(resolved) = LinkResolution::new(&state.index, &ctx)
+        .resolve(&uri, &href.text)
+        .await
+    else {
         return Ok(None);
     };
     let range = entry.range(&href.range);

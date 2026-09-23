@@ -170,6 +170,14 @@ announced folders and falls back to one synthetic root derived from
 `rootUri`, named for its final path segment or `"workspace"`.
 _Avoid_: Project, root (the LSP `rootUri` is only an input to it).
 
+**Markdown link resolution**:
+The interpretation of a local link destination in the first-party Markdown
+server as an existing or missing resource and an optional fragment. An existing
+exact resource takes precedence; an extensionless destination otherwise selects
+an existing `.md` resource, while other extensions must be written explicitly.
+_Avoid_: Link parsing (syntax alone), URI identity (comparison rather than
+target selection).
+
 **ClientHandle**:
 The cloneable typed handle for server-to-client requests and notifications,
 exposed through [[ServerContext]] (`ctx.client()`). A typed notification is

@@ -7,7 +7,8 @@ use lspf::types::{Definition, DefinitionParams, DefinitionResponse, Location, Po
 use lspf::{CancellationToken, LspError, ServerContext};
 
 use crate::State;
-use crate::features::{Located, locate, located_href};
+use crate::link_resolution::LinkResolution;
+use crate::parse::{Located, locate, located_href};
 use crate::target::is_external;
 
 fn location(uri: lspf::types::Uri, range: Range) -> DefinitionResponse {
@@ -28,10 +29,10 @@ pub(crate) async fn definition(
     let Some(offset) = entry.offset(position.position) else {
         return Ok(None);
     };
-    let Some(located) = locate(&entry, offset) else {
+    let Some(located) = locate(&entry.md, offset) else {
         return Ok(None);
     };
-    let Some(href) = located_href(&entry, &located) else {
+    let Some(href) = located_href(&entry.md, &located) else {
         return Ok(None);
     };
     if is_external(&href.text) {
@@ -45,7 +46,10 @@ pub(crate) async fn definition(
             .range(&definition.label_range)
             .map(|range| location(uri, range)));
     }
-    let Some(resolved) = state.index.resolve(&ctx, &uri, &href.text).await else {
+    let Some(resolved) = LinkResolution::new(&state.index, &ctx)
+        .resolve(&uri, &href.text)
+        .await
+    else {
         return Ok(None);
     };
     let target = resolved.target;

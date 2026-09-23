@@ -9,7 +9,8 @@ use lspf::{CancellationToken, LspError, ServerContext};
 use serde_json::{Value, json};
 
 use crate::State;
-use crate::features::hrefs;
+use crate::link_resolution::LinkResolution;
+use crate::parse::hrefs;
 use crate::target::is_external;
 
 pub(crate) async fn document_links(
@@ -43,7 +44,7 @@ pub(crate) async fn document_links(
             ..DocumentLink::default()
         });
     };
-    for href in hrefs(&entry) {
+    for href in hrefs(&entry.md) {
         add(&href.range, &href.text);
     }
     for reference in &entry.md.references {
@@ -83,7 +84,10 @@ pub(crate) async fn resolve_document_link(
     let Ok(source) = Uri::from_str(source) else {
         return Ok(link);
     };
-    let Some(resolved) = state.index.resolve(&ctx, &source, href).await else {
+    let Some(resolved) = LinkResolution::new(&state.index, &ctx)
+        .resolve(&source, href)
+        .await
+    else {
         return Ok(link);
     };
     let target = resolved.target;

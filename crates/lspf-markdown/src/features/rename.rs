@@ -11,10 +11,8 @@ use lspf::types::{
 use lspf::{CancellationToken, LspError, ServerContext};
 
 use crate::State;
-use crate::features::file_rename::link_edits;
-use crate::features::references::{Symbol, occurrences, scope, symbol_at};
-use crate::features::{Located, locate, located_href};
 use crate::index::WorkspaceIndex;
+use crate::link_resolution::{LinkEdit, LinkResolution, Search, Symbol};
 use crate::slug::slugify;
 use crate::target::{is_external, resolve_local_target, uri_key};
 
@@ -72,6 +70,24 @@ impl Edits {
     }
 }
 
+impl FromIterator<LinkEdit> for Edits {
+    fn from_iter<I: IntoIterator<Item = LinkEdit>>(links: I) -> Self {
+        let mut edits = Self::default();
+        for link in links {
+            if let Some(range) = link.entry.range(&link.range) {
+                edits.push(
+                    link.entry.uri(),
+                    TextEdit {
+                        range,
+                        new_text: link.new_text,
+                    },
+                );
+            }
+        }
+        edits
+    }
+}
+
 fn not_here() -> LspError {
     LspError::RequestFailed("renaming is not supported here".to_string())
 }
@@ -89,24 +105,13 @@ pub(crate) async fn prepare_rename(
         .await
         .ok_or_else(not_here)?;
     let offset = entry.offset(position.position).ok_or_else(not_here)?;
-    symbol_at(&state, &ctx, &entry, offset)
+    let mut links = LinkResolution::new(&state.index, &ctx);
+    let selected = links
+        .select(Arc::clone(&entry), offset, Search::CursorOnly)
         .await
         .ok_or_else(not_here)?;
-    let located = locate(&entry, offset).ok_or_else(not_here)?;
-    let range = match &located {
-        Located::Heading(heading) => heading.content.clone(),
-        Located::Reference(reference) => reference.label_range.clone(),
-        Located::DefinitionLabel(definition) => definition.label_range.clone(),
-        Located::Link(_) | Located::DefinitionDest(_) => {
-            let href = located_href(&entry, &located).ok_or_else(not_here)?;
-            match href.fragment_range() {
-                Some(fragment) if offset >= fragment.start || href.path_range().is_empty() => {
-                    fragment
-                }
-                _ => href.path_range(),
-            }
-        }
-    };
+    require_existing_target(&selected.symbol)?;
+    let range = selected.range;
     let text = entry.text();
     Ok(Some(PrepareRenameResult::PrepareRenamePlaceholder(
         PrepareRenamePlaceholder {
@@ -114,6 +119,15 @@ pub(crate) async fn prepare_rename(
             placeholder: text[range].to_string(),
         },
     )))
+}
+
+fn require_existing_target(symbol: &Symbol) -> Result<(), LspError> {
+    if matches!(symbol, Symbol::File { target } if target.kind.is_none()) {
+        return Err(LspError::RequestFailed(
+            "the link target does not exist".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn supports_file_rename(ctx: &ServerContext) -> bool {
@@ -145,17 +159,20 @@ pub(crate) async fn rename(
         .await
         .ok_or_else(not_here)?;
     let offset = entry.offset(position.position).ok_or_else(not_here)?;
-    let symbol = symbol_at(&state, &ctx, &entry, offset)
+    let mut links = LinkResolution::new(&state.index, &ctx);
+    let selected = links
+        .select(Arc::clone(&entry), offset, Search::Rename)
         .await
         .ok_or_else(not_here)?;
+    require_existing_target(&selected.symbol)?;
+    let symbol = selected.symbol;
 
     let mut edits = Edits::default();
     let mut renames = Vec::new();
     match &symbol {
         Symbol::Label { .. } | Symbol::Heading { .. } => {
             let new_slug = slugify(&new_name);
-            let entries = scope(&state, &ctx, &symbol).await;
-            for occurrence in occurrences(&state, &ctx, &symbol, &entries).await {
+            for occurrence in selected.occurrences {
                 let new_text = match (&symbol, occurrence.declaration) {
                     (Symbol::Heading { .. }, false) => new_slug.clone(),
                     _ => new_name.clone(),
@@ -165,7 +182,8 @@ pub(crate) async fn rename(
                 }
             }
         }
-        Symbol::File { uri: old } => {
+        Symbol::File { target } => {
+            let old = &target.target.uri;
             if !supports_file_rename(&ctx) {
                 return Err(LspError::RequestFailed(
                     "the client cannot rename files".to_string(),
@@ -194,7 +212,11 @@ pub(crate) async fn rename(
             if uri_key(&new) == uri_key(old) {
                 return Ok(None);
             }
-            edits = link_edits(&state, &ctx, &[(old.clone(), new.clone())]).await;
+            edits = links
+                .edits_for_moves(&[(old.clone(), new.clone())])
+                .await
+                .into_iter()
+                .collect();
             renames.push(RenameFile {
                 old_uri: old.clone(),
                 new_uri: new,
