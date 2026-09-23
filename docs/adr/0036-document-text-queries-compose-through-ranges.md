@@ -26,3 +26,11 @@ returning a partially valid fragment. Line-range and word queries still return
 `Cow::into_owned` when text must outlive the snapshot. Valid partial reads only
 materialize their selected text; a full-document fallback can materialize the
 whole snapshot. Unicode boundary checks remain inside Document.
+
+The maintainer approved a one-time versioning exception: retain this API and
+release it as `1.0.3`, despite its incompatibility with `1.0.2`. The release PR
+must state the break and migration. After release-plz generates that PR,
+`ci/prepare-release-pr.sh` uses release-plz's workspace-aware `set-version` to
+adjust it. This applies only while the base workspace version is `1.0.2`;
+after the `1.0.3` release PR merges, ordinary version selection resumes.
+Compatibility checks and their exact finding approvals remain enabled.

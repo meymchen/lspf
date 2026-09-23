@@ -38,6 +38,8 @@ jobs:
         run: bash ci/tests/unit/check-workflow-security.sh
       - name: Test release artifact workflow contract
         run: bash ci/tests/workflow/release-artifacts.sh
+      - name: Test the one-time release PR adjustment
+        run: bash ci/tests/unit/prepare-release-pr.sh
       - name: Test release candidate preparation
         run: bash ci/tests/unit/prepare-release-candidate.sh
       - name: Test release candidate verification

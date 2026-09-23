@@ -1065,8 +1065,14 @@ jobs:
           client-id: ${{ vars.RELEASE_PLZ_APP_CLIENT_ID }}
           private-key: ${{ secrets.RELEASE_PLZ_APP_PRIVATE_KEY }}
       - name: Run release-plz
+        id: release-plz
         uses: release-plz/action@b5543c19b03be9bd48852d20ca89f478b7723260 # v0.5
         with:
           command: release-pr
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
+      - name: Apply the approved Document API patch release exception
+        env:
+          RELEASE_PR: ${{ steps.release-plz.outputs.pr }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
+        run: bash ci/prepare-release-pr.sh

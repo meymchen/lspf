@@ -220,4 +220,27 @@ jq -e --arg semver "$semver_checks_tool" '
     .uses == "./.github/actions/setup-rust" and .with.tools == $semver)
 ' <<<"$workflow_json" >/dev/null
 
+# The override consumes structured output only after normal version selection.
+# It uses the same token so its release-branch push also receives CI checks.
+jq -e '
+  .jobs["release-plz-pr"].steps as $steps
+  | any($steps[]; .id == "release-plz" and .with.command == "release-pr")
+    and any($steps[];
+      .run == "bash ci/prepare-release-pr.sh"
+      and .env.RELEASE_PR == "${{ steps.release-plz.outputs.pr }}"
+      and .env.GH_TOKEN == "${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}")
+    and (($steps | map(.id) | index("release-plz"))
+      < ($steps | map(.run) | index("bash ci/prepare-release-pr.sh")))
+' <<<"$workflow_json" >/dev/null
+workflow_yaml_to_json "$security_workflow" | jq -e '
+  any(.jobs["supply-chain"].steps[];
+    .run == "bash ci/tests/unit/prepare-release-pr.sh")
+' >/dev/null
+yq -p toml -o json '.' "$release_plz_config" | jq -e '
+  .workspace.semver_check != false
+  and all(.package[]; .semver_check != false)
+  and any(.package[]; .name == "lspf-markdown"
+    and .changelog_path == "crates/lspf/CHANGELOG.md")
+' >/dev/null
+
 echo 'Verified release candidate workflow contract verified'
