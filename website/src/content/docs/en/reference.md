@@ -28,7 +28,7 @@ Use the versioned Rust API reference for exact signatures and feature availabili
 
 ## Architecture and support
 
-- [Domain model](https://github.com/meymchen/lspf/blob/main/CONTEXT.md)
+- [Domain model](https://github.com/meymchen/lspf/blob/main/GLOSSARY.md)
 - [Architecture decisions](https://github.com/meymchen/lspf/tree/main/docs/adr)
 - [Support and security policy](https://github.com/meymchen/lspf/blob/main/SECURITY.md)
 - [Release history](https://github.com/meymchen/lspf/blob/main/crates/lspf/CHANGELOG.md)

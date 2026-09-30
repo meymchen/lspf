@@ -24,7 +24,7 @@ on:
       - docs/agents/**
       - .vscode/**
       - .zed/**
-      - CONTEXT.md
+      - GLOSSARY.md
       - AGENTS.md
       - CLAUDE.md
   pull_request:

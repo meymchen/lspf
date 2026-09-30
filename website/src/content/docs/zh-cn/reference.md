@@ -28,7 +28,7 @@ description: 带版本的 API 文档与项目参考资料。
 
 ## 架构与支持
 
-- [领域模型](https://github.com/meymchen/lspf/blob/main/CONTEXT.md)
+- [领域模型](https://github.com/meymchen/lspf/blob/main/GLOSSARY.md)
 - [架构决策记录](https://github.com/meymchen/lspf/tree/main/docs/adr)
 - [支持与安全策略](https://github.com/meymchen/lspf/blob/main/SECURITY.md)
 - [发布历史](https://github.com/meymchen/lspf/blob/main/crates/lspf/CHANGELOG.md)

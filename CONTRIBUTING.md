@@ -27,8 +27,8 @@ prek run --all-files
 
 ## Read the project context
 
-Read [`CONTEXT.md`](./CONTEXT.md) before changing the framework. It defines the
-terms used in code, issues, and reviews. Check the relevant
+Read [`GLOSSARY.md`](./GLOSSARY.md) before changing the framework. It defines
+the terms used in code, issues, and reviews. Check the relevant
 [architecture decision records](./docs/adr/) when a change touches ownership,
 lifecycle, concurrency, protocol behavior, or the public API.
 

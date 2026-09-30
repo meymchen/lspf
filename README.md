@@ -321,7 +321,7 @@ shared protocol checks and editor observations.
 
 ## Concepts
 
-The vocabulary below is taken from [`CONTEXT.md`](./CONTEXT.md); the
+The vocabulary below is taken from [`GLOSSARY.md`](./GLOSSARY.md); the
 project deliberately standardizes on these terms in the public API and
 the docs.
 
@@ -355,7 +355,7 @@ The [project documentation](https://lspf.dev) covers
 features, transports, testing, operations, and both endpoint tutorials. The
 repository keeps the material needed to maintain those contracts:
 
-- [`CONTEXT.md`](./CONTEXT.md) defines the domain language.
+- [`GLOSSARY.md`](./GLOSSARY.md) defines the domain language.
 - [`docs/adr/`](./docs/adr/) records architecture decisions.
 - [`docs/public-interface.md`](./docs/public-interface.md) freezes the 1.0
   public interface.

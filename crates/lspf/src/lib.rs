@@ -1,6 +1,6 @@
 //! lspf — a Rust framework for building extensible LSP language servers.
 //!
-//! See `CONTEXT.md` and `docs/adr/` at the repository root for the domain
+//! See `GLOSSARY.md` and `docs/adr/` at the repository root for the domain
 //! language and the architectural decisions that shape this crate.
 //!
 //! The public protocol surface follows the stable LSP 3.18 specification.

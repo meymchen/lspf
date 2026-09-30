@@ -17,7 +17,7 @@ classify_path() {
     fi
 
     case "$path" in
-        docs/adr/*|docs/agents/*|.vscode/*|.zed/*|CONTEXT.md|AGENTS.md|CLAUDE.md)
+        docs/adr/*|docs/agents/*|.vscode/*|.zed/*|GLOSSARY.md|AGENTS.md|CLAUDE.md)
             ;;
         *)
             build_checks=true
