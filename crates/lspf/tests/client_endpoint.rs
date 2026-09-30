@@ -1,6 +1,8 @@
 //! Public tracer-bullet coverage for the client endpoint (issue #175).
 
 use std::borrow::Cow;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -596,6 +598,37 @@ async fn client_initialize_uses_the_shared_outbound_deadline() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn client_initialize_write_failure_completes_without_a_deadline_or_reader_eof() {
+    let (incoming, incoming_rx) = mpsc::unbounded_channel();
+    let (outgoing, outgoing_rx) = mpsc::unbounded_channel();
+    // Fail the initialize write while keeping the read half open. No peer
+    // response, EOF, or outbound deadline can rescue a stuck connect call.
+    drop(outgoing_rx);
+    let client = Client::builder(ClientCapabilities::default())
+        .resource_policy(ResourcePolicy {
+            outbound_request_timeout: None,
+            ..ResourcePolicy::default()
+        })
+        .build(ChannelTransport {
+            incoming: incoming_rx,
+            outgoing,
+        })
+        .expect("client builds");
+
+    let result = tokio::time::timeout(Duration::from_secs(2), client.connect())
+        .await
+        .expect("writer failure completes initialization without waiting for reader EOF");
+    assert!(matches!(
+        result,
+        Err(lspf::Error::Client(ClientError::ConnectionClosed))
+    ));
+    assert!(
+        incoming.is_closed(),
+        "failed initialization drops its reader"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn client_shutdown_timeout_restores_running_and_allows_retry() {
     let mut client = ConnectedClient::start(
         Client::builder(ClientCapabilities::default()).resource_policy(ResourcePolicy {
@@ -796,6 +829,114 @@ async fn client_uses_shared_admission_and_cancellation_for_reverse_requests() {
 
     drop(incoming_tx);
     assert_eq!(serving.await.unwrap().unwrap(), Outcome::TransportClosed);
+}
+
+#[tokio::test]
+async fn client_reverse_handler_panics_release_capacity_and_request_ids() {
+    let mut client = ConnectedClient::start(
+        Client::builder(ClientCapabilities::default())
+            .resource_policy(ResourcePolicy {
+                max_inbound_requests: 1,
+                ..ResourcePolicy::default()
+            })
+            .request::<ClientEcho, _, _>(|_ctx, params, _cancellation| {
+                assert_ne!(params.text, "construct panic");
+                async move {
+                    tokio::task::yield_now().await;
+                    assert_ne!(params.text, "poll panic");
+                    Ok(EchoResult { text: params.text })
+                }
+            }),
+    )
+    .await;
+
+    for panic_at in ["construct panic", "poll panic"] {
+        client.send(RawMessage::Request {
+            id: RequestId::Number(10),
+            method: Cow::Borrowed(ClientEcho::METHOD),
+            params: Bytes::from(serde_json::to_vec(&json!({ "text": panic_at })).unwrap()),
+        });
+        match client.recv().await {
+            RawMessage::Response {
+                id: RequestId::Number(10),
+                result: Err(error),
+            } => {
+                assert_eq!(error.code, -32603);
+                assert_eq!(error.message, "user dispatch panicked");
+            }
+            other => panic!("expected one internal-error response, got {other:?}"),
+        }
+
+        // A new ID proves capacity was returned; reusing the failed ID also
+        // proves its registry entry was removed. Neither needs cancellation.
+        for id in [11, 10] {
+            client.send(RawMessage::Request {
+                id: RequestId::Number(id),
+                method: Cow::Borrowed(ClientEcho::METHOD),
+                params: Bytes::from_static(br#"{"text":"healthy"}"#),
+            });
+            match client.recv().await {
+                RawMessage::Response {
+                    id: response_id,
+                    result: Ok(result),
+                } => {
+                    assert_eq!(response_id, RequestId::Number(id));
+                    assert_eq!(
+                        serde_json::from_slice::<EchoResult>(&result).unwrap().text,
+                        "healthy"
+                    );
+                }
+                other => panic!("expected a successful request after panic, got {other:?}"),
+            }
+        }
+    }
+
+    client.server.disconnect();
+    assert_eq!(client.outcome().await, Outcome::TransportClosed);
+}
+
+#[tokio::test]
+async fn client_reverse_progress_create_panic_releases_the_token_for_retry() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let mut client = ConnectedClient::start(
+        Client::builder(ClientCapabilities::default()).request::<WorkDoneProgressCreate, _, _>({
+            let attempts = Arc::clone(&attempts);
+            move |_ctx, _params, _cancellation| {
+                let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    assert_ne!(attempt, 0, "first progress creation panics");
+                    Ok(())
+                }
+            }
+        }),
+    )
+    .await;
+
+    for id in [20, 21] {
+        client.send(RawMessage::Request {
+            id: RequestId::Number(id),
+            method: Cow::Borrowed(WorkDoneProgressCreate::METHOD),
+            params: Bytes::from_static(br#"{"token":"retry"}"#),
+        });
+        match client.recv().await {
+            RawMessage::Response {
+                id: response_id,
+                result,
+            } => {
+                assert_eq!(response_id, RequestId::Number(id));
+                if id == 20 {
+                    assert_eq!(result.unwrap_err().code, -32603);
+                } else {
+                    assert_eq!(result.expect("same token can be retried"), "null");
+                }
+            }
+            other => panic!("expected a progress-create response, got {other:?}"),
+        }
+    }
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+
+    client.server.disconnect();
+    assert_eq!(client.outcome().await, Outcome::TransportClosed);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
