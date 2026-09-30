@@ -50,6 +50,7 @@ const englishSidebar: DefaultTheme.SidebarItem[] = [
   {
     text: 'Explore and reference',
     items: [
+      { text: 'Built with lspf', link: '/built-with-lspf' },
       { text: 'Feature servers', link: '/examples' },
       { text: 'API reference', link: '/reference' },
     ],
@@ -101,6 +102,7 @@ const chineseSidebar: DefaultTheme.SidebarItem[] = [
   {
     text: '探索与参考',
     items: [
+      { text: '应用案例', link: '/zh-cn/built-with-lspf' },
       { text: '功能示例服务器', link: '/zh-cn/examples' },
       { text: 'API 参考', link: '/zh-cn/reference' },
     ],
@@ -187,6 +189,7 @@ export default defineConfig({
           { text: 'Architecture', link: '/concepts' },
           { text: 'Guides', link: '/getting-started' },
           { text: 'Examples', link: '/examples' },
+          { text: 'Built with lspf', link: '/built-with-lspf' },
           { text: 'Agents', link: '/guides/agents' },
         ],
       },
@@ -201,6 +204,7 @@ export default defineConfig({
           { text: '架构', link: '/zh-cn/concepts' },
           { text: '指南', link: '/zh-cn/getting-started' },
           { text: '示例', link: '/zh-cn/examples' },
+          { text: '应用案例', link: '/zh-cn/built-with-lspf' },
           { text: 'Agent', link: '/zh-cn/guides/agents' },
         ],
         editLink: { pattern: editPattern, text: '在 GitHub 上编辑此页' },

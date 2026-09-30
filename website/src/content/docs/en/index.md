@@ -42,6 +42,33 @@ about applying edits remain in the host application.
 
 [Explore the server architecture](./concepts) · [Build a client connection](./guides/client-adoption)
 
+## Built with lspf
+
+<!-- markdownlint-disable-next-line MD033 -->
+<div class="application-card">
+
+### [lspf-analysis](./built-with-lspf)
+
+See function and class code health as you edit. lspf-analysis brings multi-language
+analysis into the editor through diagnostics, hover details, and a Code Health view.
+Its Rust server uses lspf for document synchronization and LSP communication,
+with application handlers connecting the analysis engine to editor features.
+
+<!-- markdownlint-disable-next-line MD033 -->
+<p class="application-status">VS Code extension · Pre-release</p>
+
+<!-- markdownlint-disable-next-line MD033 -->
+<div class="application-actions">
+
+[Try in VS Code](https://marketplace.visualstudio.com/items?itemName=meymchen.lspf-analysis)
+[How it uses lspf](./built-with-lspf)
+[Source code](https://github.com/meymchen/lspf-analysis)
+
+<!-- markdownlint-disable-next-line MD033 -->
+</div>
+<!-- markdownlint-disable-next-line MD033 -->
+</div>
+
 ## A small API with a clear boundary
 
 ```rust

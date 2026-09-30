@@ -19,3 +19,10 @@ published at `https://lspf.dev` through GitHub Pages.
 
 Canonical page links omit `.html` and a trailing slash. The production build
 also emits redirect pages for trailing-slash URLs and the former `/en/` routes.
+
+## Application showcases
+
+Maintain the homepage cards and `built-with-lspf` pages by hand in both languages.
+Update them when an application's core capabilities or release status changes.
+Link VS Code installation actions to the extension's Visual Studio Marketplace
+listing, and keep detailed installation instructions in the downstream project.

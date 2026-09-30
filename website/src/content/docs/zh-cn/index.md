@@ -37,6 +37,30 @@ features:
 
 [探索服务器架构](./concepts) · [构建客户端连接](./guides/client-adoption)
 
+## 使用 lspf 构建
+
+<!-- markdownlint-disable-next-line MD033 -->
+<div class="application-card">
+
+### [lspf-analysis](./built-with-lspf)
+
+在编辑时查看函数与类的代码健康。lspf-analysis 通过诊断、悬停详情和 Code Health 视图，将多语言分析带入编辑器。它的 Rust 服务器使用 lspf 管理文档同步与 LSP 通信，由应用处理器把分析引擎接入编辑器功能。
+
+<!-- markdownlint-disable-next-line MD033 -->
+<p class="application-status">VS Code 扩展（预发布）</p>
+
+<!-- markdownlint-disable-next-line MD033 -->
+<div class="application-actions">
+
+[在 VS Code 中体验](https://marketplace.visualstudio.com/items?itemName=meymchen.lspf-analysis)
+[了解它如何使用 lspf](./built-with-lspf)
+[查看源码](https://github.com/meymchen/lspf-analysis)
+
+<!-- markdownlint-disable-next-line MD033 -->
+</div>
+<!-- markdownlint-disable-next-line MD033 -->
+</div>
+
 ## 小而清晰的 API 边界
 
 ```rust

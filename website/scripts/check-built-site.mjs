@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readdir, readFile } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const websiteRoot = new URL('../', import.meta.url);
 const docsRoot = new URL('../src/content/docs/', import.meta.url);
@@ -62,7 +63,7 @@ const canonicalFiles = [];
 let expectedRustdocLinks = 0;
 for (const locale of ['en', 'zh-cn']) {
   const localeRoot = new URL(`${locale}/`, docsRoot);
-  const localePath = localeRoot.pathname;
+  const localePath = fileURLToPath(localeRoot);
   for (const path of await markdownFiles(localePath)) {
     const sourcePath = relative(localePath, path).split(sep).join('/');
     const source = await readFile(path, 'utf8');
