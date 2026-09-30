@@ -144,6 +144,30 @@ body { letter-spacing: -0.01em; }
 .VPHome .vp-doc > h2 { font-size: 28px; line-height: 1.4; letter-spacing: -.035em; }
 .scene-core-top > img { padding: 4px; border-radius: 8px; background: #f0f5f4; }
 
+.application-card { margin-top: 24px; padding: 28px; border: 1px solid var(--vp-c-divider); border-left: 3px solid var(--infra-aqua); border-radius: 16px; background: var(--infra-surface); }
+.vp-doc .application-card h3 { margin-top: 0; font-size: 24px; }
+.application-card > p { max-width: 80ch; }
+.vp-doc .application-status { color: var(--vp-c-text-2); font-size: 13px; }
+.application-actions > p { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; margin-bottom: 0; }
+.application-actions a { font-size: 14px; }
+.vp-doc .application-actions a:first-child { display: inline-block; padding: 8px 16px; border: 1px solid transparent; border-radius: 8px; background: var(--vp-button-brand-bg); color: var(--vp-button-brand-text); text-decoration: none; }
+.vp-doc .application-actions a:first-child:hover { background: var(--vp-button-brand-hover-bg); color: var(--vp-button-brand-hover-text); }
+.application-actions a:focus-visible { outline: 2px solid var(--vp-c-brand-1); outline-offset: 4px; }
+.application-flow { margin: 24px 0; padding: 20px; border: 1px solid var(--vp-c-divider); border-radius: 16px; background: var(--vp-c-bg-soft); }
+.application-flow-path { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1.5fr); align-items: center; gap: 12px; }
+.application-flow-node, .application-flow-server { min-width: 0; padding: 16px; border: 1px solid var(--vp-c-divider); border-radius: 10px; background: var(--vp-c-bg); }
+.application-flow-server { border-color: var(--infra-aqua); }
+.application-flow strong { display: block; font-size: 14px; line-height: 1.6; }
+.application-flow-node > span, .application-flow-layer > span { display: block; margin-top: 8px; color: var(--vp-c-text-2); font-size: 12px; line-height: 1.7; }
+.application-flow-layer { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--vp-c-divider); }
+.application-flow-arrow { color: var(--infra-aqua); font-size: 24px; }
+.application-flow figcaption { margin-top: 16px; color: var(--vp-c-text-2); font-size: 12px; line-height: 1.8; }
+@media (max-width: 639px) {
+  .application-card, .application-flow { padding: 18px; }
+  .application-flow-path { grid-template-columns: minmax(0, 1fr); }
+  .application-flow-arrow { justify-self: center; transform: rotate(90deg); }
+}
+
 .scene-modes { margin: -8px 0 18px; padding-bottom: 14px; border-bottom: 1px solid var(--vp-c-divider); }
 .scene-modes button { flex: 1; padding: 8px 6px; font-weight: 600; }
 .scene-modes button:focus-visible, .scene-examples button:focus-visible { outline: 2px solid var(--vp-c-brand-1); outline-offset: 3px; }
