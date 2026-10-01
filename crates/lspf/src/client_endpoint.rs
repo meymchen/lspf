@@ -7,9 +7,11 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
+use futures_util::FutureExt;
 use gen_lsp_types::{
     ClientCapabilities, ClientInfo, ExitNotification as Exit, InitializeParams,
     InitializeRequest as Initialize, InitializedNotification as Initialized, InitializedParams,
@@ -19,7 +21,7 @@ use gen_lsp_types::{
 };
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, Span, debug};
+use tracing::{Instrument, Span, debug, error};
 
 use crate::builder::SharedHandler;
 use crate::client::ClientHandle;
@@ -707,21 +709,32 @@ impl<R: Runtime> ClientEngine<R> {
         let peer = self.peer.clone();
         let mut pending = Box::pin(peer.request::<Initialize>(params));
         loop {
-            match futures_util::future::select(pending, Box::pin(reader.recv())).await {
+            // Initialization must observe the same writer/admission failures
+            // as the running connection, even if its read half stays open.
+            let input = match futures_util::future::select(
+                pending,
+                Box::pin(self.protocol.next_input(reader)),
+            )
+            .await
+            {
                 futures_util::future::Either::Left((result, _)) => {
                     result?;
                     return Ok(());
                 }
-                futures_util::future::Either::Right((message, still_pending)) => {
+                futures_util::future::Either::Right((input, still_pending)) => {
                     pending = still_pending;
-                    match message {
-                        Ok(message) => {
-                            self.trace.message(Direction::Inbound, &message);
-                            self.dispatch_during_initialize(message);
-                        }
-                        Err(error) => return Err(Error::Transport(error)),
-                    }
+                    input
                 }
+            };
+            match input {
+                SessionInput::CloseRequested | SessionInput::OutboundFailed => {
+                    return Err(ClientError::ConnectionClosed.into());
+                }
+                SessionInput::Message(Ok(message)) => {
+                    self.trace.message(Direction::Inbound, &message);
+                    self.dispatch_during_initialize(message);
+                }
+                SessionInput::Message(Err(error)) => return Err(Error::Transport(error)),
             }
         }
     }
@@ -911,9 +924,21 @@ impl<R: Runtime> ClientEngine<R> {
                 let handler_cancellation = cancellation.clone();
                 let result = run_handler_with_deadline(
                     async move {
-                        match handler(ctx, params, handler_cancellation).await {
-                            Ok(value) => ServiceResult::Response(value),
-                            Err(error) => ServiceResult::Error(error),
+                        // Catch both constructing and polling the user future
+                        // so panic follows the normal completion path, including
+                        // admission release and progress-create rollback.
+                        match AssertUnwindSafe(async move {
+                            handler(ctx, params, handler_cancellation).await
+                        })
+                        .catch_unwind()
+                        .await
+                        {
+                            Ok(Ok(value)) => ServiceResult::Response(value),
+                            Ok(Err(error)) => ServiceResult::Error(error),
+                            Err(_) => {
+                                error!("panic isolated while dispatching reverse request");
+                                ServiceResult::Error(LspError::internal("user dispatch panicked"))
+                            }
                         }
                     },
                     cancellation,
