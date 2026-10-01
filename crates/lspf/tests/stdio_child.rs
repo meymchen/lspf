@@ -172,9 +172,15 @@ async fn shutdown_timeout_terminates_then_kills_and_reaps_the_child() {
     let shutdown_received = directory.path().join("shutdown-received");
     let mut command = fixture_command("slow-shutdown-timeout");
     command.env("LSPF_STDIO_CHILD_SHUTDOWN_ACK", &shutdown_received);
-    let child = Client::builder(ClientCapabilities::default())
+    let initialization = Client::builder(ClientCapabilities::default())
         .resource_policy(policy)
-        .spawn(command)
+        .spawn(command);
+    tokio::pin!(initialization);
+    assert!(futures_util::poll!(initialization.as_mut()).is_pending());
+    // Reproduce a descheduled parent after the initialize deadline is armed.
+    // Neither its protocol driver nor its I/O reactor can run during this gap.
+    std::thread::sleep(Duration::from_millis(100));
+    let child = initialization
         .await
         .expect("the stubborn child initializes");
     let _pid = child.id();
