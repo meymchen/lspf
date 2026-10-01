@@ -350,6 +350,9 @@ jobs:
             fi
           done
           cargo check -p lspf --all-targets --locked --features fuzzing
+      - name: Diagnose Intel child initialization phases
+        if: ${{ matrix.os == 'macos-15-intel' }}
+        run: cargo test -p lspf --locked --test stdio_child -- --diagnose-startup
       - name: Exercise child termination and reaping
         run: cargo test -p lspf --locked --test stdio_child
 
