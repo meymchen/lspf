@@ -11,7 +11,7 @@ let client: ExtensionClient | undefined;
 export async function activate(context: ExtensionContext): Promise<void> {
     client = await activateClient(context, {
         stdioTransport: TransportKind.stdio,
-        createOutputChannel: (name) => window.createOutputChannel(name),
+        createOutputChannel: (name) => window.createOutputChannel(name, { log: true }),
         createFileSystemWatcher: (glob) => workspace.createFileSystemWatcher(glob),
         createLanguageClient: (id, name, serverOptions, clientOptions) =>
             new LanguageClient(id, name, serverOptions, clientOptions),

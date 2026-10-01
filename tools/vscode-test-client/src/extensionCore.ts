@@ -1,5 +1,5 @@
 import * as path from 'node:path';
-import type { ExtensionContext, FileSystemWatcher, OutputChannel } from 'vscode';
+import type { ExtensionContext, FileSystemWatcher, LogOutputChannel } from 'vscode';
 import type {
     LanguageClientOptions,
     ServerOptions,
@@ -24,7 +24,7 @@ export interface ExtensionClient {
 
 export interface ExtensionHost {
     readonly stdioTransport: TransportKind;
-    createOutputChannel(name: string): OutputChannel;
+    createOutputChannel(name: string): LogOutputChannel;
     createFileSystemWatcher(glob: string): FileSystemWatcher;
     createLanguageClient(
         id: string,
@@ -55,7 +55,7 @@ export async function activateClient(
     // the output channel itself. A socket transport gives the client no process
     // to read, so the extension owns that forwarding — into the same channel,
     // so both transports produce one channel with the same name and contents.
-    let serverOutput: OutputChannel | undefined;
+    let serverOutput: LogOutputChannel | undefined;
     if (connectAddress) {
         // The debugger that launched the server shows its stderr, and owns its
         // lifetime, so the client only dials it.

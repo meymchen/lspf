@@ -1,4 +1,5 @@
 # SPDX license identifiers approved for the tracked npm dependency graph.
 Apache-2.0
+BlueOak-1.0.0
 ISC
 MIT

@@ -43,6 +43,11 @@ fn write_message(writer: &mut impl Write, message: &Value) {
 
 fn stdio_language_server_fixture() {
     let mode = std::env::var(CHILD_MODE).unwrap();
+    if mode == "slow-shutdown-timeout" {
+        // Regression: initialization may legitimately exceed the old 50 ms
+        // shutdown-test deadline before the child can process any input.
+        std::thread::sleep(Duration::from_millis(100));
+    }
     let mut stdin = std::io::BufReader::new(std::io::stdin().lock());
     let mut stdout = std::io::stdout().lock();
     let mut stderr = std::io::stderr().lock();
@@ -63,10 +68,14 @@ fn stdio_language_server_fixture() {
     if mode == "early-exit" {
         std::process::exit(23);
     }
-    if mode == "shutdown-timeout" {
+    if mode == "shutdown-timeout" || mode == "slow-shutdown-timeout" {
         ignore_terminate();
         let shutdown = read_message(&mut stdin);
         assert_eq!(shutdown["method"], "shutdown");
+        if mode == "slow-shutdown-timeout" {
+            let received = std::env::var_os("LSPF_STDIO_CHILD_SHUTDOWN_ACK").unwrap();
+            std::fs::write(received, b"received").unwrap();
+        }
         loop {
             std::thread::sleep(Duration::from_secs(60));
         }
@@ -157,18 +166,42 @@ async fn framed_exchange_drains_stderr_and_reclaims_a_successful_child() {
 }
 
 async fn shutdown_timeout_terminates_then_kills_and_reaps_the_child() {
-    let policy = ResourcePolicy {
-        outbound_request_timeout: Some(Duration::from_millis(50)),
-        ..ResourcePolicy::default()
-    };
-    let child = Client::builder(ClientCapabilities::default())
+    let policy = ResourcePolicy::default();
+    let deadline = policy.outbound_request_timeout.unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let shutdown_received = directory.path().join("shutdown-received");
+    let mut command = fixture_command("slow-shutdown-timeout");
+    command.env("LSPF_STDIO_CHILD_SHUTDOWN_ACK", &shutdown_received);
+    let initialization = Client::builder(ClientCapabilities::default())
         .resource_policy(policy)
-        .spawn(fixture_command("shutdown-timeout"))
+        .spawn(command);
+    tokio::pin!(initialization);
+    assert!(futures_util::poll!(initialization.as_mut()).is_pending());
+    // Reproduce a descheduled parent after the initialize deadline is armed.
+    // Neither its protocol driver nor its I/O reactor can run during this gap.
+    std::thread::sleep(Duration::from_millis(100));
+    let child = initialization
         .await
         .expect("the stubborn child initializes");
     let _pid = child.id();
 
-    let error = child.shutdown().await.unwrap_err();
+    let shutdown = tokio::spawn(child.shutdown());
+    // Use an out-of-band acknowledgment: reverse LSP notifications are
+    // deliberately ignored once the client enters shutdown.
+    tokio::time::timeout(deadline, async {
+        while !shutdown_received.exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the child installs its signal handler and receives shutdown");
+
+    // Keep real time for process startup and pipe I/O. Advance only after the
+    // child acknowledges shutdown, then resume before OS termination/reaping.
+    tokio::time::pause();
+    tokio::time::advance(deadline).await;
+    tokio::time::resume();
+    let error = shutdown.await.unwrap().unwrap_err();
 
     assert!(matches!(error, ChildError::Lifecycle(ClientError::Timeout)));
     #[cfg(unix)]
@@ -254,12 +287,19 @@ fn main() {
         .unwrap();
     runtime.block_on(async {
         framed_exchange_drains_stderr_and_reclaims_a_successful_child().await;
-        shutdown_timeout_terminates_then_kills_and_reaps_the_child().await;
         early_child_exit_reports_status_and_resolves_the_connection().await;
         dropping_a_connection_reclaims_its_child().await;
         invalid_client_configuration_fails_before_spawning().await;
         cancelling_a_terminal_future_still_reclaims_the_child().await;
     });
+
+    // Tokio's controllable clock requires a current-thread runtime. The other
+    // real-process journeys continue to exercise the multi-thread runtime.
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(shutdown_timeout_terminates_then_kills_and_reaps_the_child());
 
     let _dropped_inside_pid = runtime.block_on(async {
         let child = Client::builder(ClientCapabilities::default())

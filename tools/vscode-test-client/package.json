@@ -7,7 +7,7 @@
   "private": true,
   "engines": {
     "node": "24.x",
-    "vscode": "^1.80.0"
+    "vscode": "^1.91.0"
   },
   "main": "./out/extension.js",
   "activationEvents": [
@@ -24,16 +24,13 @@
     "test:coverage": "npm run compile && node --enable-source-maps --test-coverage-exclude=\"out/!(extensionCore).js\" --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=../../coverage/vscode-test-client/lcov.info \"test/**/*.test.ts\""
   },
   "dependencies": {
-    "vscode-languageclient": "^9.0.1",
+    "vscode-languageclient": "^10.1.2",
     "ws": "^8.21.3"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",
-    "@types/vscode": "^1.80.0",
+    "@types/vscode": "^1.91.0",
     "@types/ws": "^8.18.1",
     "typescript": "^5"
-  },
-  "overrides": {
-    "brace-expansion": "2.1.4"
   }
 }
