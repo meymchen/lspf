@@ -1,10 +1,8 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import * as net from 'node:net';
 
-// The package root, not its `/node` subpath: that subpath has no file
-// extension and no `exports` map, so Node's ESM resolver cannot load it. The
-// root's `main` resolves, and the abstract reader and writer live in the common
-// API it re-exports.
+// The socket adapters use the common JSON-RPC API exposed at the package root,
+// which resolves in both the compiled extension and the native ESM tests.
 import {
     AbstractMessageReader,
     AbstractMessageWriter,

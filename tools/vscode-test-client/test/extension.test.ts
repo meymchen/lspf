@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 
+import type { LogOutputChannel } from 'vscode';
 import type { LanguageClientOptions, ServerOptions } from 'vscode-languageclient/node';
 
 import type { ExtensionHost } from '../src/extensionCore.ts';
@@ -24,10 +25,21 @@ const clientCalls: ClientCall[] = [];
 const channelNames: string[] = [];
 let started = false;
 
-const outputChannel = {
+const outputChannel: LogOutputChannel = {
+    name: 'test',
+    logLevel: 3,
+    onDidChangeLogLevel: () => ({ dispose() {} }),
+    trace() {},
+    debug() {},
+    info() {},
+    warn() {},
+    error() {},
     appendLine() {},
     append() {},
+    replace() {},
+    clear() {},
     show() {},
+    hide() {},
     dispose() {},
 };
 const watcher = { dispose() {} };
@@ -35,7 +47,7 @@ const host: ExtensionHost = {
     stdioTransport: 'stdio' as never,
     createOutputChannel: (name) => {
         channelNames.push(name);
-        return outputChannel as never;
+        return outputChannel;
     },
     createFileSystemWatcher: () => watcher as never,
     createLanguageClient(id, name, serverOptions, clientOptions) {
