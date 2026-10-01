@@ -17,74 +17,6 @@ use tokio::process::Command;
 
 const CHILD_MODE: &str = "LSPF_STDIO_CHILD_FIXTURE";
 
-// [DEBUG-stdio-startup] Temporary phase evidence for the Intel CI failure.
-fn diagnostic_time() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_micros()
-}
-
-fn diagnostic_phase(file: &mut Option<std::fs::File>, phase: &str) {
-    if let Some(file) = file {
-        writeln!(file, "{} {phase}", diagnostic_time()).unwrap();
-    }
-}
-
-async fn diagnose_startup() {
-    let directory =
-        std::path::PathBuf::from(".scratch").join(format!("stdio-startup-{}", std::process::id()));
-    std::fs::create_dir_all(&directory).unwrap();
-    let trace_path = directory.join("parent.jsonl");
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::TRACE)
-        .with_ansi(false)
-        .json()
-        .with_writer(std::sync::Mutex::new(
-            std::fs::File::create(&trace_path).unwrap(),
-        ))
-        .init();
-    for stderr_bytes in [256 * 1024, 0] {
-        let mut failures = 0;
-        for iteration in 0..100 {
-            let phases = directory.join(format!("{stderr_bytes}-{iteration}.txt"));
-            let mut command = fixture_command("success");
-            command.env("LSPF_DIAG_PHASES", &phases);
-            command.env("LSPF_DIAG_STDERR_BYTES", stderr_bytes.to_string());
-            let policy = ResourcePolicy {
-                outbound_request_timeout: Some(Duration::from_millis(50)),
-                ..ResourcePolicy::default()
-            };
-            let started = diagnostic_time();
-            let result = Client::builder(ClientCapabilities::default())
-                .resource_policy(policy)
-                .spawn(command)
-                .await;
-            let completed = diagnostic_time();
-            let outcome = match result {
-                Ok(child) => {
-                    let _ = child.shutdown().await;
-                    "initialized".to_string()
-                }
-                Err(error) => {
-                    failures += 1;
-                    format!("{error:?}")
-                }
-            };
-            println!(
-                "[DEBUG-stdio-startup] bytes={stderr_bytes} iteration={iteration} start_us={started} complete_us={completed} elapsed_us={} result={outcome}",
-                completed - started
-            );
-            if let Ok(phases) = std::fs::read_to_string(phases) {
-                print!("{phases}");
-            }
-        }
-        println!("[DEBUG-stdio-startup] bytes={stderr_bytes} failures={failures}/100");
-    }
-    println!("[DEBUG-stdio-startup] parent tracing");
-    print!("{}", std::fs::read_to_string(trace_path).unwrap());
-}
-
 fn read_message(reader: &mut impl BufRead) -> Value {
     let mut content_length = None;
     loop {
@@ -110,26 +42,19 @@ fn write_message(writer: &mut impl Write, message: &Value) {
 }
 
 fn stdio_language_server_fixture() {
-    let entered = diagnostic_time();
-    let mut diagnostic =
-        std::env::var_os("LSPF_DIAG_PHASES").map(|path| std::fs::File::create(path).unwrap());
-    if let Some(file) = &mut diagnostic {
-        writeln!(file, "{entered} child_entered").unwrap();
-    }
     let mode = std::env::var(CHILD_MODE).unwrap();
+    if mode == "slow-shutdown-timeout" {
+        // Regression: initialization may legitimately exceed the old 50 ms
+        // shutdown-test deadline before the child can process any input.
+        std::thread::sleep(Duration::from_millis(100));
+    }
     let mut stdin = std::io::BufReader::new(std::io::stdin().lock());
     let mut stdout = std::io::stdout().lock();
     let mut stderr = std::io::stderr().lock();
 
     let initialize = read_message(&mut stdin);
-    diagnostic_phase(&mut diagnostic, "initialize_received");
-    let stderr_bytes = std::env::var("LSPF_DIAG_STDERR_BYTES")
-        .ok()
-        .map(|value| value.parse().unwrap())
-        .unwrap_or(256 * 1024);
-    stderr.write_all(&vec![b'x'; stderr_bytes]).unwrap();
+    stderr.write_all(&vec![b'x'; 256 * 1024]).unwrap();
     stderr.flush().unwrap();
-    diagnostic_phase(&mut diagnostic, "stderr_written");
     write_message(
         &mut stdout,
         &json!({
@@ -138,16 +63,19 @@ fn stdio_language_server_fixture() {
             "result": { "capabilities": {} },
         }),
     );
-    diagnostic_phase(&mut diagnostic, "initialize_replied");
     let initialized = read_message(&mut stdin);
     assert_eq!(initialized["method"], "initialized");
     if mode == "early-exit" {
         std::process::exit(23);
     }
-    if mode == "shutdown-timeout" {
+    if mode == "shutdown-timeout" || mode == "slow-shutdown-timeout" {
         ignore_terminate();
         let shutdown = read_message(&mut stdin);
         assert_eq!(shutdown["method"], "shutdown");
+        if mode == "slow-shutdown-timeout" {
+            let received = std::env::var_os("LSPF_STDIO_CHILD_SHUTDOWN_ACK").unwrap();
+            std::fs::write(received, b"received").unwrap();
+        }
         loop {
             std::thread::sleep(Duration::from_secs(60));
         }
@@ -238,18 +166,36 @@ async fn framed_exchange_drains_stderr_and_reclaims_a_successful_child() {
 }
 
 async fn shutdown_timeout_terminates_then_kills_and_reaps_the_child() {
-    let policy = ResourcePolicy {
-        outbound_request_timeout: Some(Duration::from_millis(50)),
-        ..ResourcePolicy::default()
-    };
+    let policy = ResourcePolicy::default();
+    let deadline = policy.outbound_request_timeout.unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let shutdown_received = directory.path().join("shutdown-received");
+    let mut command = fixture_command("slow-shutdown-timeout");
+    command.env("LSPF_STDIO_CHILD_SHUTDOWN_ACK", &shutdown_received);
     let child = Client::builder(ClientCapabilities::default())
         .resource_policy(policy)
-        .spawn(fixture_command("shutdown-timeout"))
+        .spawn(command)
         .await
         .expect("the stubborn child initializes");
     let _pid = child.id();
 
-    let error = child.shutdown().await.unwrap_err();
+    let shutdown = tokio::spawn(child.shutdown());
+    // Use an out-of-band acknowledgment: reverse LSP notifications are
+    // deliberately ignored once the client enters shutdown.
+    tokio::time::timeout(deadline, async {
+        while !shutdown_received.exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the child installs its signal handler and receives shutdown");
+
+    // Keep real time for process startup and pipe I/O. Advance only after the
+    // child acknowledges shutdown, then resume before OS termination/reaping.
+    tokio::time::pause();
+    tokio::time::advance(deadline).await;
+    tokio::time::resume();
+    let error = shutdown.await.unwrap().unwrap_err();
 
     assert!(matches!(error, ChildError::Lifecycle(ClientError::Timeout)));
     #[cfg(unix)]
@@ -333,18 +279,21 @@ fn main() {
         .enable_all()
         .build()
         .unwrap();
-    if std::env::args().any(|argument| argument == "--diagnose-startup") {
-        runtime.block_on(diagnose_startup());
-        return;
-    }
     runtime.block_on(async {
         framed_exchange_drains_stderr_and_reclaims_a_successful_child().await;
-        shutdown_timeout_terminates_then_kills_and_reaps_the_child().await;
         early_child_exit_reports_status_and_resolves_the_connection().await;
         dropping_a_connection_reclaims_its_child().await;
         invalid_client_configuration_fails_before_spawning().await;
         cancelling_a_terminal_future_still_reclaims_the_child().await;
     });
+
+    // Tokio's controllable clock requires a current-thread runtime. The other
+    // real-process journeys continue to exercise the multi-thread runtime.
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(shutdown_timeout_terminates_then_kills_and_reaps_the_child());
 
     let _dropped_inside_pid = runtime.block_on(async {
         let child = Client::builder(ClientCapabilities::default())
