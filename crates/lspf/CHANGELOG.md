@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.4](https://github.com/meymchen/lspf/compare/v1.0.3...v1.0.4) - 2026-10-03
+
+### Changed
+
+- Move the inbound pipeline into the protocol session ([#337](https://github.com/meymchen/lspf/pull/337))
+
+### Fixed
+
+- Upgrade language client and stabilize stdio lifecycle CI ([#336](https://github.com/meymchen/lspf/pull/336))
+- *(client)* Close failed startups and isolate reverse-handler panics
+
+### Other
+
+- Rename CONTEXT.md to GLOSSARY.md
+
 ## [1.0.3](https://github.com/meymchen/lspf/compare/v1.0.2...v1.0.3) - 2026-09-23
 
 ### Changed
