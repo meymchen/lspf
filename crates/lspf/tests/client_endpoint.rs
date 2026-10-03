@@ -923,12 +923,26 @@ impl LogBuffer {
     }
 }
 
+/// Install `subscriber` for this test thread.
+///
+/// `tracing` keeps one process-wide callsite interest cache. A dispatch that
+/// stays registered for the binary's lifetime, but is never made current, stops
+/// another test thread's first use of a callsite from caching `Interest::never`
+/// while this thread's capture is being installed.
+fn capture(
+    subscriber: impl tracing::Subscriber + Send + Sync,
+) -> tracing::subscriber::DefaultGuard {
+    static INTEREST: std::sync::OnceLock<tracing::Dispatch> = std::sync::OnceLock::new();
+    INTEREST.get_or_init(|| tracing::Dispatch::new(tracing_subscriber::registry()));
+    tracing::subscriber::set_default(subscriber)
+}
+
 // The current-thread runtime keeps spawned handler tasks on the thread that
 // holds the default subscriber.
 #[tokio::test]
 async fn client_notification_handler_panics_are_isolated_and_logged() {
     let logs = LogBuffer::default();
-    let _subscriber = tracing::subscriber::set_default(
+    let _subscriber = capture(
         tracing_subscriber::fmt()
             .with_max_level(tracing::Level::ERROR)
             .with_writer(logs.clone())
@@ -976,7 +990,7 @@ async fn client_notification_handler_panics_are_isolated_and_logged() {
 #[tokio::test]
 async fn client_admission_rejections_emit_rejected_telemetry() {
     let logs = LogBuffer::default();
-    let _subscriber = tracing::subscriber::set_default(
+    let _subscriber = capture(
         tracing_subscriber::fmt()
             .json()
             .flatten_event(true)
