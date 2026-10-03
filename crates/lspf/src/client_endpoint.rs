@@ -1017,8 +1017,17 @@ impl<R: Runtime> ClientEngine<R> {
                     Some(delivery) => Some(delivery.wait().await),
                     None => None,
                 };
-                if let Err(error) = handler(ctx, params).await {
-                    debug!(%method, %error, "server notification with malformed params ignored");
+                // Catch both constructing and polling the user future: a
+                // runtime join would otherwise discard the panic unreported.
+                match AssertUnwindSafe(async move { handler(ctx, params).await })
+                    .catch_unwind()
+                    .await
+                {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => {
+                        debug!(%method, %error, "server notification with malformed params ignored");
+                    }
+                    Err(_) => error!(%method, "panic isolated while dispatching notification"),
                 }
             }
             .instrument(span),

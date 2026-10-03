@@ -895,6 +895,84 @@ async fn client_reverse_handler_panics_release_capacity_and_request_ids() {
     assert_eq!(client.outcome().await, Outcome::TransportClosed);
 }
 
+#[derive(Clone, Default)]
+struct LogBuffer(Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for LogBuffer {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogBuffer {
+    type Writer = Self;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+impl LogBuffer {
+    fn text(&self) -> String {
+        String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+    }
+}
+
+// The current-thread runtime keeps spawned handler tasks on the thread that
+// holds the default subscriber.
+#[tokio::test]
+async fn client_notification_handler_panics_are_isolated_and_logged() {
+    let logs = LogBuffer::default();
+    let _subscriber = tracing::subscriber::set_default(
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::ERROR)
+            .with_writer(logs.clone())
+            .finish(),
+    );
+    let (handled_tx, mut handled) = mpsc::unbounded_channel();
+    let client = ConnectedClient::start(
+        Client::builder(ClientCapabilities::default()).notification::<ClientEvent, _, _>(
+            move |_ctx, params| {
+                let handled_tx = handled_tx.clone();
+                async move {
+                    assert_ne!(params, json!("panic"));
+                    handled_tx.send(params).unwrap();
+                }
+            },
+        ),
+    )
+    .await;
+
+    for value in ["panic", "healthy"] {
+        client.send(RawMessage::Notification {
+            method: Cow::Borrowed(ClientEvent::METHOD),
+            params: Bytes::from(serde_json::to_vec(&json!(value)).unwrap()),
+        });
+    }
+    let handled = tokio::time::timeout(Duration::from_secs(2), handled.recv())
+        .await
+        .expect("healthy notification within watchdog");
+    assert_eq!(handled, Some(json!("healthy")));
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !logs
+            .text()
+            .contains("panic isolated while dispatching notification")
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("notification panic is logged as isolated");
+
+    client.server.disconnect();
+    assert_eq!(client.outcome().await, Outcome::TransportClosed);
+}
+
 #[tokio::test]
 async fn client_reverse_progress_create_panic_releases_the_token_for_retry() {
     let attempts = Arc::new(AtomicUsize::new(0));
