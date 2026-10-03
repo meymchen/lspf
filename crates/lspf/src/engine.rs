@@ -11,24 +11,21 @@
 //! running state only, a successful `on_shutdown` gates the transition into
 //! shutting down, and the peer's `exit` runs `on_exit` before the engine
 //! computes the exit outcome (ADR 0024) — the exit hook resolves to `()`, so it
-//! cannot change the exit code the lifecycle implies. Inbound
-//! requests reserve their IDs before user work is spawned; the engine's atomic
-//! completion gate then arbitrates success, errors, and cancellation.
+//! cannot change the exit code the lifecycle implies. The protocol session
+//! admits inbound requests before the engine sees them, and its atomic
+//! completion gate arbitrates success, errors, and cancellation (ADR 0037).
 //!
 //! Every way a connection can end — reader EOF, a reader error, a writer send
 //! or shutdown failure, `exit`, and the fatal termination a failed initialize
 //! transaction takes — requests the same idempotent close operation. The first
-//! requester records the [`CloseCause`] and wakes the read-loop; the engine
-//! then performs the cleanup exactly once and reports the recorded cause as an
-//! [`Outcome`] or a transport [`Error`]. The engine never terminates the
+//! requester records its cause and wakes the read loop; the engine then
+//! performs the cleanup exactly once and reports the selected [`SessionEnd`] as
+//! an [`Outcome`] or a transport [`Error`]. The engine never terminates the
 //! process; the entry point decides what an [`Outcome`] means for a binary.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use bytes::Bytes;
-#[cfg(all(test, not(target_arch = "wasm32")))]
-use futures_channel::mpsc::UnboundedReceiver;
 use gen_lsp_types::{
     DidChangeConfigurationParams, DidChangeNotebookDocumentParams, DidChangeTextDocumentParams,
     DidChangeWorkspaceFoldersParams, DidCloseNotebookDocumentParams, DidCloseTextDocumentParams,
@@ -38,8 +35,7 @@ use gen_lsp_types::{
     WillSaveTextDocumentParams, WorkDoneProgressCancelParams, WorkspaceFoldersServerCapabilities,
 };
 use serde::Serialize;
-use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, Span, debug, warn};
+use tracing::{Instrument, debug, warn};
 
 use crate::builder::{
     ConfigureInitialize, InitializeRegistrar, OnExit, OnInitialize, OnInitialized, OnShutdown,
@@ -54,27 +50,14 @@ use crate::error::Error;
 use crate::failure::{ConnectionDirection, ConnectionFailureCategory, FailureReporter};
 use crate::file_provider::SharedFileProvider;
 use crate::notebooks::{NotebookMutationError, Notebooks};
+use crate::partial_result::PartialResultScope;
 use crate::progress::{ProgressCancel, ProgressRegistry};
-use crate::raw::{RawMessage, RequestId};
 use crate::runtime::{Runtime, default_runtime, ensure_runtime_available};
-use crate::service::{
-    HandlerTimeout, IncomingCall, ServiceResult, UserLayer, UserService, build_service_stack,
-};
-#[cfg(all(test, not(target_arch = "wasm32")))]
-use crate::session::send_loop as drive_send_loop;
-#[cfg(all(test, not(target_arch = "wasm32")))]
-use crate::session::{CloseSignal, OutboundQueue, OutboundRegistry, enqueue_encoded};
-use crate::session::{
-    INBOUND_CAPACITY_EXHAUSTED, InboundReserveError, ProtocolSession, Reservation, SessionInput,
-    run_handler_with_deadline,
-};
-use crate::telemetry::{Completion, ConnectionTrace, Direction, Instant};
-#[cfg(all(test, not(target_arch = "wasm32")))]
-use crate::transport::TransportWriter;
-use crate::transport::{Transport, TransportError, TransportReader};
+use crate::service::{IncomingCall, ServiceResult, UserLayer, UserService, build_service_stack};
+use crate::session::{AdmittedRequest, EndpointCause, ProtocolSession, SessionEnd, SessionEvent};
+use crate::telemetry::ConnectionTrace;
+use crate::transport::{Transport, TransportReader};
 use crate::workspace::Workspace;
-#[cfg(all(test, not(target_arch = "wasm32")))]
-use std::sync::Mutex;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -165,49 +148,33 @@ impl Outcome {
     }
 }
 
-/// What first requested the engine's one close operation.
-///
-/// Only the first requester's cause is recorded, so a writer failure racing
-/// reader EOF still reports a single deterministic ending.
+/// The Server endpoint's own reasons to close. Reader, writer, and
+/// required-admission failures are the session's [`SessionEnd`] variants.
 #[derive(Debug)]
 enum CloseCause {
     /// An `exit` notification was processed; carries the LSP exit code.
     Exit { code: i32 },
-    /// The reader reached end of input before `exit`.
-    ReaderEof,
-    /// The reader failed with a transport error.
-    ReaderFailed(TransportError),
-    /// The writer failed to send or shut down, or required protocol traffic
-    /// could not fit within the outbound resource policy.
-    WriterFailed,
     /// A failed initialize transaction terminated the connection (ADR 0018).
     InitializeFailed,
 }
 
-impl CloseCause {
-    fn writer_failed() -> Self {
-        Self::WriterFailed
-    }
-
+impl EndpointCause for CloseCause {
     fn as_str(&self) -> &'static str {
         match self {
             Self::Exit { .. } => "exit",
-            Self::ReaderEof => "reader_eof",
-            Self::ReaderFailed(_) => "reader_failed",
-            Self::WriterFailed => "writer_failed",
             Self::InitializeFailed => "initialize_failed",
         }
     }
+}
 
-    /// Map the recorded cause onto what serving the connection returns.
-    fn into_result(self) -> Result<Outcome> {
-        match self {
-            Self::Exit { code } => Ok(Outcome::Exit { code }),
-            Self::ReaderEof => Ok(Outcome::TransportClosed),
-            Self::ReaderFailed(error) => Err(Error::Transport(error)),
-            Self::WriterFailed => Ok(Outcome::WriterFailed),
-            Self::InitializeFailed => Ok(Outcome::InitializeFailed),
-        }
+/// Map the selected ending onto what serving the connection returns.
+fn into_result(end: SessionEnd<CloseCause>) -> Result<Outcome> {
+    match end {
+        SessionEnd::Endpoint(CloseCause::Exit { code }) => Ok(Outcome::Exit { code }),
+        SessionEnd::Endpoint(CloseCause::InitializeFailed) => Ok(Outcome::InitializeFailed),
+        SessionEnd::ReaderEof => Ok(Outcome::TransportClosed),
+        SessionEnd::ReaderFailed(error) => Err(Error::Transport(error)),
+        SessionEnd::WriterFailed => Ok(Outcome::WriterFailed),
     }
 }
 
@@ -232,18 +199,12 @@ where
         connection_trace,
         connection_span.clone(),
         failure_reporter.clone(),
-        CloseCause::writer_failed,
         ClientHandle::new,
     );
     ProtocolEngine::new(server, protocol, client, connection_trace, failure_reporter)
         .serve(reader)
         .instrument(connection_span)
         .await
-}
-
-#[derive(serde::Deserialize)]
-struct CancelParams {
-    id: RequestId,
 }
 
 /// Whether a protocol built-in's post-validation hook runs.
@@ -318,16 +279,6 @@ fn gate_progress_cancel(registry: &ProgressRegistry, raw_params: &Bytes) -> Buil
         ),
     }
     BuiltInGate::RunHook
-}
-
-#[cfg(all(test, not(target_arch = "wasm32")))]
-async fn send_loop<W: TransportWriter>(
-    writer: W,
-    out_rx: UnboundedReceiver<RawMessage>,
-    client: ClientHandle,
-    close: CloseSignal<CloseCause>,
-) {
-    drive_send_loop(writer, out_rx, client, close, CloseCause::writer_failed).await;
 }
 
 /// The static registrations and lifecycle callbacks awaiting the initialize
@@ -437,480 +388,280 @@ where
         }
     }
 
-    /// Own the reader and process one envelope at a time until some cause
-    /// requests closure, then run the one close operation and report the
-    /// ending.
+    /// Pull events from the session until some cause requests closure, then
+    /// run the one close operation and report the ending.
     ///
-    /// The read-loop also waits on the close signal, so a writer failure ends
-    /// the session without waiting for the peer to send another message.
+    /// The session also wakes on the close signal, so a writer failure ends the
+    /// connection without waiting for the peer to send another message.
     async fn serve<Rd>(mut self, mut reader: Rd) -> Result<Outcome>
     where
         Rd: TransportReader,
     {
         loop {
-            let msg = match self.protocol.next_input(&mut reader).await {
-                SessionInput::CloseRequested => break,
-                SessionInput::OutboundFailed => {
-                    self.protocol.request_close(CloseCause::WriterFailed);
-                    break;
+            let flow = match self.protocol.next_event(&mut reader).await {
+                SessionEvent::Request(request) => self.dispatch_request(request).await,
+                SessionEvent::Notification { method, params } => {
+                    self.handle_notification(&method, params).await
                 }
-                SessionInput::Message(message) => message,
+                SessionEvent::Closed => break,
             };
-
-            match msg {
-                Ok(msg) => {
-                    self.trace.message(Direction::Inbound, &msg);
-                    match self.dispatch(msg).await {
-                        Flow::Continue => {}
-                        Flow::Close(cause) => {
-                            self.protocol.request_close(cause);
-                            break;
-                        }
-                    }
-                }
-                Err(TransportError::Closed) => {
-                    warn!("transport closed by peer before exit notification");
-                    self.protocol.request_close(CloseCause::ReaderEof);
-                    break;
-                }
-                Err(error) => {
-                    let category = match &error {
-                        TransportError::Malformed(_) | TransportError::OversizedMessage { .. } => {
-                            ConnectionFailureCategory::Framing
-                        }
-                        TransportError::Io(_) | TransportError::Serde(_) => {
-                            ConnectionFailureCategory::Transport
-                        }
-                        TransportError::Closed => unreachable!("closed is handled above"),
-                    };
-                    self.failure_reporter.report(
-                        category,
-                        Some(ConnectionDirection::Inbound),
-                        None,
-                        None,
-                    );
-                    self.protocol.request_close(CloseCause::ReaderFailed(error));
-                    break;
-                }
+            if let Flow::Close(cause) = flow {
+                self.protocol.request_close(cause);
             }
         }
-
-        self.close().await;
-        let cause = self.protocol.final_close_cause();
-        self.trace.connection_closed(cause.as_str());
-        cause.into_result()
+        into_result(self.close().await)
     }
 
-    async fn dispatch(&mut self, msg: RawMessage) -> Flow {
-        match msg {
-            RawMessage::Request { id, method, params } => {
-                let span = self.trace.request_span(method.as_ref(), &id);
-                // Admission happens before request-scoped cancellation state,
-                // parameter decoding, and runtime task creation. The owned
-                // permit remains attached to the task handle until the engine
-                // reaps it, even if cancellation or close claims the response
-                // gate first.
-                let reserved = match self.protocol.reserve_inbound(
-                    id.clone(),
-                    method.as_ref(),
-                    method != "initialize",
-                ) {
-                    Ok(reserved) => reserved,
-                    Err(InboundReserveError::DuplicateId) => {
-                        self.failure_reporter.report_unvalidated_inbound_method(
-                            ConnectionFailureCategory::Protocol,
-                            Some(&id),
-                        );
-                        self.trace.request_completed(
-                            method.as_ref(),
-                            &id,
-                            Instant::now(),
-                            Direction::Inbound,
-                            Completion::Rejected,
-                        );
-                        self.protocol
-                            .reject_inbound(id, LspError::invalid_request("duplicate request id"));
-                        return Flow::Continue;
-                    }
-                    Err(InboundReserveError::CapacityExhausted) => {
-                        self.trace.request_completed(
-                            method.as_ref(),
-                            &id,
-                            Instant::now(),
-                            Direction::Inbound,
-                            Completion::Rejected,
-                        );
-                        self.protocol.reject_inbound(
-                            id,
-                            LspError::ServerCancelled(INBOUND_CAPACITY_EXHAUSTED.to_string()),
-                        );
-                        return Flow::Continue;
-                    }
-                };
-                let reservation = reserved.reservation;
-                let cancellation = reserved.cancellation;
+    /// Apply lifecycle precedence to one admitted request, then answer it
+    /// inline or spawn it through the Service stack.
+    async fn dispatch_request(&mut self, request: AdmittedRequest) -> Flow {
+        // Initialize precedence: until `initialize` completes, refuse every
+        // other request with `ServerNotInitialized`.
+        if request.method() != "initialize"
+            && matches!(
+                self.lifecycle,
+                Lifecycle::Uninitialized(_) | Lifecycle::Initializing
+            )
+        {
+            self.failure_reporter.report_unvalidated_inbound_method(
+                ConnectionFailureCategory::Protocol,
+                Some(request.id()),
+            );
+            request.respond(Err(LspError::ServerNotInitialized));
+            return Flow::Continue;
+        }
+        // After `shutdown`, every request is invalid until `exit`.
+        if matches!(self.lifecycle, Lifecycle::ShuttingDown | Lifecycle::Exited) {
+            self.failure_reporter.report_unvalidated_inbound_method(
+                ConnectionFailureCategory::Protocol,
+                Some(request.id()),
+            );
+            request.respond(Err(LspError::invalid_request("invalid request")));
+            return Flow::Continue;
+        }
 
-                // Initialize precedence: until `initialize` completes, refuse
-                // every other request with `ServerNotInitialized`.
-                if method != "initialize"
-                    && matches!(
-                        self.lifecycle,
-                        Lifecycle::Uninitialized(_) | Lifecycle::Initializing
-                    )
-                {
-                    self.failure_reporter.report_unvalidated_inbound_method(
-                        ConnectionFailureCategory::Protocol,
-                        Some(&reservation.id),
-                    );
-                    self.protocol
-                        .complete_inbound(reservation, Err(LspError::ServerNotInitialized));
-                    return Flow::Continue;
-                }
-                // After `shutdown`, every request is invalid until `exit`.
-                if matches!(self.lifecycle, Lifecycle::ShuttingDown | Lifecycle::Exited) {
-                    self.failure_reporter.report_unvalidated_inbound_method(
-                        ConnectionFailureCategory::Protocol,
-                        Some(&reservation.id),
-                    );
-                    self.protocol.complete_inbound(
-                        reservation,
-                        Err(LspError::invalid_request("invalid request")),
-                    );
-                    return Flow::Continue;
-                }
-
-                match method.as_ref() {
-                    "initialize" => return self.initialize(&span, reservation, params).await,
-                    "shutdown" => {
-                        let params_result = if params.is_empty() {
-                            Ok(())
-                        } else {
-                            decode_params::<()>(&params)
-                        };
-                        if let Err(err) = params_result {
-                            self.failure_reporter.report(
-                                ConnectionFailureCategory::Protocol,
-                                Some(ConnectionDirection::Inbound),
-                                Some("shutdown"),
-                                Some(&reservation.id),
-                            );
-                            self.protocol.complete_inbound(reservation, Err(err));
-                            return Flow::Continue;
-                        }
-                        if let Some(hook) = &self.on_shutdown {
-                            let cancellation = cancellation
-                                .expect("shutdown is a cancellable non-initialize request");
-                            let ctx = ServerContext::for_request(
-                                reservation.id.clone(),
-                                span.clone(),
-                                self.client.clone(),
-                                self.established_workspace(),
-                            )
-                            .with_cancellation(cancellation.clone());
-                            if let Err(err) = hook
-                                .invoke((Arc::clone(&self.state), ctx, (), cancellation))
-                                .instrument(span.clone())
-                                .await
-                            {
-                                self.protocol.complete_inbound(reservation, Err(err));
-                                return Flow::Continue;
-                            }
-                        }
-                        // The successful shutdown request answers itself first,
-                        // so its own entry is gone before the sweep below; only
-                        // then cancel the rest of the in-flight work and enter
-                        // `ShuttingDown`.
-                        self.protocol
-                            .complete_inbound(reservation, encode_body(&serde_json::Value::Null));
-                        self.protocol.cancel_all_inbound_with_response();
-                        self.lifecycle = Lifecycle::ShuttingDown;
-                    }
-                    _other => {
-                        // Precedence guarantees the connection is running here.
-                        let service = match &self.lifecycle {
-                            Lifecycle::Running(service) => Arc::clone(service),
-                            _ => {
-                                self.protocol.complete_inbound(
-                                    reservation,
-                                    Err(LspError::ServerNotInitialized),
-                                );
-                                return Flow::Continue;
-                            }
-                        };
-                        let params = match decode_value(&params) {
-                            Ok(params) => params,
-                            Err(error) => {
-                                self.failure_reporter.report_unvalidated_inbound_method(
-                                    ConnectionFailureCategory::Protocol,
-                                    Some(&reservation.id),
-                                );
-                                self.protocol.complete_inbound(reservation, Err(error));
-                                return Flow::Continue;
-                            }
-                        };
-                        let work_done_token =
-                            match request_token::<ProgressToken>(&params, "workDoneToken") {
-                                Ok(token) => token,
-                                Err(error) => {
-                                    self.protocol.complete_inbound(
-                                        reservation,
-                                        Err(LspError::invalid_params(error)),
-                                    );
-                                    return Flow::Continue;
-                                }
-                            };
-                        let partial_result_token =
-                            if crate::partial_result::supports_method(method.as_ref()) {
-                                match request_token::<ProgressToken>(&params, "partialResultToken")
-                                {
-                                    Ok(token) => token,
-                                    Err(error) => {
-                                        self.protocol.complete_inbound(
-                                            reservation,
-                                            Err(LspError::invalid_params(error)),
-                                        );
-                                        return Flow::Continue;
-                                    }
-                                }
-                            } else {
-                                None
-                            };
-                        let method = method.into_owned();
-                        let ctx = ServerContext::for_request(
-                            reservation.id.clone(),
-                            span.clone(),
-                            self.client.clone(),
-                            self.established_workspace(),
-                        )
-                        .with_cancellation(
-                            cancellation
-                                .as_ref()
-                                .expect("non-initialize requests are cancellable")
-                                .clone(),
-                        )
-                        .with_work_done_token(work_done_token)
-                        .with_partial_result(method.clone(), partial_result_token);
-                        self.spawn_service_request(
-                            service,
-                            reservation,
-                            method,
-                            params,
-                            ctx,
-                            cancellation.expect("non-initialize requests are cancellable"),
-                            self.protocol.handler_timeout(),
-                        );
-                    }
-                }
+        match request.method() {
+            "initialize" => self.initialize(request).await,
+            "shutdown" => {
+                self.shutdown(request).await;
+                Flow::Continue
             }
-            RawMessage::Notification { method, params } => match method.as_ref() {
-                "exit" => {
-                    // The exit hook observes the ending first (ADR 0018,
-                    // ADR 0024): it runs after a successful initialize
-                    // transaction, before the engine computes the exit
-                    // outcome. It resolves to `()`, so it cannot change that
-                    // outcome — the LSP exit code below derives from
-                    // protocol-owned lifecycle state alone, and the hook
-                    // receives only the shared state and a live `ServerContext`.
-                    let established = matches!(
-                        self.lifecycle,
-                        Lifecycle::Running(_) | Lifecycle::ShuttingDown
+            _ => {
+                self.spawn_service_request(request);
+                Flow::Continue
+            }
+        }
+    }
+
+    async fn shutdown(&mut self, request: AdmittedRequest) {
+        let params = request.params();
+        let params_result = if params.is_empty() {
+            Ok(())
+        } else {
+            decode_params::<()>(params)
+        };
+        if let Err(err) = params_result {
+            self.failure_reporter.report(
+                ConnectionFailureCategory::Protocol,
+                Some(ConnectionDirection::Inbound),
+                Some("shutdown"),
+                Some(request.id()),
+            );
+            request.respond(Err(err));
+            return;
+        }
+        if let Some(hook) = &self.on_shutdown {
+            let cancellation = request.cancellation();
+            let span = request.span().clone();
+            let ctx = ServerContext::for_request(
+                request.id().clone(),
+                span.clone(),
+                self.client.clone(),
+                self.established_workspace(),
+            )
+            .with_cancellation(cancellation.clone());
+            if let Err(err) = hook
+                .invoke((Arc::clone(&self.state), ctx, (), cancellation))
+                .instrument(span)
+                .await
+            {
+                request.respond(Err(err));
+                return;
+            }
+        }
+        // The successful shutdown request answers itself first, so its own
+        // entry is gone before the sweep below; only then cancel the rest of
+        // the in-flight work and enter `ShuttingDown`.
+        request.respond(encode_body(&serde_json::Value::Null));
+        self.protocol.cancel_all_inbound_with_response();
+        self.lifecycle = Lifecycle::ShuttingDown;
+    }
+
+    /// Process one notification the session hands over. Outside the running
+    /// state only the lifecycle notifications are processed.
+    async fn handle_notification(&mut self, method: &str, params: Bytes) -> Flow {
+        match method {
+            "exit" => {
+                // The exit hook observes the ending first (ADR 0018,
+                // ADR 0024): it runs after a successful initialize
+                // transaction, before the engine computes the exit
+                // outcome. It resolves to `()`, so it cannot change that
+                // outcome — the LSP exit code below derives from
+                // protocol-owned lifecycle state alone, and the hook
+                // receives only the shared state and a live `ServerContext`.
+                let established = matches!(
+                    self.lifecycle,
+                    Lifecycle::Running(_) | Lifecycle::ShuttingDown
+                );
+                if !established {
+                    self.failure_reporter.report(
+                        ConnectionFailureCategory::Protocol,
+                        Some(ConnectionDirection::Inbound),
+                        Some("exit"),
+                        None,
                     );
-                    if !established {
-                        self.failure_reporter.report(
-                            ConnectionFailureCategory::Protocol,
-                            Some(ConnectionDirection::Inbound),
-                            Some("exit"),
-                            None,
-                        );
-                    }
-                    if established && let Some(hook) = self.on_exit.take() {
-                        let span = self.trace.notification_span("exit");
-                        let ctx = ServerContext::for_notification(
-                            span,
-                            self.client.clone(),
-                            self.established_workspace(),
-                        );
-                        hook.invoke((Arc::clone(&self.state), ctx)).await;
-                    }
-                    // The LSP exit code comes from protocol-owned lifecycle
-                    // state: 0 only when `shutdown` completed first.
-                    let code = match self.lifecycle {
-                        Lifecycle::ShuttingDown => 0,
-                        _ => 1,
-                    };
-                    return Flow::Close(CloseCause::Exit { code });
                 }
-                "$/cancelRequest" => {
-                    let bytes: &[u8] = if params.is_empty() { b"{}" } else { &params };
-                    match serde_json::from_slice::<CancelParams>(bytes) {
-                        Ok(cancel) => {
-                            if let Some(reservation) = self.protocol.cancel_inbound(&cancel.id) {
-                                self.protocol.complete_cancelled(reservation);
-                            }
-                        }
-                        Err(error) => {
-                            self.failure_reporter.report(
-                                ConnectionFailureCategory::Protocol,
-                                Some(ConnectionDirection::Inbound),
-                                Some("$/cancelRequest"),
-                                None,
-                            );
-                            debug!(%error, "ignoring malformed $/cancelRequest");
-                        }
-                    }
+                if established && let Some(hook) = self.on_exit.take() {
+                    let span = self.trace.notification_span("exit");
+                    let ctx = ServerContext::for_notification(
+                        span,
+                        self.client.clone(),
+                        self.established_workspace(),
+                    );
+                    hook.invoke((Arc::clone(&self.state), ctx)).await;
                 }
-                "initialized" => {
-                    // The initialized hook runs at most once, and only after a
-                    // successful initialize transaction: outside the running
-                    // state there is no Workspace for its ServerContext, and the
-                    // notification is ignored without consuming the hook, so a
-                    // later, valid `initialized` still runs it. The params are
-                    // decoded before the hook is taken, so a malformed
-                    // notification leaves it in place too.
-                    let Lifecycle::Running(_) = &self.lifecycle else {
+                // The LSP exit code comes from protocol-owned lifecycle
+                // state: 0 only when `shutdown` completed first.
+                let code = match self.lifecycle {
+                    Lifecycle::ShuttingDown => 0,
+                    _ => 1,
+                };
+                return Flow::Close(CloseCause::Exit { code });
+            }
+            "initialized" => {
+                // The initialized hook runs at most once, and only after a
+                // successful initialize transaction: outside the running
+                // state there is no Workspace for its ServerContext, and the
+                // notification is ignored without consuming the hook, so a
+                // later, valid `initialized` still runs it. The params are
+                // decoded before the hook is taken, so a malformed
+                // notification leaves it in place too.
+                let Lifecycle::Running(_) = &self.lifecycle else {
+                    self.failure_reporter.report(
+                        ConnectionFailureCategory::Protocol,
+                        Some(ConnectionDirection::Inbound),
+                        Some("initialized"),
+                        None,
+                    );
+                    debug!("initialized notification outside the running state ignored");
+                    return Flow::Continue;
+                };
+                let params = match decode_initialized_params(&params) {
+                    Ok(params) => params,
+                    Err(error) => {
                         self.failure_reporter.report(
                             ConnectionFailureCategory::Protocol,
                             Some(ConnectionDirection::Inbound),
                             Some("initialized"),
                             None,
                         );
-                        debug!("initialized notification outside the running state ignored");
+                        warn!(%error, "dropping initialized notification with malformed params");
                         return Flow::Continue;
-                    };
-                    let params = match decode_initialized_params(&params) {
-                        Ok(params) => params,
-                        Err(error) => {
+                    }
+                };
+                let Some(hook) = self.on_initialized.take() else {
+                    return Flow::Continue;
+                };
+                let span = self.trace.notification_span("initialized");
+                let ctx = ServerContext::for_notification(
+                    span,
+                    self.client.clone(),
+                    self.established_workspace(),
+                );
+                hook.invoke((Arc::clone(&self.state), ctx, params)).await;
+            }
+            other => {
+                // Outside the running state only the lifecycle and
+                // completion notifications handled above are processed:
+                // before `initialize` there is no Router, and after
+                // `shutdown` the connection accepts no further user work.
+                let Lifecycle::Running(service) = &self.lifecycle else {
+                    self.failure_reporter.report_unvalidated_inbound_method(
+                        ConnectionFailureCategory::Protocol,
+                        None,
+                    );
+                    debug!(method = other, "notification outside running state ignored");
+                    return Flow::Continue;
+                };
+                let service = Arc::clone(service);
+
+                // A protocol-owned notification is a built-in (ADR 0018):
+                // its validation and any mutation run here, on the
+                // read-loop, before anything user-registered is reached, so
+                // the hook below — and every later message — observes the
+                // mutated state. A failure reports the notification
+                // error and skips the hook, leaving the connection to
+                // process the next message; a built-in may also skip its
+                // own hook after logging a non-error rejection at debug
+                // level (the work-done progress cancel built-in).
+                if let Some(built_in) = ProtocolNotification::from_method(other) {
+                    if !self.accepts_protocol_notification(built_in) {
+                        debug!(
+                            method = other,
+                            "document-sync notification disabled and ignored"
+                        );
+                        return Flow::Continue;
+                    }
+                    match self.process_protocol_notification(built_in, &params) {
+                        Ok(BuiltInGate::RunHook) => {}
+                        Ok(BuiltInGate::ProtocolFailure) => {
                             self.failure_reporter.report(
                                 ConnectionFailureCategory::Protocol,
                                 Some(ConnectionDirection::Inbound),
-                                Some("initialized"),
+                                Some(other),
                                 None,
                             );
-                            warn!(%error, "dropping initialized notification with malformed params");
                             return Flow::Continue;
                         }
-                    };
-                    let Some(hook) = self.on_initialized.take() else {
-                        return Flow::Continue;
-                    };
-                    let span = self.trace.notification_span("initialized");
-                    let ctx = ServerContext::for_notification(
-                        span,
-                        self.client.clone(),
-                        self.established_workspace(),
-                    );
-                    hook.invoke((Arc::clone(&self.state), ctx, params)).await;
+                        Err(error) => {
+                            let (category, error) = match error {
+                                BuiltInError::Protocol(error) => {
+                                    (ConnectionFailureCategory::Protocol, error)
+                                }
+                                BuiltInError::Overload(error) => {
+                                    (ConnectionFailureCategory::Overload, error)
+                                }
+                            };
+                            self.failure_reporter.report(
+                                category,
+                                Some(ConnectionDirection::Inbound),
+                                Some(other),
+                                None,
+                            );
+                            warn!(method = other, %error, "protocol validation skipped its hook");
+                            return Flow::Continue;
+                        }
+                    }
                 }
-                other => {
-                    // Outside the running state only the lifecycle and
-                    // completion notifications handled above are processed:
-                    // before `initialize` there is no Router, and after
-                    // `shutdown` the connection accepts no further user work.
-                    let Lifecycle::Running(service) = &self.lifecycle else {
+
+                // The same bytes decode again into the method-erased value
+                // that crosses the Service stack. For a built-in this
+                // cannot fail — its typed decode above already succeeded.
+                let params = match decode_value(&params) {
+                    Ok(params) => params,
+                    Err(error) => {
                         self.failure_reporter.report_unvalidated_inbound_method(
                             ConnectionFailureCategory::Protocol,
                             None,
                         );
-                        debug!(method = other, "notification outside running state ignored");
+                        debug!(method = other, %error, "notification params ignored");
                         return Flow::Continue;
-                    };
-                    let service = Arc::clone(service);
-
-                    // A protocol-owned notification is a built-in (ADR 0018):
-                    // its validation and any mutation run here, on the
-                    // read-loop, before anything user-registered is reached, so
-                    // the hook below — and every later message — observes the
-                    // mutated state. A failure reports the notification
-                    // error and skips the hook, leaving the connection to
-                    // process the next message; a built-in may also skip its
-                    // own hook after logging a non-error rejection at debug
-                    // level (the work-done progress cancel built-in).
-                    if let Some(built_in) = ProtocolNotification::from_method(other) {
-                        if !self.accepts_protocol_notification(built_in) {
-                            debug!(
-                                method = other,
-                                "document-sync notification disabled and ignored"
-                            );
-                            return Flow::Continue;
-                        }
-                        match self.process_protocol_notification(built_in, &params) {
-                            Ok(BuiltInGate::RunHook) => {}
-                            Ok(BuiltInGate::ProtocolFailure) => {
-                                self.failure_reporter.report(
-                                    ConnectionFailureCategory::Protocol,
-                                    Some(ConnectionDirection::Inbound),
-                                    Some(other),
-                                    None,
-                                );
-                                return Flow::Continue;
-                            }
-                            Err(error) => {
-                                let (category, error) = match error {
-                                    BuiltInError::Protocol(error) => {
-                                        (ConnectionFailureCategory::Protocol, error)
-                                    }
-                                    BuiltInError::Overload(error) => {
-                                        (ConnectionFailureCategory::Overload, error)
-                                    }
-                                };
-                                self.failure_reporter.report(
-                                    category,
-                                    Some(ConnectionDirection::Inbound),
-                                    Some(other),
-                                    None,
-                                );
-                                warn!(method = other, %error, "protocol validation skipped its hook");
-                                return Flow::Continue;
-                            }
-                        }
                     }
-
-                    // The same bytes decode again into the method-erased value
-                    // that crosses the Service stack. For a built-in this
-                    // cannot fail — its typed decode above already succeeded.
-                    let params = match decode_value(&params) {
-                        Ok(params) => params,
-                        Err(error) => {
-                            self.failure_reporter.report_unvalidated_inbound_method(
-                                ConnectionFailureCategory::Protocol,
-                                None,
-                            );
-                            debug!(method = other, %error, "notification params ignored");
-                            return Flow::Continue;
-                        }
-                    };
-                    // A registered notification — a custom route or a built-in's
-                    // post-validation hook — dispatches with no response; an
-                    // unregistered one is ignored.
-                    self.dispatch_notification(service, other, params).await;
-                }
-            },
-            RawMessage::Response { id, result } => {
-                // Only positive numeric IDs are allocated by `OutboundRegistry`.
-                let id_num = match &id {
-                    RequestId::Number(n) if *n > 0 => Some(*n as u32),
-                    _ => None,
                 };
-                let delivered =
-                    id_num.is_some_and(|n| self.client.outbound_registry().complete(n, result));
-                if !delivered {
-                    self.failure_reporter.report(
-                        ConnectionFailureCategory::Protocol,
-                        Some(ConnectionDirection::Inbound),
-                        None,
-                        Some(&id),
-                    );
-                    debug!(?id, "ignoring response with unknown or non-numeric id");
-                }
-            }
-            RawMessage::ProtocolError { error } => {
-                self.failure_reporter.report(
-                    ConnectionFailureCategory::Protocol,
-                    Some(ConnectionDirection::Inbound),
-                    None,
-                    None,
-                );
-                self.protocol.send_protocol_error(error);
+                // A registered notification — a custom route or a built-in's
+                // post-validation hook — dispatches with no response; an
+                // unregistered one is ignored.
+                self.dispatch_notification(service, other, params).await;
             }
         }
 
@@ -1112,38 +863,35 @@ where
     /// and reply. Any configuration, validation, or `on_initialize` failure
     /// enqueues the fixed error and requests the terminal close rather than
     /// returning to uninitialized.
-    async fn initialize(&mut self, span: &Span, reservation: Reservation, params: Bytes) -> Flow {
+    async fn initialize(&mut self, request: AdmittedRequest) -> Flow {
         // A second `initialize` after the transaction has run is invalid.
         if !matches!(self.lifecycle, Lifecycle::Uninitialized(_)) {
             self.failure_reporter.report(
                 ConnectionFailureCategory::Protocol,
                 Some(ConnectionDirection::Inbound),
                 Some("initialize"),
-                Some(&reservation.id),
+                Some(request.id()),
             );
-            self.protocol.complete_inbound(
-                reservation,
-                Err(LspError::ServerError {
-                    code: -32600,
-                    message: "server already initialized".into(),
-                    data: None,
-                }),
-            );
+            request.respond(Err(LspError::ServerError {
+                code: -32600,
+                message: "server already initialized".into(),
+                data: None,
+            }));
             return Flow::Continue;
         }
 
         // Malformed `initialize` params leave the transaction unspent: the
         // client may retry with a valid request, so stay uninitialized.
-        let params = match decode_params::<InitializeParams>(&params) {
+        let params = match decode_params::<InitializeParams>(request.params()) {
             Ok(params) => params,
             Err(err) => {
                 self.failure_reporter.report(
                     ConnectionFailureCategory::Protocol,
                     Some(ConnectionDirection::Inbound),
                     Some("initialize"),
-                    Some(&reservation.id),
+                    Some(request.id()),
                 );
-                self.protocol.complete_inbound(reservation, Err(err));
+                request.respond(Err(err));
                 return Flow::Continue;
             }
         };
@@ -1184,10 +932,7 @@ where
             Err(_err) => {
                 // ADR 0017's fixed error: configuration or combined-validation
                 // failure reports InternalError and enters the close path.
-                self.protocol.complete_inbound(
-                    reservation,
-                    Err(LspError::internal("initialization failed")),
-                );
+                request.respond(Err(LspError::internal("initialization failed")));
                 return Flow::Close(CloseCause::InitializeFailed);
             }
         };
@@ -1257,20 +1002,15 @@ where
         let server_info = match on_initialize {
             Some(hook) => {
                 let ctx = ServerContext::for_request(
-                    reservation.id.clone(),
-                    span.clone(),
+                    request.id().clone(),
+                    request.span().clone(),
                     self.client.clone(),
                     established,
                 )
                 .with_work_done_token(work_done_token);
                 match hook
-                    .invoke((
-                        Arc::clone(&self.state),
-                        ctx,
-                        params,
-                        self.protocol.cancellation_child(),
-                    ))
-                    .instrument(span.clone())
+                    .invoke((Arc::clone(&self.state), ctx, params, request.cancellation()))
+                    .instrument(request.span().clone())
                     .await
                 {
                     Ok(server_info) => server_info,
@@ -1279,7 +1019,7 @@ where
                         // enters the close path; the frozen Router and
                         // established Workspace are never exposed to later
                         // dispatch.
-                        self.protocol.complete_inbound(reservation, Err(err));
+                        request.respond(Err(err));
                         return Flow::Close(CloseCause::InitializeFailed);
                     }
                 }
@@ -1287,13 +1027,10 @@ where
             None => None,
         };
 
-        self.protocol.complete_inbound(
-            reservation,
-            encode_body(&WireInitializeResult {
-                capabilities,
-                server_info,
-            }),
-        );
+        request.respond(encode_body(&WireInitializeResult {
+            capabilities,
+            server_info,
+        }));
         self.lifecycle = Lifecycle::Running(build_service_stack(
             router,
             layers,
@@ -1312,78 +1049,93 @@ where
         )
     }
 
-    /// Spawn one user request into the engine's task group. The task races user
-    /// dispatch against its explicit cancellation token. When cancellation
-    /// wins, one final poll lets cooperative handler code observe the token
-    /// before the future is dropped; the completion gate rejects any result
-    /// produced after another path claimed the reservation.
-    fn spawn_service_request(
-        &mut self,
-        service: UserService<S>,
-        reservation: Reservation,
-        method: String,
-        params: serde_json::Value,
-        ctx: ServerContext,
-        cancellation: CancellationToken,
-        default_timeout: Duration,
-    ) {
-        let state = Arc::clone(&self.state);
-        let completion_gate = self.protocol.completion_gate();
-        let permit = Arc::clone(&reservation._permit);
-        let trace = self.trace;
-        self.protocol.spawn(
-            async move {
-                let id = reservation.id.clone();
-                let trace_id = id.clone();
-                let trace_method = method.clone();
-                let handler_timeout = HandlerTimeout::new(
-                    default_timeout,
-                    trace,
-                    trace_method.clone(),
-                    trace_id.clone(),
+    /// Decode one user request and spawn it through the Service stack.
+    ///
+    /// The session races the call against cancellation and the deadline the
+    /// Layer stack arms, and answers exactly once.
+    fn spawn_service_request(&mut self, request: AdmittedRequest) {
+        // Precedence guarantees the connection is running here.
+        let Lifecycle::Running(service) = &self.lifecycle else {
+            request.respond(Err(LspError::ServerNotInitialized));
+            return;
+        };
+        let service = Arc::clone(service);
+        let params = match decode_value(request.params()) {
+            Ok(params) => params,
+            Err(error) => {
+                self.failure_reporter.report_unvalidated_inbound_method(
+                    ConnectionFailureCategory::Protocol,
+                    Some(request.id()),
                 );
-                let call =
-                    IncomingCall::request(method, id, params, ctx, state, handler_timeout.clone());
-                let partial_result_scope = call.context().partial_result_scope();
-                let result =
-                    run_handler_with_deadline(service.call(call), cancellation, handler_timeout)
-                        .await;
-                if let Some(scope) = partial_result_scope {
-                    scope.finish();
+                request.respond(Err(error));
+                return;
+            }
+        };
+        let work_done_token = match request_token::<ProgressToken>(&params, "workDoneToken") {
+            Ok(token) => token,
+            Err(error) => {
+                request.respond(Err(LspError::invalid_params(error)));
+                return;
+            }
+        };
+        let partial_result_token = if crate::partial_result::supports_method(request.method()) {
+            match request_token::<ProgressToken>(&params, "partialResultToken") {
+                Ok(token) => token,
+                Err(error) => {
+                    request.respond(Err(LspError::invalid_params(error)));
+                    return;
                 }
-                let result = match result {
-                    ServiceResult::Response(value) => encode_body(&value),
-                    ServiceResult::Error(error) => Err(error),
-                    ServiceResult::NoResponse => {
-                        Err(LspError::internal("request service returned no response"))
-                    }
-                };
-                completion_gate.complete(reservation, result);
-            },
-            permit,
-        );
+            }
+        } else {
+            None
+        };
+        let method = request.method().to_owned();
+        let id = request.id().clone();
+        let ctx = ServerContext::for_request(
+            id.clone(),
+            request.span().clone(),
+            self.client.clone(),
+            self.established_workspace(),
+        )
+        .with_cancellation(request.cancellation())
+        .with_work_done_token(work_done_token)
+        .with_partial_result(method.clone(), partial_result_token);
+        let state = Arc::clone(&self.state);
+        self.protocol
+            .spawn_request(request, move |handler_timeout| async move {
+                let call = IncomingCall::request(method, id, params, ctx, state, handler_timeout);
+                // Cancellation and deadline drop this future before the
+                // session answers, so the sink closes before the response in
+                // every ending.
+                let _partial_results = FinishOnDrop(call.context().partial_result_scope());
+                service.call(call).await
+            });
     }
 
-    /// The engine's one close operation (ADR 0018).
+    /// The engine's one close operation (ADR 0018), run once by the read loop.
     ///
-    /// Every close cause runs exactly these steps, in this order, and a second
-    /// call is a no-op: new outbound work is rejected, the session is
-    /// cancelled, every pending `ClientHandle` request is resolved, the inbound,
-    /// outbound, and progress registries are emptied, every handler task is
-    /// aborted and then joined, and the outbound queue is closed before the
-    /// writer task is joined. No task is detached and no pending `ClientHandle`
-    /// future is left unresolved.
-    async fn close(&mut self) {
-        if matches!(self.lifecycle, Lifecycle::Exited) {
-            return;
-        }
+    /// The session closes first: new outbound work is rejected, every pending
+    /// `ClientHandle` request is resolved, every handler task is aborted and
+    /// joined, and the writer drains. Documents and notebooks are Server
+    /// endpoint state, so their lifecycle stays out of the shared session even
+    /// though close releases retained snapshots.
+    async fn close(&mut self) -> SessionEnd<CloseCause> {
         self.lifecycle = Lifecycle::Exited;
-        self.protocol.close().await;
-        // Documents and notebooks are Server endpoint state, so their lifecycle
-        // stays out of the shared session even though close releases retained
-        // snapshots.
+        let end = self.protocol.finish().await;
         self.documents.clear();
         self.notebooks.clear();
+        end
+    }
+}
+
+/// Ends a request's partial-result sink when the handler future is dropped.
+struct FinishOnDrop(Option<PartialResultScope>);
+
+impl Drop for FinishOnDrop {
+    fn drop(&mut self) {
+        if let Some(scope) = &self.0 {
+            scope.finish();
+        }
     }
 }
 
@@ -1395,26 +1147,15 @@ enum Flow {
     Close(CloseCause),
 }
 
-/// Select the reported cause after close has quiesced every task that could
-/// fail a required outbound admission (ADR 0026).
-#[cfg(all(test, not(target_arch = "wasm32")))]
-fn final_close_cause(close: &CloseSignal<CloseCause>, out_tx: &OutboundQueue) -> CloseCause {
-    let recorded = close
-        .take_cause()
-        .expect("every path out of the read-loop records its close cause");
-    if out_tx.failure().is_cancelled() {
-        CloseCause::WriterFailed
-    } else {
-        recorded
-    }
-}
-
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use gen_lsp_types::ProgressToken;
     use tracing_subscriber::layer::SubscriberExt;
 
-    use crate::session::{InboundRegistry, TaskGroup};
+    use tokio_util::sync::CancellationToken;
+
+    use crate::raw::RawMessage;
+    use crate::transport::{TransportError, TransportWriter};
 
     use super::*;
 
@@ -1556,235 +1297,29 @@ mod tests {
     }
 
     #[test]
-    fn the_first_requester_records_the_cause_and_later_ones_do_not_replace_it() {
-        let close = CloseSignal::new();
-        assert!(!close.requested().is_cancelled());
-
-        close.request(CloseCause::WriterFailed);
-        close.request(CloseCause::Exit { code: 0 });
-        close.request(CloseCause::ReaderEof);
-
-        assert!(
-            close.requested().is_cancelled(),
-            "requesting close wakes the read-loop"
-        );
-        assert!(
-            matches!(close.take_cause(), Some(CloseCause::WriterFailed)),
-            "the first cause requested is the one reported"
-        );
-        assert!(
-            close.take_cause().is_none(),
-            "the cause is taken once, by the read-loop that ran the close"
-        );
-    }
-
-    #[test]
-    fn a_late_required_enqueue_failure_overrides_an_earlier_close_cause() {
-        let message = RawMessage::Notification {
-            method: "test/required".into(),
-            params: Bytes::new(),
-        };
-        let (queue, _rx) = OutboundQueue::bounded(1, usize::MAX);
-        queue.send(message.clone()).unwrap();
-        let close = CloseSignal::new();
-        close.request(CloseCause::InitializeFailed);
-
-        assert!(queue.send_required(message).is_err());
-
-        assert!(matches!(
-            final_close_cause(&close, &queue),
-            CloseCause::WriterFailed
-        ));
-    }
-
-    #[test]
-    fn every_cause_maps_to_one_outcome_or_a_transport_error() {
+    fn every_ending_maps_to_one_outcome_or_a_transport_error() {
         assert_eq!(
-            CloseCause::Exit { code: 0 }.into_result().unwrap(),
+            into_result(SessionEnd::Endpoint(CloseCause::Exit { code: 0 })).unwrap(),
             Outcome::Exit { code: 0 }
         );
         assert_eq!(
-            CloseCause::ReaderEof.into_result().unwrap(),
+            into_result(SessionEnd::ReaderEof).unwrap(),
             Outcome::TransportClosed
         );
         assert_eq!(
-            CloseCause::WriterFailed.into_result().unwrap(),
+            into_result(SessionEnd::WriterFailed).unwrap(),
             Outcome::WriterFailed
         );
         assert_eq!(
-            CloseCause::InitializeFailed.into_result().unwrap(),
+            into_result(SessionEnd::Endpoint(CloseCause::InitializeFailed)).unwrap(),
             Outcome::InitializeFailed
         );
         assert!(matches!(
-            CloseCause::ReaderFailed(TransportError::Malformed("bad".into())).into_result(),
+            into_result(SessionEnd::ReaderFailed(TransportError::Malformed(
+                "bad".into()
+            ))),
             Err(Error::Transport(_))
         ));
-    }
-
-    /// A peer may reuse a request ID once the previous request under it has
-    /// been answered. The completion gate is scoped to the reservation, not the
-    /// ID, so the first request's task cannot answer the second request when it
-    /// finishes after its own entry was claimed.
-    #[test]
-    fn a_stale_reservation_cannot_claim_a_reused_request_id() {
-        let (out_tx, mut out_rx) =
-            OutboundQueue::new(crate::ResourcePolicy::default().max_outbound_messages);
-        let registry = InboundRegistry::new(2);
-        let id = RequestId::Number(2);
-        let session = CancellationToken::new();
-
-        let first = registry
-            .reserve(id.clone(), Some(&session))
-            .expect("the id is free")
-            .reservation;
-        assert!(
-            matches!(
-                registry.reserve(id.clone(), Some(&session)),
-                Err(InboundReserveError::DuplicateId)
-            ),
-            "an in-flight id is not reserved twice"
-        );
-
-        // `$/cancelRequest` claims the gate and answers the first request.
-        let cancelled = registry
-            .claim_cancellation(&id)
-            .expect("the first request is cancellable");
-        enqueue_encoded(&out_tx, cancelled.id, Err(LspError::RequestCancelled));
-        // The peer then reuses the id for a new request.
-        let second = registry
-            .reserve(id.clone(), Some(&session))
-            .expect("the id is free once the first request is answered")
-            .reservation;
-
-        // The first request's task only now produces a result.
-        registry.complete(&out_tx, first, encode_body(&"race"));
-        registry.complete(&out_tx, second, encode_body(&"reused"));
-
-        assert_eq!(
-            out_rx.try_recv().unwrap().id(),
-            Some(&id),
-            "the cancellation answers the first request"
-        );
-        let answer = out_rx.try_recv().expect("the second request is answered");
-        match answer {
-            RawMessage::Response {
-                result: Ok(body), ..
-            } => assert_eq!(
-                serde_json::from_slice::<String>(&body).unwrap(),
-                "reused",
-                "the second request gets its own result, not the stale one"
-            ),
-            other => panic!("expected a success response, got {other:?}"),
-        }
-        assert!(
-            out_rx.try_recv().is_err(),
-            "the stale reservation enqueued nothing"
-        );
-    }
-
-    #[test]
-    fn an_exhausted_registry_stays_bounded_and_cancellation_releases_its_entry() {
-        let registry = InboundRegistry::new(1);
-        let session = CancellationToken::new();
-        let accepted = registry
-            .reserve(RequestId::Number(2), Some(&session))
-            .expect("the one slot is available");
-
-        for id in 3..=66 {
-            assert!(matches!(
-                registry.reserve(RequestId::Number(id), Some(&session)),
-                Err(InboundReserveError::CapacityExhausted)
-            ));
-        }
-        assert_eq!(
-            registry.inner.lock().unwrap().entries.len(),
-            1,
-            "the flood retained only the admitted registry entry"
-        );
-
-        let cancelled = registry
-            .claim_cancellation(&RequestId::Number(2))
-            .expect("the admitted request is cancellable");
-        assert!(
-            registry.inner.lock().unwrap().entries.is_empty(),
-            "cancellation releases the registry entry"
-        );
-        drop(cancelled);
-        assert!(matches!(
-            registry.reserve(RequestId::Number(67), Some(&session)),
-            Err(InboundReserveError::CapacityExhausted)
-        ));
-        drop(accepted);
-        assert!(
-            registry
-                .reserve(RequestId::Number(67), Some(&session))
-                .is_ok(),
-            "capacity returns after the admitted task drops its reservation"
-        );
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    #[tokio::test]
-    async fn a_finished_task_holds_capacity_until_its_handle_is_reaped() {
-        let registry = InboundRegistry::new(1);
-        let session = CancellationToken::new();
-        let accepted = registry
-            .reserve(RequestId::Number(2), Some(&session))
-            .expect("the one slot is available");
-        let permit = Arc::clone(&accepted.reservation._permit);
-        let (out_tx, _out_rx) =
-            OutboundQueue::new(crate::ResourcePolicy::default().max_outbound_messages);
-        registry.complete(&out_tx, accepted.reservation, encode_body(&"done"));
-
-        let mut tasks = TaskGroup::new(default_runtime());
-        tasks.spawn(async {}, permit);
-        while !tasks.handles[0].handle.is_finished() {
-            tasks.runtime.yield_now().await;
-        }
-        assert_eq!(tasks.handles.len(), 1, "the finished handle is still owned");
-        assert!(matches!(
-            registry.reserve(RequestId::Number(3), Some(&session)),
-            Err(InboundReserveError::CapacityExhausted)
-        ));
-
-        tasks.reap_finished().await;
-        assert!(tasks.handles.is_empty(), "the finished handle was reaped");
-        assert!(
-            registry
-                .reserve(RequestId::Number(3), Some(&session))
-                .is_ok(),
-            "reaping the handle releases its admission permit"
-        );
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    #[tokio::test]
-    async fn aborting_the_task_group_releases_disconnect_capacity() {
-        let registry = InboundRegistry::new(1);
-        let session = CancellationToken::new();
-        let accepted = registry
-            .reserve(RequestId::Number(2), Some(&session))
-            .expect("the one slot is available");
-        let permit = Arc::clone(&accepted.reservation._permit);
-        let mut tasks = TaskGroup::new(default_runtime());
-        tasks.spawn(std::future::pending(), permit);
-
-        registry.close_all();
-        drop(accepted);
-        assert!(registry.inner.lock().unwrap().entries.is_empty());
-        assert!(matches!(
-            registry.reserve(RequestId::Number(3), Some(&session)),
-            Err(InboundReserveError::CapacityExhausted)
-        ));
-
-        tasks.abort_and_join().await;
-        assert!(tasks.handles.is_empty(), "disconnect joined every task");
-        assert!(
-            registry
-                .reserve(RequestId::Number(3), Some(&session))
-                .is_ok(),
-            "joining aborted tasks releases their admission permits"
-        );
     }
 
     #[test]
@@ -1847,261 +1382,6 @@ mod tests {
         assert!(
             matches!(outcome, Err(Error::RuntimeRequired)),
             "serving without a runtime reports the missing runtime, got {outcome:?}"
-        );
-    }
-
-    // --- Outbound queue depth observability tests ----------------------------
-
-    enum TestOutboundNotification {}
-
-    impl crate::types::notification::Notification for TestOutboundNotification {
-        type Params = serde_json::Value;
-        const METHOD: &'static str = "test/outbound-notification";
-    }
-
-    enum TestOutboundRequest {}
-
-    impl crate::types::request::Request for TestOutboundRequest {
-        type Params = serde_json::Value;
-        type Result = String;
-        const METHOD: &'static str = "test/outbound-request";
-    }
-
-    fn send_loop_message(tag: u8) -> RawMessage {
-        RawMessage::Notification {
-            method: "test/send-loop".into(),
-            params: Bytes::from(vec![tag]),
-        }
-    }
-
-    fn encoded_len(message: &RawMessage) -> usize {
-        crate::transport::envelope::serialize(message)
-            .expect("the test message encodes")
-            .len()
-    }
-
-    /// A writer that records what it sent and fails the `fail_on_send`-th send
-    /// (1-based; `None` never fails), driving the send-loop through its
-    /// success, draining, and terminal-failure paths.
-    struct ScriptedWriter {
-        outbox: Arc<Mutex<Vec<RawMessage>>>,
-        fail_on_send: Option<usize>,
-        sends: usize,
-    }
-
-    struct SlowWriter {
-        started: Arc<tokio::sync::Notify>,
-        releases: Arc<tokio::sync::Semaphore>,
-    }
-
-    impl TransportWriter for SlowWriter {
-        async fn send(&mut self, _msg: RawMessage) -> std::result::Result<(), TransportError> {
-            self.started.notify_one();
-            self.releases
-                .acquire()
-                .await
-                .expect("the test keeps the release gate open")
-                .forget();
-            Ok(())
-        }
-
-        async fn shutdown(self) -> std::result::Result<(), TransportError> {
-            Ok(())
-        }
-    }
-
-    impl TransportWriter for ScriptedWriter {
-        async fn send(&mut self, msg: RawMessage) -> std::result::Result<(), TransportError> {
-            self.sends += 1;
-            if self.fail_on_send == Some(self.sends) {
-                return Err(TransportError::Closed);
-            }
-            self.outbox.lock().unwrap().push(msg);
-            Ok(())
-        }
-
-        async fn shutdown(self) -> std::result::Result<(), TransportError> {
-            Ok(())
-        }
-    }
-
-    #[tokio::test]
-    async fn requests_responses_and_notifications_share_one_depth_counter() {
-        let (queue, _rx) =
-            OutboundQueue::new(crate::ResourcePolicy::default().max_outbound_messages);
-        let client = ClientHandle::new(queue.clone(), OutboundRegistry::default(), None);
-
-        client
-            .notify::<TestOutboundNotification>(serde_json::json!({}))
-            .unwrap();
-        enqueue_encoded(
-            &queue,
-            RequestId::Number(1),
-            Ok(Bytes::from_static(b"null")),
-        );
-
-        // The request future enqueues synchronously on its first poll, then
-        // awaits the peer's response.
-        let pending = client.request::<TestOutboundRequest>(serde_json::json!({}));
-        futures_util::pin_mut!(pending);
-        assert!(
-            futures_util::poll!(pending.as_mut()).is_pending(),
-            "the request awaits the peer's response"
-        );
-        assert_eq!(queue.depth(), 3);
-        client
-            .outbound_registry()
-            .complete(1, Ok(Bytes::from_static(b"\"pong\"")));
-        let answer = pending.await;
-        assert_eq!(answer.unwrap(), "pong");
-
-        assert_eq!(
-            queue.depth(),
-            3,
-            "a notification, a response, and a request all increment the one counter"
-        );
-    }
-
-    #[tokio::test]
-    async fn writer_failure_releases_attempted_and_abandoned_accounting() {
-        let (queue, rx) = OutboundQueue::new(16);
-        let client = ClientHandle::new(queue.clone(), OutboundRegistry::default(), None);
-        for tag in 0..3 {
-            queue.send(send_loop_message(tag)).unwrap();
-        }
-        assert_eq!(queue.depth(), 3);
-
-        let outbox = Arc::new(Mutex::new(Vec::new()));
-        let writer = ScriptedWriter {
-            outbox: outbox.clone(),
-            fail_on_send: Some(2),
-            sends: 0,
-        };
-        let close = CloseSignal::new();
-        send_loop(writer, rx, client, close.clone()).await;
-
-        assert_eq!(
-            queue.depth(),
-            0,
-            "writer failure abandons every queued slot"
-        );
-        assert_eq!(
-            queue.encoded_bytes(),
-            0,
-            "writer failure abandons every queued byte charge"
-        );
-        assert_eq!(
-            outbox.lock().unwrap().len(),
-            1,
-            "only the first send landed on the transport"
-        );
-        assert!(
-            matches!(close.take_cause(), Some(CloseCause::WriterFailed)),
-            "the writer reports its terminal failure"
-        );
-    }
-
-    #[tokio::test]
-    async fn draining_after_close_decrements_every_message_in_order() {
-        let (queue, rx) = OutboundQueue::new(2);
-        let client = ClientHandle::new(queue.clone(), OutboundRegistry::default(), None);
-        for tag in 0..3 {
-            queue.send(send_loop_message(tag)).unwrap();
-        }
-        client.close_outbound();
-
-        let outbox = Arc::new(Mutex::new(Vec::new()));
-        let writer = ScriptedWriter {
-            outbox: outbox.clone(),
-            fail_on_send: None,
-            sends: 0,
-        };
-        let close = CloseSignal::new();
-        send_loop(writer, rx, client, close.clone()).await;
-
-        assert_eq!(
-            queue.depth(),
-            0,
-            "draining decrements every queued message, above and below the threshold"
-        );
-        assert_eq!(
-            queue.encoded_bytes(),
-            0,
-            "close releases every encoded-byte charge after draining"
-        );
-        let tags: Vec<u8> = outbox
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|msg| match msg {
-                RawMessage::Notification { params, .. } => params[0],
-                other => panic!("expected notifications, got {other:?}"),
-            })
-            .collect();
-        assert_eq!(
-            tags,
-            vec![0, 1, 2],
-            "draining never drops or reorders a message"
-        );
-        assert!(
-            close.take_cause().is_none(),
-            "clean draining is not a writer failure"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_slow_reader_cannot_grow_count_or_bytes_past_the_policy() {
-        let message_bytes = encoded_len(&send_loop_message(0));
-        let (queue, rx) = OutboundQueue::bounded(2, message_bytes * 2);
-        let client = ClientHandle::new(queue.clone(), OutboundRegistry::default(), None);
-        queue.send(send_loop_message(0)).unwrap();
-        queue.send(send_loop_message(1)).unwrap();
-
-        let started = Arc::new(tokio::sync::Notify::new());
-        let releases = Arc::new(tokio::sync::Semaphore::new(0));
-        let writer = SlowWriter {
-            started: started.clone(),
-            releases: releases.clone(),
-        };
-        let close = CloseSignal::new();
-        let serving = tokio::spawn(send_loop(writer, rx, client.clone(), close));
-
-        started.notified().await;
-        assert_eq!(queue.depth(), 2, "the in-flight write remains accounted");
-        assert_eq!(queue.encoded_bytes(), message_bytes * 2);
-        assert!(matches!(
-            queue.send(send_loop_message(2)),
-            Err(crate::client::OutboundSendError::Overloaded)
-        ));
-        assert_eq!(queue.depth(), 2, "the rejected send consumes no slot");
-        assert_eq!(
-            queue.encoded_bytes(),
-            message_bytes * 2,
-            "the rejected send consumes no bytes"
-        );
-
-        releases.add_permits(1);
-        for _ in 0..100 {
-            if queue.depth() == 1 {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-        assert_eq!(queue.depth(), 1, "a successful write releases one slot");
-        assert_eq!(
-            queue.encoded_bytes(),
-            message_bytes,
-            "a successful write releases exactly its encoded bytes"
-        );
-
-        client.close_outbound();
-        releases.add_permits(1);
-        serving.await.unwrap();
-        assert_eq!(queue.depth(), 0, "close drains the remaining message");
-        assert_eq!(
-            queue.encoded_bytes(),
-            0,
-            "close releases all byte accounting"
         );
     }
 }
