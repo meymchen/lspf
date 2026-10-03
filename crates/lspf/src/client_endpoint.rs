@@ -2,16 +2,13 @@
 //!
 //! This module owns client-side initialization and reverse-handler policy. The
 //! endpoint-neutral [`ProtocolSession`](crate::session::ProtocolSession) owns
-//! correlation, admission, deadlines, task ownership, writer coordination,
-//! and close.
+//! the inbound pipeline, task ownership, writer coordination, and close.
 
 use std::collections::HashMap;
 use std::future::Future;
-use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-use futures_util::FutureExt;
 use gen_lsp_types::{
     ClientCapabilities, ClientInfo, ExitNotification as Exit, InitializeParams,
     InitializeRequest as Initialize, InitializedNotification as Initialized, InitializedParams,
@@ -21,23 +18,23 @@ use gen_lsp_types::{
 };
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, Span, debug, error};
+use tracing::{Instrument, Span, debug};
 
 use crate::builder::SharedHandler;
 use crate::client::ClientHandle;
 use crate::client_progress::{ClientProgressRegistry, CreateOutcome};
-use crate::codec::{decode_value, encode_body, encode_params, erase_value, request_token};
+use crate::codec::{decode_value, encode_params, erase_value, request_token};
 use crate::error::{BuildError, LspError};
 use crate::failure::FailureReporter;
-use crate::raw::{RawMessage, RequestId};
+use crate::raw::RequestId;
 use crate::resource_policy::ResourcePolicy;
 use crate::runtime::{Runtime, TaskFuture, TaskSend, default_runtime, ensure_runtime_available};
 use crate::service::{HandlerTimeout, ServiceResult};
 use crate::session::{
-    INBOUND_CAPACITY_EXHAUSTED, InboundReserveError, ProtocolControl, ProtocolSession,
-    SessionInput, run_handler_with_deadline,
+    AdmittedRequest, EndpointCause, ProtocolControl, ProtocolSession, SessionEnd, SessionEvent,
+    Settled,
 };
-use crate::telemetry::{ConnectionTrace, Direction};
+use crate::telemetry::ConnectionTrace;
 use crate::transport::{Transport, TransportError, TransportReader};
 use crate::types::notification::Notification;
 use crate::types::request::Request;
@@ -103,7 +100,6 @@ impl<T: Transport> Client<T> {
             trace,
             span.clone(),
             failure_reporter.clone(),
-            ClientCloseCause::writer_failed,
             ClientHandle::new,
         );
         let lifecycle = Arc::new(ClientLifecycle {
@@ -131,25 +127,16 @@ impl<T: Transport> Client<T> {
             self.client_info,
             self.initialization_options,
         );
-        if let Err(error) = engine.initialize(&mut reader, params).await {
-            engine
-                .protocol
-                .request_close(ClientCloseCause::InitializeFailed);
-            engine.protocol.close().await;
-            trace.connection_closed("initialize_failed");
-            return Err(error);
+        if let Err(failure) = engine.initialize(&mut reader, params).await {
+            return Err(engine.fail_initialize(failure).await);
         }
         if let Err(error) = server
             .inner
             .notify_required::<Initialized>(InitializedParams {})
         {
-            server
-                .lifecycle
-                .protocol
-                .request_close(ClientCloseCause::InitializeFailed);
-            engine.protocol.close().await;
-            trace.connection_closed("initialize_failed");
-            return Err(error.into());
+            return Err(engine
+                .fail_initialize(InitializeFailure::Request(error.into()))
+                .await);
         }
         server.lifecycle.mark_running();
 
@@ -645,42 +632,44 @@ impl ClientLifecycle {
     }
 }
 
+/// The Client endpoint's own reasons to close. Reader, writer, and
+/// required-admission failures are the session's [`SessionEnd`] variants.
 #[derive(Debug)]
 enum ClientCloseCause {
     Exit,
     Disconnect,
-    ReaderEof,
-    ReaderFailed(TransportError),
-    WriterFailed,
     InitializeFailed,
 }
 
-impl ClientCloseCause {
-    fn writer_failed() -> Self {
-        Self::WriterFailed
-    }
-
+impl EndpointCause for ClientCloseCause {
     fn as_str(&self) -> &'static str {
         match self {
             Self::Exit => "exit",
             Self::Disconnect => "disconnect",
-            Self::ReaderEof => "reader_eof",
-            Self::ReaderFailed(_) => "reader_failed",
-            Self::WriterFailed => "writer_failed",
             Self::InitializeFailed => "initialize_failed",
         }
     }
+}
 
-    fn into_result(self) -> Result<Outcome> {
-        match self {
-            Self::Exit => Ok(Outcome::Exit { code: 0 }),
-            Self::Disconnect => Ok(Outcome::TransportClosed),
-            Self::ReaderEof => Ok(Outcome::TransportClosed),
-            Self::ReaderFailed(error) => Err(Error::Transport(error)),
-            Self::WriterFailed => Ok(Outcome::WriterFailed),
-            Self::InitializeFailed => unreachable!("initialize failure returns from connect"),
+/// Map the selected ending onto what serving the connection returns.
+fn into_result(end: SessionEnd<ClientCloseCause>) -> Result<Outcome> {
+    match end {
+        SessionEnd::Endpoint(ClientCloseCause::Exit) => Ok(Outcome::Exit { code: 0 }),
+        SessionEnd::Endpoint(ClientCloseCause::Disconnect) | SessionEnd::ReaderEof => {
+            Ok(Outcome::TransportClosed)
         }
+        SessionEnd::ReaderFailed(error) => Err(Error::Transport(error)),
+        SessionEnd::WriterFailed => Ok(Outcome::WriterFailed),
+        SessionEnd::Endpoint(ClientCloseCause::InitializeFailed) => Ok(Outcome::InitializeFailed),
     }
+}
+
+/// Why initialization stopped short of a running connection.
+enum InitializeFailure {
+    /// The `initialize` request itself failed.
+    Request(Error),
+    /// The session closed while `initialize` was pending.
+    Closed,
 }
 
 struct ClientEngine<R> {
@@ -702,7 +691,13 @@ impl<R: Runtime> ClientEngine<R> {
         }
     }
 
-    async fn initialize<Rd>(&mut self, reader: &mut Rd, params: InitializeParams) -> Result<()>
+    /// Send `initialize` and read until its response, refusing every inbound
+    /// request meanwhile.
+    async fn initialize<Rd>(
+        &mut self,
+        reader: &mut Rd,
+        params: InitializeParams,
+    ) -> std::result::Result<(), InitializeFailure>
     where
         Rd: TransportReader,
     {
@@ -711,47 +706,56 @@ impl<R: Runtime> ClientEngine<R> {
         loop {
             // Initialization must observe the same writer/admission failures
             // as the running connection, even if its read half stays open.
-            let input = match futures_util::future::select(
+            let event = match futures_util::future::select(
                 pending,
-                Box::pin(self.protocol.next_input(reader)),
+                Box::pin(self.protocol.next_event(reader)),
             )
             .await
             {
                 futures_util::future::Either::Left((result, _)) => {
-                    result?;
-                    return Ok(());
+                    return result
+                        .map(drop)
+                        .map_err(|error| InitializeFailure::Request(error.into()));
                 }
-                futures_util::future::Either::Right((input, still_pending)) => {
+                futures_util::future::Either::Right((event, still_pending)) => {
                     pending = still_pending;
-                    input
+                    event
                 }
             };
-            match input {
-                SessionInput::CloseRequested | SessionInput::OutboundFailed => {
-                    return Err(ClientError::ConnectionClosed.into());
+            match event {
+                SessionEvent::Closed => return Err(InitializeFailure::Closed),
+                SessionEvent::Request(request) => {
+                    let error = if request.method() == "initialize" {
+                        LspError::invalid_request("duplicate initialize")
+                    } else {
+                        LspError::ServerNotInitialized
+                    };
+                    request.respond(Err(error));
                 }
-                SessionInput::Message(Ok(message)) => {
-                    self.trace.message(Direction::Inbound, &message);
-                    self.dispatch_during_initialize(message);
+                SessionEvent::Notification { method, .. } => {
+                    debug!(%method, "notification during client initialization ignored");
                 }
-                SessionInput::Message(Err(error)) => return Err(Error::Transport(error)),
             }
         }
     }
 
-    fn dispatch_during_initialize(&self, message: RawMessage) {
-        match message {
-            RawMessage::Response { id, result } => self.complete_response(id, result),
-            RawMessage::Request { id, method, .. } if method == "initialize" => self
-                .protocol
-                .reject_inbound(id, LspError::invalid_request("duplicate initialize")),
-            RawMessage::Request { id, .. } => self
-                .protocol
-                .reject_inbound(id, LspError::ServerNotInitialized),
-            RawMessage::Notification { method, .. } => {
-                debug!(%method, "notification during client initialization ignored");
+    /// Close a connection whose initialization failed and select the error
+    /// `connect` returns.
+    async fn fail_initialize(&mut self, failure: InitializeFailure) -> Error {
+        match failure {
+            InitializeFailure::Request(error) => {
+                self.protocol
+                    .request_close(ClientCloseCause::InitializeFailed);
+                self.protocol.finish().await;
+                error
             }
-            RawMessage::ProtocolError { error } => self.protocol.send_protocol_error(error),
+            InitializeFailure::Closed => match self.protocol.finish().await {
+                SessionEnd::ReaderEof => Error::Transport(TransportError::Closed),
+                SessionEnd::ReaderFailed(error) => Error::Transport(error),
+                SessionEnd::WriterFailed | SessionEnd::Endpoint(_) => {
+                    ClientError::ConnectionClosed.into()
+                }
+            },
         }
     }
 
@@ -760,222 +764,89 @@ impl<R: Runtime> ClientEngine<R> {
         Rd: TransportReader,
     {
         loop {
-            let message = match self.protocol.next_input(&mut reader).await {
-                SessionInput::CloseRequested => break,
-                SessionInput::OutboundFailed => {
-                    self.protocol.request_close(ClientCloseCause::WriterFailed);
-                    break;
+            match self.protocol.next_event(&mut reader).await {
+                SessionEvent::Request(request) => self.dispatch_request(request),
+                SessionEvent::Notification { method, params } => {
+                    self.dispatch_notification(&method, params)
                 }
-                SessionInput::Message(message) => message,
-            };
-            match message {
-                Ok(message) => {
-                    self.trace.message(Direction::Inbound, &message);
-                    self.dispatch(message);
-                }
-                Err(TransportError::Closed) => {
-                    self.protocol.request_close(ClientCloseCause::ReaderEof);
-                    break;
-                }
-                Err(error) => {
-                    self.protocol
-                        .request_close(ClientCloseCause::ReaderFailed(error));
-                    break;
-                }
+                SessionEvent::Closed => break,
             }
         }
         self.lifecycle.disconnect();
-        self.protocol.close().await;
-        let cause = self.protocol.final_close_cause();
-        self.trace.connection_closed(cause.as_str());
-        cause.into_result()
+        into_result(self.protocol.finish().await)
     }
 
-    fn dispatch(&mut self, message: RawMessage) {
-        match message {
-            RawMessage::Response { id, result } => self.complete_response(id, result),
-            RawMessage::Request { id, method, params } => {
-                self.dispatch_request(id, method.into_owned(), params)
-            }
-            RawMessage::Notification { method, params } if method == "$/cancelRequest" => {
-                #[derive(serde::Deserialize)]
-                struct CancelParams {
-                    id: RequestId,
-                }
-                match crate::codec::decode_params::<CancelParams>(&params) {
-                    Ok(params) => {
-                        if let Some(reservation) = self.protocol.cancel_inbound(&params.id) {
-                            self.protocol.complete_cancelled(reservation);
-                        }
-                    }
-                    Err(error) => debug!(%error, "malformed cancellation ignored"),
-                }
-            }
-            RawMessage::Notification { method, params } => {
-                self.dispatch_notification(method.into_owned(), params)
-            }
-            RawMessage::ProtocolError { error } => self.protocol.send_protocol_error(error),
-        }
-    }
-
-    fn complete_response(
-        &self,
-        id: RequestId,
-        result: std::result::Result<bytes::Bytes, crate::JsonRpcError>,
-    ) {
-        let delivered = match id {
-            RequestId::Number(number) if number > 0 => self
-                .peer
-                .outbound_registry()
-                .complete(number as u32, result),
-            _ => false,
-        };
-        if !delivered {
-            debug!("ignoring response with unknown or non-numeric id");
-        }
-    }
-
-    fn dispatch_request(&mut self, id: RequestId, method: String, params: bytes::Bytes) {
-        let reserved = match self.protocol.reserve_inbound(id.clone(), &method, true) {
-            Ok(reserved) => reserved,
-            Err(InboundReserveError::DuplicateId) => {
-                self.protocol
-                    .reject_inbound(id, LspError::invalid_request("duplicate request id"));
-                return;
-            }
-            Err(InboundReserveError::CapacityExhausted) => {
-                self.protocol.reject_inbound(
-                    id,
-                    LspError::ServerCancelled(INBOUND_CAPACITY_EXHAUSTED.to_string()),
-                );
-                return;
-            }
-        };
-        let reservation = reserved.reservation;
-        let cancellation = reserved
-            .cancellation
-            .expect("reverse requests are cancellable");
+    fn dispatch_request(&mut self, request: AdmittedRequest) {
         if self.lifecycle.rejects_reverse_work() {
-            self.protocol.complete_inbound(
-                reservation,
-                Err(LspError::invalid_request("invalid request after shutdown")),
-            );
+            request.respond(Err(LspError::invalid_request(
+                "invalid request after shutdown",
+            )));
             return;
         }
-        if method == "initialize" {
-            self.protocol.complete_inbound(
-                reservation,
-                Err(LspError::invalid_request("duplicate initialize")),
-            );
+        if request.method() == "initialize" {
+            request.respond(Err(LspError::invalid_request("duplicate initialize")));
             return;
         }
-        let Some(handler) = self.request_handlers.get(method.as_str()).cloned() else {
-            self.protocol.complete_inbound(
-                reservation,
-                Err(LspError::MethodNotFound(method.to_string())),
-            );
+        let Some(handler) = self.request_handlers.get(request.method()).cloned() else {
+            let method = request.method().to_string();
+            request.respond(Err(LspError::MethodNotFound(method)));
             return;
         };
-        let params = match decode_value(&params) {
+        let params = match decode_value(request.params()) {
             Ok(params) => params,
             Err(error) => {
-                self.protocol.complete_inbound(reservation, Err(error));
+                request.respond(Err(error));
                 return;
             }
         };
-        let progress_token = if method == WorkDoneProgressCreate::METHOD {
-            let create =
-                match serde_json::from_value::<WorkDoneProgressCreateParams>(params.clone()) {
-                    Ok(create) => create,
-                    Err(error) => {
-                        self.protocol
-                            .complete_inbound(reservation, Err(LspError::invalid_params(error)));
-                        return;
-                    }
-                };
-            if !self.progress.try_reserve_create(create.token.clone()) {
-                self.protocol.complete_inbound(
-                    reservation,
-                    Err(LspError::invalid_params(
-                        "duplicate work-done progress token",
-                    )),
-                );
-                return;
-            }
-            Some(create.token)
-        } else {
-            None
-        };
-        let completion = self.protocol.completion_gate();
-        let permit = Arc::clone(&reservation._permit);
-        let timeout = HandlerTimeout::new(
-            self.protocol.handler_timeout(),
-            self.trace,
-            method.clone(),
-            reservation.id.clone(),
+        let ctx = ClientContext::for_request(
+            request.id().clone(),
+            request.span().clone(),
+            self.server_handle(),
         );
-        timeout.arm();
-        let span = self.trace.request_span(&method, &reservation.id);
-        let ctx =
-            ClientContext::for_request(reservation.id.clone(), span.clone(), self.server_handle());
-        let progress = self.progress.clone();
-        self.protocol.spawn(
+        let cancellation = request.cancellation();
+        let call = move |timeout: HandlerTimeout| {
+            timeout.arm();
             async move {
-                let handler_cancellation = cancellation.clone();
-                let result = run_handler_with_deadline(
-                    async move {
-                        // Catch both constructing and polling the user future
-                        // so panic follows the normal completion path, including
-                        // admission release and progress-create rollback.
-                        match AssertUnwindSafe(async move {
-                            handler(ctx, params, handler_cancellation).await
-                        })
-                        .catch_unwind()
-                        .await
-                        {
-                            Ok(Ok(value)) => ServiceResult::Response(value),
-                            Ok(Err(error)) => ServiceResult::Error(error),
-                            Err(_) => {
-                                error!("panic isolated while dispatching reverse request");
-                                ServiceResult::Error(LspError::internal("user dispatch panicked"))
-                            }
-                        }
-                    },
-                    cancellation,
-                    timeout,
-                )
-                .await;
-                let result = match result {
-                    ServiceResult::Response(value) => encode_body(&value),
-                    ServiceResult::Error(error) => Err(error),
-                    ServiceResult::NoResponse => {
-                        Err(LspError::internal("reverse request returned no response"))
-                    }
-                };
-                if let Some(token) = progress_token {
-                    let outcome = if result.is_ok() {
-                        CreateOutcome::Succeeded
-                    } else {
-                        CreateOutcome::Failed
-                    };
-                    let claimed = completion.try_complete_with(reservation, result, {
-                        let progress = progress.clone();
-                        let token = token.clone();
-                        move || progress.finish_create(&token, outcome)
-                    });
-                    if !claimed {
-                        progress.finish_create(&token, CreateOutcome::Failed);
-                    }
-                } else {
-                    completion.complete(reservation, result);
+                match handler(ctx, params, cancellation).await {
+                    Ok(value) => ServiceResult::Response(value),
+                    Err(error) => ServiceResult::Error(error),
                 }
             }
-            .instrument(span),
-            permit,
-        );
+        };
+        if request.method() != WorkDoneProgressCreate::METHOD {
+            self.protocol.spawn_request(request, call);
+            return;
+        }
+        // A created token is committed only by the response that reports
+        // success; every other ending releases it for a retry.
+        let create = match serde_json::from_slice::<WorkDoneProgressCreateParams>(request.params())
+        {
+            Ok(create) => create,
+            Err(error) => {
+                request.respond(Err(LspError::invalid_params(error)));
+                return;
+            }
+        };
+        if !self.progress.try_reserve_create(create.token.clone()) {
+            request.respond(Err(LspError::invalid_params(
+                "duplicate work-done progress token",
+            )));
+            return;
+        }
+        let progress = self.progress.clone();
+        let token = create.token;
+        self.protocol
+            .spawn_request_with_claim(request, call, move |settled| {
+                let outcome = match settled {
+                    Settled::Claimed { succeeded: true } => CreateOutcome::Succeeded,
+                    Settled::Claimed { succeeded: false } | Settled::Lost => CreateOutcome::Failed,
+                };
+                progress.finish_create(&token, outcome);
+            });
     }
 
-    fn dispatch_notification(&mut self, method: String, params: bytes::Bytes) {
+    fn dispatch_notification(&mut self, method: &str, params: bytes::Bytes) {
         if self.lifecycle.rejects_reverse_work() {
             debug!(%method, "notification after client shutdown ignored");
             return;
@@ -1005,29 +876,22 @@ impl<R: Runtime> ClientEngine<R> {
         } else {
             None
         };
-        let Some(handler) = self.notification_handlers.get(method.as_str()).cloned() else {
+        let Some((&method, handler)) = self.notification_handlers.get_key_value(method) else {
             debug!(%method, "unregistered server notification ignored");
             return;
         };
-        let span = self.trace.notification_span(&method);
+        let handler = Arc::clone(handler);
+        let span = self.trace.notification_span(method);
         let ctx = ClientContext::for_notification(span.clone(), self.server_handle());
         self.protocol.spawn_notification(
+            method,
             async move {
                 let _progress_order = match progress_delivery {
                     Some(delivery) => Some(delivery.wait().await),
                     None => None,
                 };
-                // Catch both constructing and polling the user future: a
-                // runtime join would otherwise discard the panic unreported.
-                match AssertUnwindSafe(async move { handler(ctx, params).await })
-                    .catch_unwind()
-                    .await
-                {
-                    Ok(Ok(())) => {}
-                    Ok(Err(error)) => {
-                        debug!(%method, %error, "server notification with malformed params ignored");
-                    }
-                    Err(_) => error!(%method, "panic isolated while dispatching notification"),
+                if let Err(error) = handler(ctx, params).await {
+                    debug!(%method, %error, "server notification with malformed params ignored");
                 }
             }
             .instrument(span),

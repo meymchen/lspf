@@ -974,6 +974,141 @@ async fn client_notification_handler_panics_are_isolated_and_logged() {
 }
 
 #[tokio::test]
+async fn client_admission_rejections_emit_rejected_telemetry() {
+    let logs = LogBuffer::default();
+    let _subscriber = tracing::subscriber::set_default(
+        tracing_subscriber::fmt()
+            .json()
+            .flatten_event(true)
+            .with_max_level(tracing::Level::TRACE)
+            .with_writer(logs.clone())
+            .finish(),
+    );
+    let release = Arc::new(tokio::sync::Notify::new());
+    let held = Arc::clone(&release);
+    let mut client = ConnectedClient::start(
+        Client::builder(ClientCapabilities::default())
+            .resource_policy(ResourcePolicy {
+                max_inbound_requests: 1,
+                ..ResourcePolicy::default()
+            })
+            .request::<ClientEcho, _, _>(move |_ctx, params, _cancellation| {
+                let held = Arc::clone(&held);
+                async move {
+                    held.notified().await;
+                    Ok(EchoResult { text: params.text })
+                }
+            }),
+    )
+    .await;
+
+    for id in [10, 10, 11] {
+        client.send(RawMessage::Request {
+            id: RequestId::Number(id),
+            method: Cow::Borrowed(ClientEcho::METHOD),
+            params: Bytes::from_static(br#"{"text":"held"}"#),
+        });
+    }
+    for (expected_id, expected_code) in [(10, -32600), (11, -32802)] {
+        match client.recv().await {
+            RawMessage::Response {
+                id,
+                result: Err(error),
+            } => assert_eq!(
+                (id, error.code),
+                (RequestId::Number(expected_id), expected_code)
+            ),
+            other => panic!("expected an admission rejection, got {other:?}"),
+        }
+    }
+    release.notify_one();
+    assert!(matches!(
+        client.recv().await,
+        RawMessage::Response {
+            id: RequestId::Number(10),
+            result: Ok(_)
+        }
+    ));
+
+    let events: Vec<Value> = logs
+        .text()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    for id in ["10", "11"] {
+        assert!(
+            events.iter().any(|event| {
+                event["message"] == "request completed"
+                    && event["direction"] == "inbound"
+                    && event["request_id"] == id
+                    && event["completion"] == "rejected"
+            }),
+            "rejected request {id} has its completion telemetry"
+        );
+    }
+
+    client.server.disconnect();
+    assert_eq!(client.outcome().await, Outcome::TransportClosed);
+}
+
+struct ScriptedReaderTransport {
+    incoming: mpsc::UnboundedReceiver<Result<RawMessage, TransportError>>,
+    outgoing: mpsc::UnboundedSender<RawMessage>,
+}
+
+struct ScriptedReader(mpsc::UnboundedReceiver<Result<RawMessage, TransportError>>);
+
+impl Transport for ScriptedReaderTransport {
+    type Reader = ScriptedReader;
+    type Writer = ChannelWriter;
+
+    fn split(self) -> (Self::Reader, Self::Writer) {
+        (ScriptedReader(self.incoming), ChannelWriter(self.outgoing))
+    }
+}
+
+impl TransportReader for ScriptedReader {
+    async fn recv(&mut self) -> Result<RawMessage, TransportError> {
+        self.0.recv().await.unwrap_or(Err(TransportError::Closed))
+    }
+}
+
+#[tokio::test]
+async fn client_initialize_reports_reader_endings_as_transport_errors() {
+    for failure in [Some(TransportError::Malformed("bad frame".into())), None] {
+        let (incoming_tx, incoming) = mpsc::unbounded_channel();
+        let (outgoing_tx, mut outgoing) = mpsc::unbounded_channel();
+        let client = Client::builder(ClientCapabilities::default())
+            .build(ScriptedReaderTransport {
+                incoming,
+                outgoing: outgoing_tx,
+            })
+            .expect("client builds");
+        let connecting = tokio::spawn(client.connect());
+        assert!(matches!(
+            recv(&mut outgoing).await,
+            RawMessage::Request {
+                method: Cow::Borrowed("initialize"),
+                ..
+            }
+        ));
+
+        let expect_eof = failure.is_none();
+        match failure {
+            Some(error) => incoming_tx.send(Err(error)).unwrap(),
+            None => drop(incoming_tx),
+        }
+        match connecting.await.unwrap().err() {
+            Some(lspf::Error::Transport(TransportError::Closed)) if expect_eof => {}
+            Some(lspf::Error::Transport(TransportError::Malformed(message))) if !expect_eof => {
+                assert_eq!(message, "bad frame");
+            }
+            other => panic!("expected the reader's transport error, got {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
 async fn client_reverse_progress_create_panic_releases_the_token_for_retry() {
     let attempts = Arc::new(AtomicUsize::new(0));
     let mut client = ConnectedClient::start(

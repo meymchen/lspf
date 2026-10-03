@@ -68,8 +68,12 @@ Workspace, UI, filesystem, or extension-host state.
 _Avoid_: Editor context, extension context (those imply caller-owned policy).
 
 **Protocol session**:
-The private connection core shared by Server and Client endpoints for correlation, bounded admission and queues, deadlines, task ownership, writer coordination, and idempotent close. Endpoint lifecycle, registration, and domain-state policy remain outside it.
+The private connection core shared by Server and Client endpoints. It owns the inbound pipeline (reading, admission, cancellation, response correlation, handler deadlines and panic backstop, and close-cause selection), plus bounded queues, task ownership, writer coordination, and idempotent close. Endpoints receive [[Admitted request]]s and notifications from it; lifecycle, registration, and domain-state policy remain outside it (ADR 0037).
 _Avoid_: Endpoint, engine (those own direction-specific policy).
+
+**Admitted request**:
+An inbound request that holds an admission permit under the [[Resource policy]] and must be answered exactly once, either at once or by work the [[Protocol session]] runs to completion.
+_Avoid_: Pending request (that names an outbound request awaiting its response), reservation (the mechanism, not the thing).
 
 **Resource policy**:
 The single connection-owned value that declares finite budgets for admitted
