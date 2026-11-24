@@ -350,12 +350,34 @@ pub async fn wait_for_nonzero(count: &AtomicUsize) -> SoakResult<()> {
 }
 
 pub async fn wait_for_at_least(count: &AtomicUsize, expected: usize) -> SoakResult<()> {
-    tokio::time::timeout(Duration::from_secs(1), async {
+    let waiting = async {
         while count.load(Ordering::Acquire) < expected {
             tokio::task::yield_now().await;
         }
-    })
-    .await?;
+    };
+    if tokio::time::timeout(Duration::from_secs(1), waiting)
+        .await
+        .is_err()
+    {
+        let seen = count.load(Ordering::Acquire);
+        return Err(format!("count stayed at {seen} for 1s, expected at least {expected}").into());
+    }
+    Ok(())
+}
+
+pub async fn wait_for_zero(count: &AtomicUsize) -> SoakResult<()> {
+    let waiting = async {
+        while count.load(Ordering::Acquire) != 0 {
+            tokio::task::yield_now().await;
+        }
+    };
+    if tokio::time::timeout(Duration::from_secs(5), waiting)
+        .await
+        .is_err()
+    {
+        let seen = count.load(Ordering::Acquire);
+        return Err(format!("count stayed at {seen} for 5s, expected zero").into());
+    }
     Ok(())
 }
 

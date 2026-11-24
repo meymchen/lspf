@@ -16,7 +16,7 @@ use super::SoakResult;
 use super::harness::{
     ActiveConnection, JourneyContext, Recorder, ResourceCounts, expect_channel_success,
     expect_error, expect_success, notification, outcome_name, request, response, wait_for_at_least,
-    wait_for_nonzero,
+    wait_for_nonzero, wait_for_zero,
 };
 use super::model::{Scenario, ScenarioMeasurement, WorkloadManifest};
 use super::protocol::{
@@ -109,7 +109,11 @@ async fn cancellation_journey(
             connection.peer.send(request(id, Stall::METHOD, &())?)?;
         }
         tokio::task::yield_now().await;
-        wait_for_nonzero(&context.counts().handler_tasks).await?;
+        wait_for_nonzero(&context.counts().handler_tasks)
+            .await
+            .map_err(|error| {
+                format!("no stall handler started at operation {operations}: {error}")
+            })?;
         context.sample()?;
         for id in &ids {
             connection
@@ -119,6 +123,17 @@ async fn cancellation_journey(
         for _ in ids {
             expect_error(&mut connection.peer).await?;
         }
+        // The cancellation response is sent when `$/cancelRequest` is claimed,
+        // but each admission permit stays with its handler task until that task
+        // exits and is reaped. Without this drain, a starved runtime keeps
+        // earlier batches' permits, so the next batch is refused with "inbound
+        // request capacity exhausted", no handler starts, and the wait above
+        // times out.
+        wait_for_zero(&context.counts().handler_tasks)
+            .await
+            .map_err(|error| {
+                format!("cancelled stall handlers did not exit at operation {operations}: {error}")
+            })?;
         operations += u64::try_from(workload.traffic.cancellation_concurrency)?;
         context.sample()?;
     }
