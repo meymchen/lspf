@@ -46,6 +46,11 @@ contains the limits. The `Reproducible performance baseline` CI job runs on
 pushes to `main`, fails when a limit is crossed, and retains the JSON and
 Markdown report for 90 days. Gate A depends on this job.
 
+Pull requests that get build checks also run
+`ci/tests/system/performance-benchmark.sh` in the `harness contract` job. It
+uses a small inline workload and checks that the harness still builds, runs,
+and reports every result field. It does not check any budget.
+
 Run the same gate locally with a full 40-character revision:
 
 ```bash

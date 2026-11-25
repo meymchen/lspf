@@ -33,9 +33,9 @@ build_condition="\${{ needs.release-context.outputs.build-checks == 'true' && (g
 markdown_condition="\${{ needs.release-context.outputs.markdown-checks == 'true' && (github.event_name != 'push' || needs.release-context.outputs.authorized == 'true') }}"
 release_condition="\${{ github.event_name == 'push' && needs.release-context.outputs.authorized == 'true' }}"
 
-for job in feature-matrix fuzz-contract fmt public-docs packaged-crate security \
-    public-api public-interface feature-contract test native-lifecycle wasm \
-    test-coverage
+for job in feature-matrix fuzz-contract harness-contract fmt public-docs \
+    packaged-crate security public-api public-interface feature-contract test \
+    native-lifecycle wasm test-coverage
 do
     jq -e --arg job "$job" --arg condition "$build_condition" '
       .jobs[$job].if == $condition
@@ -144,6 +144,7 @@ jq -e '
       "feature-matrix",
       "fmt",
       "fuzz-contract",
+      "harness-contract",
       "markdownlint",
       "msrv",
       "native-lifecycle",

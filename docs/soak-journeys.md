@@ -7,6 +7,11 @@ tests can miss. CI assigns each journey to its own matrix job so every hosted
 runner finishes well inside its execution lifetime; the versioned workload
 still gives every journey its full duration.
 
+Pull requests that get build checks also run `ci/tests/system/soak-journeys.sh`
+in the `harness contract` job. It runs every journey for about one second with
+small limits and checks that each one succeeds and releases its resources. It
+does not apply the memory thresholds.
+
 ## Workload
 
 [`soak/workloads-v2.json`](../soak/workloads-v2.json) is the versioned workload

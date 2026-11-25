@@ -6,6 +6,7 @@
       "commit-messages": { "contents": "read" },
       "markdownlint": { "contents": "read" },
       "fuzz-contract": { "contents": "read" },
+      "harness-contract": { "contents": "read" },
       "fmt": { "contents": "read" },
       "public-docs": { "contents": "read" },
       "packaged-crate": { "contents": "read" },

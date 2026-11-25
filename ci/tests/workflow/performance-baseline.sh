@@ -40,6 +40,15 @@ jq -e '
   (.jobs["gate-a-evidence"].needs | index("performance-baseline")) != null
 ' <<<"$ci_json" >/dev/null
 
+# Pull requests run the benchmark contract, but never the budgeted baseline.
+jq -e '
+  .jobs["harness-contract"].steps
+  | any(.[];
+      .name == "Test performance benchmark contract"
+      and .run == "bash ci/tests/system/performance-benchmark.sh")
+    and all(.[]; ((.run // "") | contains("run-performance-baseline.sh")) | not)
+' <<<"$ci_json" >/dev/null
+
 workflow_yaml_to_json "$security_workflow" | jq -e '
   .jobs["supply-chain"].steps[] |
   select(.run == "bash ci/tests/workflow/performance-baseline.sh")

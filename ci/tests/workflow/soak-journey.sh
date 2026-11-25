@@ -55,6 +55,15 @@ jq -e '
     and .with["if-no-files-found"] == "error")
 ' <<<"$job" >/dev/null
 
+# Pull requests run the soak workload contract, but never the thresholded soak.
+jq -e '
+  .jobs["harness-contract"].steps
+  | any(.[];
+      .name == "Test soak workload contract"
+      and .run == "bash ci/tests/system/soak-journeys.sh")
+    and all(.[]; ((.run // "") | contains("run-soak-journeys.sh")) | not)
+' <<<"$ci_json" >/dev/null
+
 jq -e '
   .workflows[".github/workflows/ci.yml"]["bounded-memory-soak"]
     == {"contents":"read"}
