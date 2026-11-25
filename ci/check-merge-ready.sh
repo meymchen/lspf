@@ -53,9 +53,9 @@ if [[ $build_checks == true ]]; then
     build_result=success
 fi
 
-for job in feature-matrix fuzz-contract fmt public-docs packaged-crate security \
-    public-api public-interface msrv feature-contract native-matrix test \
-    native-lifecycle wasm test-coverage
+for job in feature-matrix fuzz-contract harness-contract fmt public-docs \
+    packaged-crate security public-api public-interface msrv feature-contract \
+    native-matrix test native-lifecycle wasm test-coverage
 do
     expect_result "$job" "$build_result"
 done

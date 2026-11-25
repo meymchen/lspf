@@ -146,6 +146,26 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - run: bash ci/tests/unit/run-fuzz.sh
 
+  # The performance and soak harnesses otherwise run only in the authorized
+  # release jobs and the twice-weekly Gate D, so a pull request that breaks
+  # them merges green and fails on release day. These contracts use small
+  # inline workloads: they check that each harness still builds and runs, not
+  # that any budget or memory threshold is met.
+  harness-contract:
+    name: harness contract
+    if: ${{ needs.release-context.outputs.build-checks == 'true' && (github.event_name != 'push' || needs.release-context.outputs.authorized == 'true') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    needs: release-context
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: ./.github/actions/setup-rust
+      - name: Test performance benchmark contract
+        run: bash ci/tests/system/performance-benchmark.sh
+      - name: Test soak workload contract
+        run: bash ci/tests/system/soak-journeys.sh
+
   fmt:
     name: fmt
     if: ${{ needs.release-context.outputs.build-checks == 'true' && (github.event_name != 'push' || needs.release-context.outputs.authorized == 'true') }}
@@ -557,6 +577,7 @@ jobs:
       - markdownlint
       - feature-matrix
       - fuzz-contract
+      - harness-contract
       - fmt
       - public-docs
       - packaged-crate
